@@ -16,6 +16,7 @@ PID_ROOT="${RUN_ROOT}/pids"
 read -r -a PORTS <<< "${IFV_QWEN_PORTS:-8902 8903 8904 8905}"
 read -r -a GPU_IDS <<< "${IFV_QWEN_GPU_IDS:-0 1 2 3}"
 GATEWAY_PORT="${IFV_QWEN_GATEWAY_PORT:-8901}"
+BASE_GATEWAY_PORT="${IFV_QWEN_BASE_GATEWAY_PORT:-}"
 MODEL_ALIAS="${IFV_QWEN_MODEL_ALIAS:-ifv-qwen3.5-9b}"
 [[ "${#PORTS[@]}" == "${#GPU_IDS[@]}" && "${#GPU_IDS[@]}" -gt 0 ]] || {
   echo "GPU and port lists must have equal nonzero lengths" >&2; exit 2;
@@ -33,6 +34,16 @@ fi
 if [[ -n "$CHECKPOINT_MANIFEST" && ! -s "$CHECKPOINT_MANIFEST" ]]; then
   echo "missing checkpoint manifest: $CHECKPOINT_MANIFEST" >&2
   exit 2
+fi
+if [[ -n "$BASE_GATEWAY_PORT" ]]; then
+  [[ -n "$LORA_ADAPTER" ]] || {
+    echo "a separate base gateway requires a LoRA adapter" >&2
+    exit 2
+  }
+  [[ "$BASE_GATEWAY_PORT" =~ ^[1-9][0-9]*$ && "$BASE_GATEWAY_PORT" != "$GATEWAY_PORT" ]] || {
+    echo "IFV_QWEN_BASE_GATEWAY_PORT must be a distinct positive port" >&2
+    exit 2
+  }
 fi
 [[ -x "$VLLM" && -x "$PYTHON" ]] || { echo "missing vLLM environment" >&2; exit 2; }
 
@@ -128,18 +139,19 @@ write_serving_profile() {
 }
 
 launch_gateway() {
+  local gateway_port="$1" model_id="$2" pid_file="$3" log_file="$4"
   backends=""
   for port in "${PORTS[@]}"; do
     backends+="${backends:+,}http://127.0.0.1:${port}"
   done
   setsid env \
     QWEN_REPLICA_BACKENDS="$backends" \
-    QWEN_REPLICA_MODEL_ID="$MODEL_ALIAS" \
+    QWEN_REPLICA_MODEL_ID="$model_id" \
     QWEN_REPLICA_GATEWAY_TIMEOUT_SECONDS=900 \
     "$PYTHON" -m uvicorn scripts.server.qwen_replica_gateway:app \
-      --app-dir "$REPO" --host 127.0.0.1 --port "$GATEWAY_PORT" --log-level warning \
-    </dev/null >"${LOG_ROOT}/gateway.log" 2>&1 &
-  echo "$!" >"${PID_ROOT}/gateway.pid"
+      --app-dir "$REPO" --host 127.0.0.1 --port "$gateway_port" --log-level warning \
+    </dev/null >"$log_file" 2>&1 &
+  echo "$!" >"$pid_file"
 }
 
 start() {
@@ -147,9 +159,19 @@ start() {
     echo "gateway already running" >&2
     exit 2
   fi
+  if [[ -n "$BASE_GATEWAY_PORT" ]] \
+      && live_pid "${PID_ROOT}/base-gateway.pid" >/dev/null; then
+    echo "base gateway already running" >&2
+    exit 2
+  fi
   write_serving_profile
   launch_replicas
-  launch_gateway
+  launch_gateway "$GATEWAY_PORT" "$MODEL_ALIAS" \
+    "${PID_ROOT}/gateway.pid" "${LOG_ROOT}/gateway.log"
+  if [[ -n "$BASE_GATEWAY_PORT" ]]; then
+    launch_gateway "$BASE_GATEWAY_PORT" "${MODEL_ALIAS}-base" \
+      "${PID_ROOT}/base-gateway.pid" "${LOG_ROOT}/base-gateway.log"
+  fi
   echo "started ${#GPU_IDS[@]} single-H20 replicas for $MODEL_ALIAS; gateway=$GATEWAY_PORT"
 }
 
@@ -159,9 +181,10 @@ add_replicas() {
 }
 
 port_is_bindable() {
+  local port="${1:-$GATEWAY_PORT}"
   "$PYTHON" -c \
     'import socket,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.close()' \
-    "$GATEWAY_PORT" >/dev/null 2>&1
+    "$port" >/dev/null 2>&1
 }
 
 replace_gateway() {
@@ -195,7 +218,8 @@ replace_gateway() {
     echo "gateway port $GATEWAY_PORT did not become bindable" >&2
     exit 2
   }
-  launch_gateway
+  launch_gateway "$GATEWAY_PORT" "$MODEL_ALIAS" \
+    "${PID_ROOT}/gateway.pid" "${LOG_ROOT}/gateway.log"
   for _ in {1..180}; do
     if curl -fsS --max-time 2 "http://127.0.0.1:${GATEWAY_PORT}/health" >/dev/null 2>&1; then
       echo "replaced gateway $old_pid; draining requests continue; backends=${PORTS[*]}"
@@ -223,6 +247,15 @@ status() {
   fi
   curl -fsS --max-time 5 "http://127.0.0.1:$GATEWAY_PORT/health" || true
   echo
+  if [[ -n "$BASE_GATEWAY_PORT" ]]; then
+    if pid="$(live_pid "${PID_ROOT}/base-gateway.pid" || true)" && [[ -n "$pid" ]]; then
+      ps -p "$pid" -o pid=,etime=,args=
+    else
+      echo "stopped: base gateway"
+    fi
+    curl -fsS --max-time 5 "http://127.0.0.1:$BASE_GATEWAY_PORT/health" || true
+    echo
+  fi
 }
 
 stop_one() {
@@ -247,6 +280,7 @@ stop_one() {
 }
 
 stop() {
+  stop_one "${PID_ROOT}/base-gateway.pid" "qwen_replica_gateway:app"
   stop_one "${PID_ROOT}/gateway.pid" "qwen_replica_gateway:app"
   for gpu in "${GPU_IDS[@]}"; do
     stop_one "$(pid_path "$gpu")" "vllm serve"
