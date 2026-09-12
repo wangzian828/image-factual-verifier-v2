@@ -233,6 +233,7 @@ def audit_full_parameter_checkpoint(
     base_model_dir: Path,
     state_checkpoint_dir: Path | None = None,
     output_path: Path | None = None,
+    require_training_state: bool = True,
 ) -> dict[str, Any]:
     checkpoint_dir = checkpoint_dir.expanduser().resolve()
     base_model_dir = base_model_dir.expanduser().resolve()
@@ -295,13 +296,34 @@ def audit_full_parameter_checkpoint(
             component_updates.get("aligner", {}).get("updated")
         ),
     }
+    model_check_names = (
+        "tuner_type_full",
+        "llm_unfrozen",
+        "vit_unfrozen",
+        "aligner_unfrozen",
+        "full_weights_present",
+        "adapter_weights_absent",
+        "language_weights_updated",
+        "vision_weights_updated",
+        "aligner_weights_updated",
+    )
+    state_check_names = (
+        "optimizer_state_present",
+        "scheduler_state_present",
+        "rng_state_present",
+    )
+    required_check_names = list(model_check_names)
+    if require_training_state:
+        required_check_names.extend(state_check_names)
     result = {
         "schema_version": "ifv-full-parameter-checkpoint-audit-v1",
         "checkpoint_dir": str(checkpoint_dir),
         "state_checkpoint_dir": str(state_checkpoint_dir),
         "base_model_dir": str(base_model_dir),
-        "passed": all(checks.values()),
+        "passed": all(checks[name] for name in required_check_names),
         "checks": checks,
+        "training_state_required": require_training_state,
+        "required_checks": required_check_names,
         "configured_freeze_flags": freeze_flags,
         "full_weight_files": [
             str(path.relative_to(checkpoint_dir)) for path in weight_files
