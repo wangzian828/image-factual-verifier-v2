@@ -188,6 +188,7 @@ def test_psd_and_grpo_use_framework_entrypoints() -> None:
     assert '--lora_rank "$IFV_LORA_RANK"' in psd
     assert '--lora_alpha "$IFV_LORA_ALPHA"' in psd
     assert '--target_modules "$IFV_LORA_TARGET_MODULES"' in psd
+    assert psd.index('export PYTHONPATH=') < psd.index('record_environment ')
     assert "Trainer" not in psd
 
     psd_probe = _source(
