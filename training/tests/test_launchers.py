@@ -268,6 +268,17 @@ def test_qwen35_serving_and_lifecycle_are_fail_closed() -> None:
     assert ".ifv-vllm-qwen35-ready" in freeze
 
 
+def test_h20_replica_launcher_can_rebalance_without_killing_inflight_requests() -> None:
+    launcher = _source("scripts/h20/start_qwen35_base_replicas.sh")
+
+    assert "add-replicas) add_replicas" in launcher
+    assert "replace-gateway) replace_gateway" in launcher
+    assert 'kill -TERM "$old_pid"' in launcher
+    assert "gateway-draining-${old_pid}.pid" in launcher
+    assert 'kill -KILL "$old_pid"' not in launcher
+    assert 'curl -fsS --max-time 5 "http://127.0.0.1:${port}/health"' in launcher
+
+
 def test_gpu_runtime_policy_is_shared_by_serving_and_training() -> None:
     common = _source("scripts/lib/common.sh")
     selector = _source("scripts/server/select_idle_gpus.sh")

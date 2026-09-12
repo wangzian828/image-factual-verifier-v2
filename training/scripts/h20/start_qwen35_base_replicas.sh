@@ -37,7 +37,7 @@ live_pid() {
   printf '%s\n' "$pid"
 }
 
-start() {
+launch_replicas() {
   mkdir -p "$LOG_ROOT" "$PID_ROOT" "${RUN_ROOT}/cache" "${RUN_ROOT}/tmp"
   for gpu in "${GPU_IDS[@]}"; do
     if live_pid "$(pid_path "$gpu")" >/dev/null; then
@@ -45,11 +45,6 @@ start() {
       exit 2
     fi
   done
-  if live_pid "${PID_ROOT}/gateway.pid" >/dev/null; then
-    echo "gateway already running" >&2
-    exit 2
-  fi
-
   for index in "${!GPU_IDS[@]}"; do
     gpu="${GPU_IDS[$index]}"
     port="${PORTS[$index]}"
@@ -82,7 +77,9 @@ start() {
       </dev/null >"${LOG_ROOT}/replica-${gpu}.log" 2>&1 &
     echo "$!" >"$(pid_path "$gpu")"
   done
+}
 
+launch_gateway() {
   backends=""
   for port in "${PORTS[@]}"; do
     backends+="${backends:+,}http://127.0.0.1:${port}"
@@ -95,7 +92,70 @@ start() {
       --app-dir "$REPO" --host 127.0.0.1 --port "$GATEWAY_PORT" --log-level warning \
     </dev/null >"${LOG_ROOT}/gateway.log" 2>&1 &
   echo "$!" >"${PID_ROOT}/gateway.pid"
+}
+
+start() {
+  if live_pid "${PID_ROOT}/gateway.pid" >/dev/null; then
+    echo "gateway already running" >&2
+    exit 2
+  fi
+  launch_replicas
+  launch_gateway
   echo "started ${#GPU_IDS[@]} single-H20 replicas for $MODEL_ALIAS; gateway=$GATEWAY_PORT"
+}
+
+add_replicas() {
+  launch_replicas
+  echo "added ${#GPU_IDS[@]} single-H20 replicas for $MODEL_ALIAS; gateway unchanged"
+}
+
+port_is_bindable() {
+  "$PYTHON" -c \
+    'import socket,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.close()' \
+    "$GATEWAY_PORT" >/dev/null 2>&1
+}
+
+replace_gateway() {
+  local old_pid old_command drain_path
+  old_pid="$(live_pid "${PID_ROOT}/gateway.pid" || true)"
+  [[ -n "$old_pid" ]] || { echo "gateway is not running" >&2; exit 2; }
+  old_command="$(ps -o args= -p "$old_pid" || true)"
+  [[ "$old_command" == *"qwen_replica_gateway:app"* ]] || {
+    echo "refusing to replace unrecognized process $old_pid: $old_command" >&2
+    exit 2
+  }
+  for port in "${PORTS[@]}"; do
+    curl -fsS --max-time 5 "http://127.0.0.1:${port}/health" >/dev/null || {
+      echo "replica on port $port is not healthy" >&2
+      exit 2
+    }
+  done
+
+  # SIGTERM makes uvicorn close its listening socket while allowing requests
+  # already accepted by the old gateway to drain.  Once the port is free, a
+  # replacement gateway can accept new requests without killing those tasks.
+  kill -TERM "$old_pid"
+  drain_path="${PID_ROOT}/gateway-draining-${old_pid}.pid"
+  printf '%s\n' "$old_pid" >"$drain_path"
+  rm -f -- "${PID_ROOT}/gateway.pid"
+  for _ in {1..300}; do
+    port_is_bindable && break
+    sleep 0.1
+  done
+  port_is_bindable || {
+    echo "gateway port $GATEWAY_PORT did not become bindable" >&2
+    exit 2
+  }
+  launch_gateway
+  for _ in {1..180}; do
+    if curl -fsS --max-time 2 "http://127.0.0.1:${GATEWAY_PORT}/health" >/dev/null 2>&1; then
+      echo "replaced gateway $old_pid; draining requests continue; backends=${PORTS[*]}"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "replacement gateway failed health check" >&2
+  exit 2
 }
 
 status() {
@@ -147,7 +207,9 @@ stop() {
 
 case "${1:-status}" in
   start) start ;;
+  add-replicas) add_replicas ;;
+  replace-gateway) replace_gateway ;;
   status) status ;;
   stop) stop ;;
-  *) echo "usage: $0 {start|status|stop}" >&2; exit 2 ;;
+  *) echo "usage: $0 {start|add-replicas|replace-gateway|status|stop}" >&2; exit 2 ;;
 esac
