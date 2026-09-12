@@ -22,6 +22,7 @@ configure_training_runtime
 require_idle_gpus
 configure_distributed_backend
 require_model_path
+require_value IFV_MODEL_FAMILY
 require_dataset "$PSD_DATUMS"
 require_value EXPERIMENT_ID
 if [[ "$IFV_PSD_PROFILE_MODE" == "production" ]]; then
@@ -215,6 +216,7 @@ python -m ifv_training checkpoint-storage-preflight \
 args=(
   swift sft
   --model "$IFV_MODEL_ID"
+  --model_type "$IFV_MODEL_FAMILY"
   --dataset "$PSD_DATUMS"
   --split_dataset_ratio 0
   --strict true

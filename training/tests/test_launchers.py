@@ -168,6 +168,8 @@ def test_psd_and_grpo_use_framework_entrypoints() -> None:
     requirements = _source("requirements/rl-qwen35.txt")
 
     assert "swift sft" in psd
+    assert 'require_value IFV_MODEL_FAMILY' in psd
+    assert '--model_type "$IFV_MODEL_FAMILY"' in psd
     assert "--external_plugins" in psd
     assert "ifv_psd_topk_plugin.py" in psd
     assert "--loss_type ifv_psd_topk" in psd
