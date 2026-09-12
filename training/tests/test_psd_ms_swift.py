@@ -115,6 +115,33 @@ def test_psd_logits_to_keep_rejects_non_sparse_label_supervision() -> None:
         prepare_psd_logits_to_keep(inputs)
 
 
+def test_psd_logits_to_keep_uses_a_common_batched_suffix() -> None:
+    inputs = {
+        "labels": torch.full((2, 6), -100),
+        "psd_target_tokens": torch.tensor(
+            [
+                [[0, 0], [0, 0], [3, 8], [4, 9], [0, 0], [0, 0]],
+                [[0, 0], [0, 0], [0, 0], [0, 0], [2, 7], [5, 6]],
+            ]
+        ),
+        "psd_weights": torch.tensor(
+            [
+                [[0.0, 0.0], [0.0, 0.0], [0.7, 0.3], [0.6, 0.4], [0.0, 0.0], [0.0, 0.0]],
+                [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.8, 0.2], [0.9, 0.1]],
+            ]
+        ),
+    }
+
+    kept = prepare_psd_logits_to_keep(inputs)
+
+    assert kept == 4
+    assert inputs["logits_to_keep"] == 4
+    assert inputs["labels"].shape == (2, 4)
+    assert inputs["psd_target_tokens"].shape == (2, 4, 2)
+    assert torch.equal(inputs["psd_target_tokens"][0, 0], torch.tensor([3, 8]))
+    assert torch.equal(inputs["psd_target_tokens"][1, -1], torch.tensor([5, 6]))
+
+
 def test_sparse_topk_cross_entropy_sums_tokens_and_datums_like_tinker() -> None:
     logits = torch.tensor(
         [

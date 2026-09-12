@@ -95,6 +95,34 @@ def test_production_psd_profile_gate_rejects_dp_without_sparse_logits(tmp_path: 
     assert "data_parallel_training_requires_logits_to_keep" in gate["errors"]
 
 
+def test_h20_batched_dp4_preserves_optimizer_batch(tmp_path: Path) -> None:
+    output = tmp_path / "gate.json"
+    command = _command(output)
+    command[command.index("--world-size") + 1] = "4"
+    command[command.index("--sequence-parallel-size") + 1] = "1"
+    command[command.index("--padding-free") + 1] = "false"
+    command[command.index("--use-logits-to-keep") + 1] = "true"
+    command[command.index("--train-batch-size") + 1] = "4"
+    command[command.index("--gradient-accumulation-steps") + 1] = "2"
+    result = subprocess.run(command, check=False, capture_output=True)
+
+    assert result.returncode == 0, result.stderr.decode()
+    gate = json.loads(output.read_text(encoding="utf-8"))
+    assert gate["parallelism"]["data_parallel_size"] == 4
+    assert gate["optimization"]["unique_targets_per_step"] == 32
+
+
+def test_sequence_parallel_profile_still_requires_padding_free(tmp_path: Path) -> None:
+    output = tmp_path / "gate.json"
+    command = _command(output)
+    command[command.index("--padding-free") + 1] = "false"
+    result = subprocess.run(command, check=False, capture_output=True)
+
+    assert result.returncode == 1
+    gate = json.loads(output.read_text(encoding="utf-8"))
+    assert "sequence_parallel_requires_padding_free" in gate["errors"]
+
+
 def test_h20_sp4_preserves_optimizer_batch(tmp_path: Path) -> None:
     output = tmp_path / "gate.json"
     command = _command(output)

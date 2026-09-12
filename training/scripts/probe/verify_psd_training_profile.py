@@ -62,8 +62,8 @@ def main() -> None:
         or args.world_size % args.sequence_parallel_size != 0
     ):
         errors.append("sequence_parallel_size_must_divide_world_size")
-    if not args.padding_free:
-        errors.append("padding_free_required")
+    if args.sequence_parallel_size > 1 and not args.padding_free:
+        errors.append("sequence_parallel_requires_padding_free")
     if args.max_context != 131_072:
         errors.append("max_context_must_be_131072")
     if args.topk != 20:
@@ -81,8 +81,10 @@ def main() -> None:
     target_modules = [item.strip() for item in args.target_modules.split(",") if item.strip()]
     if target_modules != ["all-linear"]:
         errors.append("target_modules_must_be_all_linear")
-    if args.train_batch_size != 1:
-        errors.append("one_datum_per_device_required")
+    if args.train_batch_size < 1:
+        errors.append("train_batch_size_invalid")
+    if args.padding_free and args.train_batch_size != 1:
+        errors.append("padding_free_requires_one_datum_per_device")
     if args.gradient_accumulation_steps < 1:
         errors.append("gradient_accumulation_steps_invalid")
 
@@ -121,7 +123,7 @@ def main() -> None:
             errors.append("memory_probe_epochs_must_be_unset")
 
     result = {
-        "schema_version": "ifv-psd-training-profile-gate-v2",
+        "schema_version": "ifv-psd-training-profile-gate-v3",
         "passed": not errors,
         "mode": args.mode,
         "errors": errors,

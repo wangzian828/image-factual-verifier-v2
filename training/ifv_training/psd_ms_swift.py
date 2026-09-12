@@ -53,19 +53,29 @@ def prepare_psd_logits_to_keep(inputs: dict[str, Any]) -> int:
         sequence_length=target_tokens.shape[1],
         require_active_per_datum=True,
     )
-    if target_tokens.shape[0] != 1:
-        raise ValueError("PSD logits_to_keep requires one datum per device")
-    mask = active[0]
-    if mask.ndim != 1 or not torch.any(mask):
+    if not torch.any(active):
         raise ValueError("PSD logits_to_keep found no supervised position")
-    # Qwen3.5 accepts an arbitrary boolean selection over prediction
-    # positions. PSD targets already use causal prediction positions, so the
-    # SFT label shift in Swift's default implementation must not be applied.
-    inputs["logits_to_keep"] = mask
-    inputs["labels"] = labels[:, mask]
-    inputs["psd_target_tokens"] = target_tokens[:, mask]
-    inputs["psd_weights"] = weights[:, mask]
-    return int(mask.sum().item())
+    if target_tokens.shape[0] == 1:
+        mask = active[0]
+        # Qwen3.5 accepts an arbitrary boolean selection over prediction
+        # positions. PSD targets already use causal prediction positions, so
+        # Swift's normal SFT label shift must not be applied.
+        inputs["logits_to_keep"] = mask
+        inputs["labels"] = labels[:, mask]
+        inputs["psd_target_tokens"] = target_tokens[:, mask]
+        inputs["psd_weights"] = weights[:, mask]
+        return int(mask.sum().item())
+
+    # A batched model forward needs one common output shape. Keep the shortest
+    # suffix containing every datum's active positions; zero-weight padding in
+    # that suffix remains inert in the sparse summed loss.
+    earliest_active = int(torch.nonzero(active, as_tuple=False)[:, 1].min().item())
+    keep = target_tokens.shape[1] - earliest_active
+    inputs["logits_to_keep"] = keep
+    inputs["labels"] = labels[:, -keep:]
+    inputs["psd_target_tokens"] = target_tokens[:, -keep:]
+    inputs["psd_weights"] = weights[:, -keep:]
+    return keep
 
 
 class PsdDatasetPreprocessor:
@@ -548,13 +558,19 @@ def install_ms_swift_psd_plugin() -> None:
                 "psd_weights": weights,
             }
             if any("pixel_values" in row for row in batch):
-                if len(batch) != 1:
-                    raise ValueError("multimodal PSD requires one datum per device")
-                row = batch[0]
-                result["pixel_values"] = row["pixel_values"]
-                result["image_grid_thw"] = row["image_grid_thw"]
+                if not all("pixel_values" in row for row in batch):
+                    raise ValueError("cannot mix visual and text-only PSD datums")
+                result["pixel_values"] = torch.cat(
+                    [row["pixel_values"] for row in batch], dim=0
+                )
+                result["image_grid_thw"] = torch.cat(
+                    [row["image_grid_thw"] for row in batch], dim=0
+                )
                 mm_types = torch.zeros_like(input_ids)
-                mm_types[0, :len(row["input_ids"])] = row["mm_token_type_ids"]
+                for index, row in enumerate(batch):
+                    mm_types[index, :len(row["input_ids"])] = row[
+                        "mm_token_type_ids"
+                    ]
                 result["mm_token_type_ids"] = mm_types
                 positions = self._get_position_ids(result)["position_ids"]
                 result["position_ids"] = positions[1:]

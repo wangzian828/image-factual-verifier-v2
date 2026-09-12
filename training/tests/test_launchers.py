@@ -220,7 +220,9 @@ def test_psd_and_grpo_use_framework_entrypoints() -> None:
 
     h20_dp4 = _source("configs/psd/qwen3.5-lora-r32-h20-dp4-128k.env")
     assert "IFV_SEQUENCE_PARALLEL_SIZE=1" in h20_dp4
-    assert "IFV_GRADIENT_ACCUMULATION_STEPS=8" in h20_dp4
+    assert "IFV_TRAIN_BATCH_SIZE=4" in h20_dp4
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in h20_dp4
+    assert "IFV_PADDING_FREE=false" in h20_dp4
     assert "IFV_USE_LOGITS_TO_KEEP=true" in h20_dp4
     assert "IFV_MAX_LENGTH=131072" in h20_dp4
 
