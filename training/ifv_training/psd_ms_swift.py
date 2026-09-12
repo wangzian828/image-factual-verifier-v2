@@ -405,7 +405,12 @@ def install_ms_swift_psd_plugin() -> None:
                     dtype=torch.long,
                 )
             if return_length:
-                encoded["length"] = len(input_ids)
+                # ms-swift's AddLengthPreprocessor consumes the public
+                # Template.encode(return_length=True) contract directly.  The
+                # base Template implementation derives this plural field from
+                # its internal ``length`` metadata, but this pre-tokenized
+                # override deliberately bypasses that implementation.
+                encoded["lengths"] = [len(input_ids)]
             if return_template_inputs:
                 raise ValueError(
                     "IFV PSD pre-tokenized template has no renderable messages"

@@ -150,6 +150,7 @@ def test_ms_swift_plugin_smoke_exercises_template_collator_and_trainer_bridge() 
 
     assert "runpy.run_path" in source
     assert "template.data_collator" in source
+    assert "return_length_contract" in source
     assert "Seq2SeqTrainer.compute_loss" in source
     assert "loss.backward()" in source
 

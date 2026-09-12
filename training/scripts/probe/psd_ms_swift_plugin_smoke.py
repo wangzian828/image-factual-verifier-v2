@@ -18,6 +18,7 @@ def main() -> None:
     args = parser.parse_args()
 
     import torch
+    from swift.dataset import AddLengthPreprocessor
     from swift.loss.mapping import loss_map
     from swift.template.register import TEMPLATE_MAPPING
     from swift.trainers.seq2seq_trainer import Seq2SeqTrainer
@@ -58,6 +59,15 @@ def main() -> None:
         },
     ]
     encoded = [template.encode(row) for row in raw_rows]
+    for raw, value in zip(raw_rows, encoded, strict=True):
+        with_lengths = template.encode(raw, return_length=True)
+        if with_lengths.pop("lengths", None) != [len(raw["input_ids"])]:
+            raise RuntimeError("PSD template violates ms-swift's lengths contract")
+        if with_lengths != value:
+            raise RuntimeError("PSD length probing changes the encoded datum")
+    length_row = AddLengthPreprocessor(template).preprocess(dict(raw_rows[0]))
+    if length_row.get("lengths") != [len(raw_rows[0]["input_ids"])]:
+        raise RuntimeError("ms-swift AddLengthPreprocessor rejected PSD lengths")
     from ifv_training.psd_datums import compact_datum
     for raw, expected in zip(raw_rows, encoded, strict=True):
         compact = compact_datum({**raw, "loss_positions": [index for index, weights in enumerate(raw["weights"])
@@ -139,6 +149,7 @@ def main() -> None:
         "gradient_l1": gradient_l1,
         "registered_loss": PSD_MS_SWIFT_LOSS,
         "registered_template": PSD_MS_SWIFT_TEMPLATE,
+        "return_length_contract": True,
         "compact_and_legacy_template_equivalent": True,
         "batch_shapes": {
             name: list(value.shape)
