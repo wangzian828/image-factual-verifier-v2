@@ -56,30 +56,33 @@ def _expected_loss_targets(paths: list[Path]) -> dict[str, int]:
     for path in paths:
         if not path.is_file():
             continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            for message in row.get("messages", []) or []:
-                if not isinstance(message, Mapping):
+        # JSONL records are delimited by LF, not every Unicode character that
+        # ``str.splitlines`` treats as a boundary (notably U+0085/U+2028/U+2029).
+        with path.open(encoding="utf-8") as stream:
+            for line in stream:
+                if not line.strip():
                     continue
-                masked = message.get("loss") is False
-                role = str(message.get("role", ""))
-                content = str(message.get("content", ""))
-                if role == "tool_call":
-                    key = (
-                        "masked_tool_call_targets"
-                        if masked
-                        else "supervised_tool_call_targets"
-                    )
-                    counts[key] += 1
-                if role == "assistant" and "<think>" in content:
-                    key = (
-                        "masked_thought_targets"
-                        if masked
-                        else "supervised_thought_targets"
-                    )
-                    counts[key] += 1
+                row = json.loads(line)
+                for message in row.get("messages", []) or []:
+                    if not isinstance(message, Mapping):
+                        continue
+                    masked = message.get("loss") is False
+                    role = str(message.get("role", ""))
+                    content = str(message.get("content", ""))
+                    if role == "tool_call":
+                        key = (
+                            "masked_tool_call_targets"
+                            if masked
+                            else "supervised_tool_call_targets"
+                        )
+                        counts[key] += 1
+                    if role == "assistant" and "<think>" in content:
+                        key = (
+                            "masked_thought_targets"
+                            if masked
+                            else "supervised_thought_targets"
+                        )
+                        counts[key] += 1
     return counts
 
 

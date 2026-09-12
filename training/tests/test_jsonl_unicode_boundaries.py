@@ -15,3 +15,32 @@ def test_jsonl_preserves_unicode_line_separators(tmp_path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert list(module._rows(path)) == [(0, value)]
+
+
+def test_sft_gate_preserves_unicode_line_separators(tmp_path):
+    row = {
+        'messages': [
+            {'role': 'assistant', 'content': '<think>before\u2028after</think>'},
+            {
+                'role': 'tool_call',
+                'content': '{"name":"current_time","arguments":"{}"}',
+                'loss': False,
+            },
+        ]
+    }
+    path = tmp_path / 'rows.jsonl'
+    path.write_text(json.dumps(row, ensure_ascii=False) + '\n', encoding='utf-8')
+    probe_path = (
+        Path(__file__).resolve().parents[1]
+        / 'scripts/probe/verify_sft_data_contract.py'
+    )
+    spec = importlib.util.spec_from_file_location('sft_gate_unicode', probe_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module._expected_loss_targets([path]) == {
+        'supervised_tool_call_targets': 0,
+        'masked_tool_call_targets': 1,
+        'supervised_thought_targets': 1,
+        'masked_thought_targets': 0,
+    }
