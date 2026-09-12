@@ -304,6 +304,18 @@ def test_gpu_runtime_policy_is_shared_by_serving_and_training() -> None:
     assert "pin_memory=True" in measure
 
 
+def test_gpu_keeper_waits_for_clean_stop_and_complete_restart() -> None:
+    keeper = _source("scripts/h20/gpu_memory_keeper.sh")
+
+    assert "IFV_GPU_KEEPER_START_TIMEOUT_SECONDS" in keeper
+    assert "IFV_GPU_KEEPER_STOP_TIMEOUT_SECONDS" in keeper
+    assert "must be a positive integer" in keeper
+    assert "idle worker startup did not become ready on all GPUs" in keeper
+    assert "idle workers did not stop after TERM/KILL" in keeper
+    assert "grep -q '^holding '" in keeper
+    assert "recognized_pid" in keeper
+
+
 def test_cache_and_checkpoint_tools_remain_audited() -> None:
     encode_cache = _source("ifv_training/encode_cache.py")
     bootstrap = _source("ifv_training_bootstrap/sitecustomize.py")

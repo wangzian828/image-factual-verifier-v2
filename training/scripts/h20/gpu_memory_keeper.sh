@@ -9,8 +9,18 @@ HOLD_GIB="${IFV_GPU_KEEPER_GIB:-12}"
 HOLD_DUTY="${IFV_GPU_KEEPER_DUTY_CYCLE:-0.25}"
 MATRIX_SIZE="${IFV_GPU_KEEPER_MATRIX_SIZE:-8192}"
 PROCESS_LABEL="${IFV_GPU_KEEPER_PROCESS_LABEL:-worker}"
+START_TIMEOUT_SECONDS="${IFV_GPU_KEEPER_START_TIMEOUT_SECONDS:-60}"
+STOP_TIMEOUT_SECONDS="${IFV_GPU_KEEPER_STOP_TIMEOUT_SECONDS:-60}"
 GPU_IDS=(0 1 2 3)
 RUNNER='import ctypes,os,runpy;ctypes.CDLL(None).prctl(15,b"worker",0,0,0);runpy.run_path(os.environ["_W"],run_name="__main__")'
+
+for timeout_name in START_TIMEOUT_SECONDS STOP_TIMEOUT_SECONDS; do
+  timeout_value="${!timeout_name}"
+  if [[ ! "$timeout_value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "$timeout_name must be a positive integer" >&2
+    exit 2
+  fi
+done
 
 export LD_LIBRARY_PATH="${ROOT}/envs/h20-qwen35-128k/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
@@ -58,6 +68,33 @@ start() {
       </dev/null >"${RUN_ROOT}/logs/gpu-${gpu}.log" 2>&1 &
     echo "$!" >"${RUN_ROOT}/pids/gpu-${gpu}.pid"
   done
+  local deadline now ready failed gpu path pid
+  deadline="$(( $(date +%s) + START_TIMEOUT_SECONDS ))"
+  while true; do
+    ready=true
+    failed=false
+    for gpu in "${GPU_IDS[@]}"; do
+      path="${RUN_ROOT}/pids/gpu-${gpu}.pid"
+      pid="$(live_pid "$path" || true)"
+      if [[ -z "$pid" ]] || ! recognized_pid "$pid" "$gpu"; then
+        failed=true
+        break
+      fi
+      if ! grep -q '^holding ' "${RUN_ROOT}/logs/gpu-${gpu}.log"; then
+        ready=false
+      fi
+    done
+    if [[ "$ready" == "true" && "$failed" == "false" ]]; then
+      break
+    fi
+    now="$(date +%s)"
+    if [[ "$failed" == "true" || "$now" -ge "$deadline" ]]; then
+      echo "idle worker startup did not become ready on all GPUs" >&2
+      stop >/dev/null 2>&1 || true
+      return 1
+    fi
+    sleep 1
+  done
   echo "started ${HOLD_GIB}-GiB, ${HOLD_DUTY}-duty idle workers on GPUs 0-3"
 }
 
@@ -90,6 +127,10 @@ check() {
 }
 
 stop() {
+  local gpu path pid pgid deadline now any_live index
+  local -a tracked_gpus=()
+  local -a tracked_pids=()
+  local -a tracked_pgids=()
   for gpu in "${GPU_IDS[@]}"; do
     path="${RUN_ROOT}/pids/gpu-${gpu}.pid"
     pid="$(live_pid "$path" || true)"
@@ -100,8 +141,53 @@ stop() {
       }
       pgid="$(ps -o pgid= -p "$pid" | tr -d ' ')"
       kill -TERM -- "-$pgid" 2>/dev/null || true
+      tracked_gpus+=("$gpu")
+      tracked_pids+=("$pid")
+      tracked_pgids+=("$pgid")
     fi
-    rm -f -- "$path"
+  done
+  deadline="$(( $(date +%s) + STOP_TIMEOUT_SECONDS ))"
+  while true; do
+    any_live=false
+    for pid in "${tracked_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        any_live=true
+        break
+      fi
+    done
+    [[ "$any_live" == "false" ]] && break
+    now="$(date +%s)"
+    if [[ "$now" -ge "$deadline" ]]; then
+      for index in "${!tracked_pids[@]}"; do
+        pid="${tracked_pids[$index]}"
+        gpu="${tracked_gpus[$index]}"
+        if kill -0 "$pid" 2>/dev/null && recognized_pid "$pid" "$gpu"; then
+          kill -KILL -- "-${tracked_pgids[$index]}" 2>/dev/null || true
+        fi
+      done
+      deadline="$(( $(date +%s) + 10 ))"
+      while true; do
+        any_live=false
+        for pid in "${tracked_pids[@]}"; do
+          if kill -0 "$pid" 2>/dev/null; then
+            any_live=true
+            break
+          fi
+        done
+        [[ "$any_live" == "false" ]] && break
+        now="$(date +%s)"
+        if [[ "$now" -ge "$deadline" ]]; then
+          echo "idle workers did not stop after TERM/KILL" >&2
+          return 1
+        fi
+        sleep 1
+      done
+      break
+    fi
+    sleep 1
+  done
+  for gpu in "${GPU_IDS[@]}"; do
+    rm -f -- "${RUN_ROOT}/pids/gpu-${gpu}.pid"
   done
   echo "stopped idle-memory keepers"
 }
