@@ -8,7 +8,7 @@ recorded gpu-13 path and hash-verified on H20. Exact case-ID matching reused
 new Judge calls were made. One missing formal real case is counted as a miss.
 Formal baseline metrics are accuracy 63.4578%, balanced accuracy 65.6654%, real
 recall 70.0265%, fake recall 61.3043%, and strict SESR 2.8815% (44/1,527). See
-`docs/reports/2026-09-12-qwen35-9b-pretrain-formal1527.md` and server summary
+`docs/evaluation-comparison-20260909.md` and server summary
 `qwen35-base-agent-formal1527-pretrain-from-old1682-20260912/summary.json`.
 
 10:46 update: formal SFT remained healthy at step 449/982 (45.7%), with four H20s

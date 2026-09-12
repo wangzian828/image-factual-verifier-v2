@@ -4,7 +4,7 @@
 
 - 评测集：筛选后的统一测试集
 - 样本数：1,527
-- 评测日期：2026-09-09 至 2026-09-10
+- 评测日期：2026-09-09 至 2026-09-12
 - 二分类任务：判断图像及其事件陈述为 `real` 或 `fake`
 - 证据质量评估模型：Gemini 3.7 Flash，`thinking_level=low`
 
@@ -23,6 +23,7 @@
 | Qwen3.5-397B-A17B | Direct QA | 68.68 | 56.23 | 81.13 | 6.68 |
 | MiniMax-M3 | Direct QA | 66.66 | 84.62 | 48.70 | 3.41 |
 | GPT-5.2 | Direct QA | 65.84 | 85.94 | 45.74 | 2.95 |
+| Qwen3.5-9B Agent（训练前） | Agentic | 65.67 | 70.03 | 61.30 | 2.88 |
 | Gemini 3.1 Pro | Direct QA | 62.58 | 28.65 | 96.52 | 5.57 |
 | GLM-4.6V | Direct QA | 59.96 | 95.49 | 24.43 | 3.01 |
 
@@ -36,6 +37,8 @@
 
 GPT-5.5 与 MiniMax-M3 的原始结果各覆盖 1,526 条样本，未覆盖样本仍按错误计入统一分母。GPT-5.5 另有 2 条源答案无有效终态，无法进入证据质量评估；这些样本同样不从分母中剔除。
 
+Qwen3.5-9B Agent（训练前）按冻结 case ID 复用已有的 1,526 条推理及 Gemini 3.7 Flash/low 审核结果，未新增 Judge 调用。缺失的 1 条 real 按未召回计入 1,527 分母；real 正确 264/377，fake 正确 705/1,150，Strong 为 44/1,527。其 Accuracy 为 63.46%。原始记录与哈希保存在服务器 `qwen35-base-agent-formal1527-pretrain-from-old1682-20260912/summary.json`，完整目录为 `/volume/ybo/wza/runs/eval/qwen35-base-agent-formal1527-pretrain-from-old1682-20260912`。旧版 Gemini 3.1 Pro/high 审核不进入本表。
+
 Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_level=low` 配置重新审核。最终有 85 条样本被判定为 `Strong`，SESR 为 5.57%；旧的 23.71% 来自 Gemini 3.1 Pro 自审且使用 `thinking_level=high` 的非统一口径，已废弃。
 
 ## 初步结论
@@ -44,4 +47,4 @@ Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_le
 - GPT-5.5 与 Gemini 3.7 Flash 的 BAcc 分别为 75.87% 和 75.64%，是表现最好的两组 Direct QA 基线。
 - Gemini 3.1 Pro 虽然原始 Accuracy 较高，但 real 召回仅为 28.65%，BAcc 因此降至 62.58%。
 - Gemini 3.7 Agent 的严格证据充分率达到 50.69%，明显高于所有 Direct QA 基线。
-- Agent 的主要优势体现在证据搜集与证据支持的推理质量，而不仅是最终二分类标签。
+- Gemini 3.7 Agent 的优势体现在证据搜集与证据支持的推理质量；Qwen3.5-9B Agent 训练前的 BAcc 为 65.67%、SESR 为 2.88%，说明该优势并非仅由 Agent 流程保证，训练后结果待补充。
