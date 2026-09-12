@@ -6,6 +6,8 @@ REPO="${IFV_QWEN_REPO:-${ROOT}/image-factual-verifier-v2}"
 ENV_PREFIX="${IFV_VLLM_ENV_PREFIX:-${ROOT}/envs/h20-qwen35-vllm-0181}"
 BASE_PYTHON_ENV="${IFV_BASE_PYTHON_ENV:-${ROOT}/envs/h20-qwen35-128k}"
 MODEL="${IFV_QWEN_MODEL:-${ROOT}/models/Qwen3.5-9B-local}"
+LORA_ADAPTER="${IFV_QWEN_LORA_ADAPTER:-}"
+CHECKPOINT_MANIFEST="${IFV_QWEN_CHECKPOINT_MANIFEST:-}"
 RUN_ROOT="${IFV_QWEN_RUN_ROOT:-${ROOT}/inference/qwen35-base-vllm0181}"
 VLLM="${ENV_PREFIX}/bin/vllm"
 PYTHON="${ENV_PREFIX}/bin/python"
@@ -24,6 +26,14 @@ export LD_LIBRARY_PATH="${BASE_PYTHON_ENV}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_P
 for path in "$REPO" "$ENV_PREFIX" "$BASE_PYTHON_ENV" "$MODEL"; do
   [[ -d "$path" ]] || { echo "missing directory: $path" >&2; exit 2; }
 done
+if [[ -n "$LORA_ADAPTER" && ! -d "$LORA_ADAPTER" ]]; then
+  echo "missing LoRA adapter: $LORA_ADAPTER" >&2
+  exit 2
+fi
+if [[ -n "$CHECKPOINT_MANIFEST" && ! -s "$CHECKPOINT_MANIFEST" ]]; then
+  echo "missing checkpoint manifest: $CHECKPOINT_MANIFEST" >&2
+  exit 2
+fi
 [[ -x "$VLLM" && -x "$PYTHON" ]] || { echo "missing vLLM environment" >&2; exit 2; }
 
 pid_path() { printf '%s/replica-%s.pid\n' "$PID_ROOT" "$1"; }
@@ -48,6 +58,17 @@ launch_replicas() {
   for index in "${!GPU_IDS[@]}"; do
     gpu="${GPU_IDS[$index]}"
     port="${PORTS[$index]}"
+    served_name="$MODEL_ALIAS"
+    lora_args=()
+    if [[ -n "$LORA_ADAPTER" ]]; then
+      served_name="${MODEL_ALIAS}-base"
+      lora_args=(
+        --enable-lora
+        --max-lora-rank 32
+        --enable-tower-connector-lora
+        --lora-modules "$MODEL_ALIAS=$LORA_ADAPTER"
+      )
+    fi
     setsid env \
       CUDA_VISIBLE_DEVICES="$gpu" \
       HF_HOME="${ROOT}/cache/h20-huggingface" \
@@ -57,7 +78,7 @@ launch_replicas() {
       VLLM_USE_FLASHINFER_SAMPLER=0 \
       "$VLLM" serve "$MODEL" \
         --host 127.0.0.1 --port "$port" \
-        --served-model-name "$MODEL_ALIAS" \
+        --served-model-name "$served_name" \
         --dtype bfloat16 \
         --tensor-parallel-size 1 \
         --max-model-len 131072 \
@@ -74,9 +95,36 @@ launch_replicas() {
         --enable-tokenizer-info-endpoint \
         --max-log-len 4000 \
         --disable-uvicorn-access-log \
+        "${lora_args[@]}" \
       </dev/null >"${LOG_ROOT}/replica-${gpu}.log" 2>&1 &
     echo "$!" >"$(pid_path "$gpu")"
   done
+}
+
+write_serving_profile() {
+  local profile="$RUN_ROOT/serving-profile.json"
+  local args=(
+    "$BASE_PYTHON_ENV/bin/python" -m ifv_training serving-profile
+    --output "$profile"
+    --profile-id "$MODEL_ALIAS"
+    --model-path "${LORA_ADAPTER:-$MODEL}"
+    --engine-model-path "$MODEL"
+    --engine vllm
+    --port "$GATEWAY_PORT"
+    --tensor-parallel-size 1
+    --dtype bfloat16
+    --context-length 131072
+    --tool-call-parser qwen3_coder
+    --reasoning-parser qwen3
+    --thinking-enabled false
+  )
+  if [[ -n "$LORA_ADAPTER" ]]; then
+    args+=(--adapter-path "$LORA_ADAPTER")
+  fi
+  if [[ -n "$CHECKPOINT_MANIFEST" ]]; then
+    args+=(--checkpoint-manifest "$CHECKPOINT_MANIFEST")
+  fi
+  PYTHONPATH="$REPO/training:$REPO${PYTHONPATH:+:$PYTHONPATH}" "${args[@]}"
 }
 
 launch_gateway() {
@@ -99,6 +147,7 @@ start() {
     echo "gateway already running" >&2
     exit 2
   fi
+  write_serving_profile
   launch_replicas
   launch_gateway
   echo "started ${#GPU_IDS[@]} single-H20 replicas for $MODEL_ALIAS; gateway=$GATEWAY_PORT"
