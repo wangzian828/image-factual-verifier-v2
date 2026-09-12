@@ -47,8 +47,11 @@ are separate milestones. A component test is not an end-to-end acceptance.
   growth because every prior full repaired trajectory was copied into every
   later prompt. Feedback-search v2 now retains all prior hints/checker outcomes
   but only the latest full repaired trajectory. Tests prove input history is
-  immutable and earlier full traces are omitted. Resumable pool timing is now
-  accumulated across invocations instead of reporting the final resume alone.
+  immutable and earlier full traces are omitted. Offline projection across all
+  33 real historical requests reduced canonical feedback JSON from 2,581,437
+  to 1,211,913 bytes (**53.05%**) without a provider call. Resumable pool timing
+  is now accumulated across invocations instead of reporting the final resume
+  alone. The complete Python 3.12 H20 PSD suite is **184 passed** at `6375d1f`.
 - H20 capacity/update, real asynchronous case scheduling, judge recovery,
   interrupted materialization and detailed cost gates are now closed. The
   remaining end-to-end acceptance gates are a complete next PSD training round,
