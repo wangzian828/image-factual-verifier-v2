@@ -12,7 +12,8 @@ from ifv_training.io import sha256_file, write_json, write_jsonl
 def test_training_entrypoint_carries_adapter_and_same_round_resume(monkeypatch, tmp_path):
     ready = {"round_index": 2, "serving_profile": str(tmp_path / "serving.json"),
         "checkpoint_manifest": str(tmp_path / "checkpoint.json"),
-        "datums": str(tmp_path / "datums.jsonl"), "adapter": str(tmp_path / "previous-adapter")}
+        "datums": str(tmp_path / "datums.jsonl"), "adapter": str(tmp_path / "previous-adapter"),
+        "model": str(tmp_path / "base-model")}
     monkeypatch.setattr(run_psd_round, "load_ready", lambda _: ready)
     calls = []
     monkeypatch.setattr(run_psd_round.subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs)))
@@ -36,6 +37,47 @@ def test_finalization_rejects_an_unrelated_optimizer_initialization(monkeypatch,
     write_json(gate, {"checkpoint": "other-round"})
     with pytest.raises(ValueError, match="initialization differs"):
         run_psd_round.finalize(SimpleNamespace(ready=tmp_path / "ready.json", initialization_gate=gate))
+
+
+def test_finalization_separates_deployable_adapter_from_training_state(
+    monkeypatch, tmp_path
+):
+    initialization = {"checkpoint": "round-1"}
+    ready = {
+        "round_index": 1,
+        "initialization": initialization,
+        "datum_manifest": str(tmp_path / "datum-manifest.json"),
+        "model": str(tmp_path / "base-model"),
+        "checkpoint_manifest": str(tmp_path / "base-manifest.json"),
+        "rollout_gate": str(tmp_path / "rollout-gate.json"),
+    }
+    gate = tmp_path / "initialization.json"
+    write_json(gate, initialization)
+    monkeypatch.setattr(run_psd_round, "load_ready", lambda _: ready)
+    captured = {}
+
+    def build_manifest(**kwargs):
+        captured.update(kwargs)
+        write_json(kwargs["output_path"], {"checkpoint": {"path": str(kwargs["checkpoint_dir"])}})
+        return {"checkpoint": {"path": str(kwargs["checkpoint_dir"])}}
+
+    monkeypatch.setattr(run_psd_round, "build_checkpoint_manifest", build_manifest)
+    monkeypatch.setattr(run_psd_round, "frozen_base_binding", lambda *_: {})
+    monkeypatch.setattr(run_psd_round, "complete_psd_round", lambda **_: {"passed": True})
+    adapter = tmp_path / "adapter-export"
+    state = tmp_path / "checkpoint-10"
+    result = run_psd_round.finalize(SimpleNamespace(
+        ready=tmp_path / "ready.json",
+        checkpoint=adapter,
+        state_checkpoint=state,
+        training_profile=tmp_path / "profile.json",
+        initialization_gate=gate,
+        output=tmp_path / "round-output",
+    ))
+    assert result["status"] == "round_completed"
+    assert captured["checkpoint_dir"] == adapter
+    assert captured["state_checkpoint_dir"] == state
+    assert result["next_round"]["adapter"] == str(adapter.resolve())
 
 
 def _completed_bank_fixture(tmp_path, monkeypatch):

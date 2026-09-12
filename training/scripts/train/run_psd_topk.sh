@@ -434,8 +434,17 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 if profile.get("passed_production_gate") is not True:
     raise SystemExit("PSD optimizer run did not pass its production gate")
 PY
+  adapter_export="$latest_checkpoint/adapter-export"
+  python "$REPO_ROOT/training/scripts/train/export_fsdp2_lora_checkpoint.py" \
+    --checkpoint "$latest_checkpoint" \
+    --base-model "$IFV_MODEL_ID" \
+    --output "$adapter_export" \
+    --rank "$IFV_LORA_RANK" \
+    --alpha "$IFV_LORA_ALPHA" \
+    --dropout "$IFV_LORA_DROPOUT"
   python "$REPO_ROOT/scripts/run_psd_round.py" finalize \
-    --ready "$IFV_PSD_ROUND_READY" --checkpoint "$latest_checkpoint" \
+    --ready "$IFV_PSD_ROUND_READY" --checkpoint "$adapter_export" \
+    --state-checkpoint "$latest_checkpoint" \
     --training-profile "$LOG_DIR/profile.json" \
     --initialization-gate "$LOG_DIR/psd-initialization-gate.json" \
     --output "$LOG_DIR/round-output"

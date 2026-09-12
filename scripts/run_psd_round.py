@@ -294,6 +294,7 @@ def finalize(args):
     output.mkdir(parents=True, exist_ok=True)
     checkpoint_manifest = output / "checkpoint-manifest.json"
     checkpoint_record = build_checkpoint_manifest(checkpoint_dir=args.checkpoint,
+        state_checkpoint_dir=args.state_checkpoint,
         dataset_manifest_path=Path(ready["datum_manifest"]), output_path=checkpoint_manifest,
         base_model_id=ready["model"], model_revision="", processor_revision="", method="lora")
     checkpoint_record["base_model_binding"] = frozen_base_binding(
@@ -338,6 +339,7 @@ def main():
     finalize_parser = commands.add_parser("finalize")
     for name in ("ready", "checkpoint", "training-profile", "initialization-gate", "output"):
         finalize_parser.add_argument("--" + name, type=Path, required=True)
+    finalize_parser.add_argument("--state-checkpoint", type=Path)
     args = parser.parse_args()
     result = asyncio.run(prepare(args)) if args.command == "prepare" else globals()[args.command](args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
