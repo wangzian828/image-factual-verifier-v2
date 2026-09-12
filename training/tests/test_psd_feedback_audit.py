@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ifv_training.io import sha256_file, write_json, write_jsonl
 from ifv_training.psd_repair_storage import save_bound
+from ifv_training.psd_repair_search import revision_context
 from scripts.audit_psd_feedback_run import audit_feedback_run
 
 
@@ -115,6 +116,13 @@ def test_feedback_audit_counts_costs_rejections_and_deduplicates_judges(tmp_path
         "continuation_rejection_reasons": {"hinted_local_verifier_failed": 1},
     }
     assert "judge-response-1" not in json.dumps(report)
+    assert report["feedback_context"] == {
+        "stored_bytes": 0,
+        "v2_projected_bytes": 0,
+        "projected_requests": 0,
+        "projected_reduction_fraction": None,
+        "measurement": "canonical JSON bytes; provider token count depends on tokenizer",
+    }
 
 
 def test_feedback_audit_rejects_changed_bound_round_artifact(tmp_path: Path) -> None:
@@ -123,3 +131,15 @@ def test_feedback_audit_rejects_changed_bound_round_artifact(tmp_path: Path) -> 
     report = audit_feedback_run(tmp_path)
     assert report["passed"] is False
     assert any("snapshot hash changed" in row["error"] for row in report["errors"])
+
+
+def test_feedback_audit_measures_bound_request_context(tmp_path: Path) -> None:
+    case, _ = _make_run(tmp_path)
+    save_bound(case / "requests" / "round-00.json", identity={"round": 0},
+               payload=revision_context([]))
+    report = audit_feedback_run(tmp_path)
+    context = report["feedback_context"]
+    assert report["passed"] is True
+    assert context["projected_requests"] == 1
+    assert context["stored_bytes"] == context["v2_projected_bytes"] > 0
+    assert context["projected_reduction_fraction"] == 0

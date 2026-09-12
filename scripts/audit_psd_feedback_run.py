@@ -19,6 +19,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "training")]
 
 from ifv_training.io import canonical_json, load_json, load_jsonl, sha256_file, write_json
 from ifv_training.psd_repair import _sha
+from ifv_training.psd_repair_search import revision_context
 
 
 SCHEMA_VERSION = "ifv-psd-feedback-run-audit-v1"
@@ -105,6 +106,10 @@ def _audit_case(case_dir: Path, *, seen_judge: set[str], seen_attempts: set[str]
     proposal_passes = 0
     proposal_rejections: Counter[str] = Counter()
     round_directories: set[Path] = set()
+    stored_feedback_bytes = 0
+    projected_feedback_bytes = 0
+    projected_feedback_requests = 0
+    projection_matches = 0
 
     for index, round_state in enumerate(rounds):
         round_state = _mapping(round_state)
@@ -163,6 +168,20 @@ def _audit_case(case_dir: Path, *, seen_judge: set[str], seen_attempts: set[str]
                         proposal_passes += 1
                     else:
                         proposal_rejections[str(audit.get("reason") or "unspecified")] += 1
+
+        request_path = case_dir / "requests" / f"round-{index:02d}.json"
+        if request_path.is_file():
+            try:
+                _, stored_feedback = _validate_bound(request_path)
+                stored_feedback_bytes += len(canonical_json(stored_feedback).encode("utf-8"))
+                if all(isinstance(_mapping(item).get("feedback"), Mapping)
+                       for item in rounds[:index]):
+                    projected = revision_context(rounds[:index])
+                    projected_feedback_bytes += len(canonical_json(projected).encode("utf-8"))
+                    projected_feedback_requests += 1
+                    projection_matches += int(stored_feedback == projected)
+            except (json.JSONDecodeError, KeyError, OSError, TypeError, ValueError) as exc:
+                errors.append(f"invalid round {index} feedback request: {type(exc).__name__}")
 
     attempts = load_jsonl(case_dir / "repair_attempts.jsonl")
     if manifest.get("candidate_count") != len(attempts):
@@ -246,6 +265,12 @@ def _audit_case(case_dir: Path, *, seen_judge: set[str], seen_attempts: set[str]
             "locally_admissible": proposal_passes,
             "rejections": dict(sorted(proposal_rejections.items())),
         },
+        "feedback_context": {
+            "stored_bytes": stored_feedback_bytes,
+            "v2_projected_bytes": projected_feedback_bytes,
+            "projected_requests": projected_feedback_requests,
+            "stored_matches_v2_projection": projection_matches,
+        },
         "continuations": {
             "count": len(attempts),
             "accepted": accepted,
@@ -301,6 +326,12 @@ def audit_feedback_run(run_dir: Path) -> dict[str, Any]:
     totals["judge_usage"] = dict(sorted(judge_usage.items()))
     totals["proposal_rejections"] = dict(sorted(proposal_rejections.items()))
     totals["continuation_rejection_reasons"] = dict(sorted(continuation_rejections.items()))
+    stored_feedback_bytes = sum(case.get("feedback_context", {}).get("stored_bytes", 0)
+                                for case in cases)
+    projected_feedback_bytes = sum(case.get("feedback_context", {}).get("v2_projected_bytes", 0)
+                                   for case in cases)
+    projected_feedback_requests = sum(case.get("feedback_context", {}).get("projected_requests", 0)
+                                      for case in cases)
     if not cases:
         errors.append({"case_key": "", "error": "no repair cases found"})
     return {
@@ -309,6 +340,16 @@ def audit_feedback_run(run_dir: Path) -> dict[str, Any]:
         "run_dir": str(run_dir),
         "errors": errors,
         "totals": totals,
+        "feedback_context": {
+            "stored_bytes": stored_feedback_bytes,
+            "v2_projected_bytes": projected_feedback_bytes,
+            "projected_requests": projected_feedback_requests,
+            "projected_reduction_fraction": (
+                1 - projected_feedback_bytes / stored_feedback_bytes
+                if stored_feedback_bytes else None
+            ),
+            "measurement": "canonical JSON bytes; provider token count depends on tokenizer",
+        },
         "cases": cases,
         "privacy": {
             "contains_provider_response_text": False,
