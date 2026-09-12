@@ -11,8 +11,13 @@ VLLM="${ENV_PREFIX}/bin/vllm"
 PYTHON="${ENV_PREFIX}/bin/python"
 LOG_ROOT="${RUN_ROOT}/logs"
 PID_ROOT="${RUN_ROOT}/pids"
-PORTS=(8902 8903 8904 8905)
-GPU_IDS=(0 1 2 3)
+read -r -a PORTS <<< "${IFV_QWEN_PORTS:-8902 8903 8904 8905}"
+read -r -a GPU_IDS <<< "${IFV_QWEN_GPU_IDS:-0 1 2 3}"
+GATEWAY_PORT="${IFV_QWEN_GATEWAY_PORT:-8901}"
+MODEL_ALIAS="${IFV_QWEN_MODEL_ALIAS:-ifv-qwen3.5-9b}"
+[[ "${#PORTS[@]}" == "${#GPU_IDS[@]}" && "${#GPU_IDS[@]}" -gt 0 ]] || {
+  echo "GPU and port lists must have equal nonzero lengths" >&2; exit 2;
+}
 
 export LD_LIBRARY_PATH="${BASE_PYTHON_ENV}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
@@ -57,12 +62,12 @@ start() {
       VLLM_USE_FLASHINFER_SAMPLER=0 \
       "$VLLM" serve "$MODEL" \
         --host 127.0.0.1 --port "$port" \
-        --served-model-name ifv-qwen3.5-9b \
+        --served-model-name "$MODEL_ALIAS" \
         --dtype bfloat16 \
         --tensor-parallel-size 1 \
         --max-model-len 131072 \
         --gpu-memory-utilization 0.94 \
-        --max-num-seqs 4 \
+        --max-num-seqs "${IFV_QWEN_MAX_NUM_SEQS:-4}" \
         --max-num-batched-tokens 32768 \
         --performance-mode throughput \
         --gdn-prefill-backend triton \
@@ -78,16 +83,19 @@ start() {
     echo "$!" >"$(pid_path "$gpu")"
   done
 
-  backends="http://127.0.0.1:${PORTS[0]},http://127.0.0.1:${PORTS[1]},http://127.0.0.1:${PORTS[2]},http://127.0.0.1:${PORTS[3]}"
+  backends=""
+  for port in "${PORTS[@]}"; do
+    backends+="${backends:+,}http://127.0.0.1:${port}"
+  done
   setsid env \
     QWEN_REPLICA_BACKENDS="$backends" \
-    QWEN_REPLICA_MODEL_ID=ifv-qwen3.5-9b \
+    QWEN_REPLICA_MODEL_ID="$MODEL_ALIAS" \
     QWEN_REPLICA_GATEWAY_TIMEOUT_SECONDS=900 \
     "$PYTHON" -m uvicorn scripts.server.qwen_replica_gateway:app \
-      --app-dir "$REPO" --host 127.0.0.1 --port 8901 --log-level warning \
+      --app-dir "$REPO" --host 127.0.0.1 --port "$GATEWAY_PORT" --log-level warning \
     </dev/null >"${LOG_ROOT}/gateway.log" 2>&1 &
   echo "$!" >"${PID_ROOT}/gateway.pid"
-  echo "started four single-H20 base-model replicas and gateway"
+  echo "started ${#GPU_IDS[@]} single-H20 replicas for $MODEL_ALIAS; gateway=$GATEWAY_PORT"
 }
 
 status() {
@@ -104,7 +112,7 @@ status() {
   else
     echo "stopped: gateway"
   fi
-  curl -fsS --max-time 5 http://127.0.0.1:8901/health || true
+  curl -fsS --max-time 5 "http://127.0.0.1:$GATEWAY_PORT/health" || true
   echo
 }
 
