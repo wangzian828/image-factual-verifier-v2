@@ -32,10 +32,18 @@ def test_normalizes_fsdp_wrapper_and_infers_paired_targets() -> None:
     assert infer_target_modules(normalized) == ["o_proj", "q_proj"]
 
 
+def test_accepts_dcp_loader_that_already_removed_model_wrapper() -> None:
+    state = {
+        "base_model.model.q_proj.lora_A.weight": object(),
+        "base_model.model.q_proj.lora_B.weight": object(),
+    }
+    assert normalize_lora_state_dict(state) == state
+
+
 @pytest.mark.parametrize(
     "state,match",
     [
-        ({"base_model.x.lora_A.weight": object()}, "prefix"),
+        ({"x.lora_A.weight": object()}, "prefix"),
         ({"model.base_model.x.weight": object()}, "non-LoRA"),
     ],
 )

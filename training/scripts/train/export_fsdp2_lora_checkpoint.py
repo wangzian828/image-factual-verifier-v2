@@ -30,11 +30,14 @@ def _sha256_file(path: Path) -> str:
 def normalize_lora_state_dict(state: Mapping[str, Any]) -> dict[str, Any]:
     """Remove the FSDP model wrapper and reject non-LoRA tensors."""
 
+    wrapped = [name.startswith("model.") for name in state]
+    if any(wrapped) and not all(wrapped):
+        raise ValueError("mixed wrapped and unwrapped FSDP LoRA key prefixes")
     normalized: dict[str, Any] = {}
     for source_name, tensor in state.items():
-        if not source_name.startswith("model."):
+        name = source_name.removeprefix("model.") if all(wrapped) else source_name
+        if not name.startswith("base_model."):
             raise ValueError(f"unexpected FSDP LoRA key prefix: {source_name}")
-        name = source_name.removeprefix("model.")
         if not name.endswith((".lora_A.weight", ".lora_B.weight")):
             raise ValueError(f"non-LoRA tensor in FSDP adapter state: {source_name}")
         if name in normalized:
