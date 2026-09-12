@@ -21,7 +21,9 @@ teacher rollout
   -> accepted-teacher-release
   -> accepted-dataset
   -> convert-policy / convert-accepted-perception
-  -> real ms-swift processor verification
+  -> live-runtime causal audit
+  -> real ms-swift processor verification v3
+  -> raw-data launch gate
   -> swift sft
 ```
 
@@ -37,14 +39,20 @@ tool_response: ...
 assistant: <think>...</think><answer>...</answer>
 ```
 
-转换结果只使用 `tools`、`messages`、`images`。消息只有 `role` 和 `content`；
-不写 `loss`、`channel` 或 `chat_template_kwargs`。目标 Qwen/ms-swift template
-负责生成 labels。
+转换结果只使用 `tools`、`messages`、`images`。正常监督消息只有 `role` 和
+`content`；若历史动作不满足当前可执行契约，则保留整条轨迹，并仅给对应 thought
+和 `tool_call` 写 `loss=false`。不写 `channel` 或 `chat_template_kwargs`。目标
+Qwen/ms-swift template 负责生成 labels。
 
 ```powershell
 python -m ifv_training convert-policy `
   --input <accepted-dataset> `
   --output <ms-swift-policy>
+
+# 只有已经转换过、无法回到 canonical trace 的旧交付包才使用此入口。
+python -m ifv_training repair-policy-contract `
+  --input <legacy-ms-swift-policy> `
+  --output <ms-swift-policy-v4>
 
 python -m ifv_training convert-accepted-perception `
   --input <accepted-dataset> `
@@ -69,7 +77,8 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
 ```
 
 验证脚本会实际调用 processor，确认原生 `<think>` 在 labels 中、工具调用和工具
-结果进入输入、图片未丢失，并使用与训练完全相同的 template 参数检查上下文长度。
+结果进入输入、图片未丢失，同时逐一确认正常动作被监督、`loss=false` 动作确实被
+掩码，并使用与训练完全相同的 template 参数检查上下文长度。
 报告记录输入 JSONL 的绝对路径、大小和 SHA-256，供训练启动门禁绑定。
 
 直接用 raw JSONL 调用 `run_sft.sh` 时必须设置：

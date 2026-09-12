@@ -46,6 +46,43 @@ def _load_object(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _expected_loss_targets(paths: list[Path]) -> dict[str, int]:
+    counts = {
+        "supervised_tool_call_targets": 0,
+        "masked_tool_call_targets": 0,
+        "supervised_thought_targets": 0,
+        "masked_thought_targets": 0,
+    }
+    for path in paths:
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            for message in row.get("messages", []) or []:
+                if not isinstance(message, Mapping):
+                    continue
+                masked = message.get("loss") is False
+                role = str(message.get("role", ""))
+                content = str(message.get("content", ""))
+                if role == "tool_call":
+                    key = (
+                        "masked_tool_call_targets"
+                        if masked
+                        else "supervised_tool_call_targets"
+                    )
+                    counts[key] += 1
+                if role == "assistant" and "<think>" in content:
+                    key = (
+                        "masked_thought_targets"
+                        if masked
+                        else "supervised_thought_targets"
+                    )
+                    counts[key] += 1
+    return counts
+
+
 def _expected_template_contract(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "max_length": args.max_context,
@@ -68,6 +105,7 @@ def verify_sft_data_contract(
     processor_report_path: Path,
     model: str,
     expected_template_contract: Mapping[str, Any],
+    expected_model_type: str = "qwen3_5",
     minimum_train_input_tokens: int | None = None,
     minimum_train_rows_at_or_above: int = 1,
 ) -> dict[str, Any]:
@@ -79,15 +117,17 @@ def verify_sft_data_contract(
 
     if (
         processor_report.get("schema_version")
-        != "ifv-ms-swift-agent-processor-verification-v2"
+        != "ifv-ms-swift-agent-processor-verification-v3"
     ):
-        errors.append("processor report does not use the required v2 schema")
+        errors.append("processor report does not use the required v3 schema")
     if processor_report.get("passed") is not True:
         errors.append("processor report did not pass")
 
     expected_model = str(Path(model).expanduser().resolve())
     if processor_report.get("model") != expected_model:
         errors.append("processor report model does not match the training model")
+    if processor_report.get("model_type") != expected_model_type:
+        errors.append("processor report model type does not match the training model")
     if processor_report.get("template_contract") != dict(
         expected_template_contract
     ):
@@ -177,6 +217,26 @@ def verify_sft_data_contract(
             errors.append("strict dataset manifest audit did not pass")
 
         manifest = _load_object(manifest_path)
+        if manifest.get("dataset_version") != "ifv-ms-swift-qwen-agent-v4":
+            errors.append("dataset is not projected to the required live-contract v4")
+        retention = manifest.get("row_retention")
+        retention = retention if isinstance(retention, Mapping) else {}
+        source_rows = retention.get("source_rows")
+        output_rows = retention.get("output_rows")
+        dropped_rows = retention.get("dropped_rows")
+        if (
+            not isinstance(source_rows, int)
+            or not isinstance(output_rows, int)
+            or source_rows != output_rows
+            or dropped_rows != 0
+        ):
+            errors.append("dataset manifest does not prove zero-row-loss projection")
+        causal = dataset_audit.get("causal_contract")
+        causal = causal if isinstance(causal, Mapping) else {}
+        if causal.get("schema_version") != "ifv-policy-causal-contract-audit-v2":
+            errors.append("dataset audit does not use live runtime contract v2")
+        if causal.get("passed") is not True:
+            errors.append("live runtime causal contract did not pass")
         artifact_paths = {
             str((dataset_dir / str(item.get("path", ""))).resolve())
             for item in (manifest.get("artifacts") or {}).values()
@@ -189,13 +249,31 @@ def verify_sft_data_contract(
             if str(current["path"]) not in artifact_paths:
                 errors.append(f"dataset manifest does not bind {label} JSONL")
 
+        primary_paths = [
+            dataset_dir / str(item.get("path", ""))
+            for name, item in (manifest.get("artifacts") or {}).items()
+            if name in {"train", "validation", "test"} and isinstance(item, Mapping)
+        ]
+        expected_targets = _expected_loss_targets(primary_paths)
+        processor_checks = processor_report.get("checks")
+        processor_checks = (
+            processor_checks if isinstance(processor_checks, Mapping) else {}
+        )
+        for key, expected in expected_targets.items():
+            if processor_checks.get(key) != expected:
+                errors.append(
+                    f"processor loss-mask check {key} does not match data: "
+                    f"expected={expected}, observed={processor_checks.get(key)!r}"
+                )
+
     return {
-        "schema_version": "ifv-sft-raw-data-gate-v1",
+        "schema_version": "ifv-sft-raw-data-gate-v2",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "passed": not errors,
         "error_count": len(errors),
         "errors": errors,
         "model": expected_model,
+        "model_type": expected_model_type,
         "template_contract": dict(expected_template_contract),
         "datasets": {
             "train": train_record,
@@ -237,6 +315,7 @@ def main() -> int:
     parser.add_argument("--dataset-dir", type=Path, required=True)
     parser.add_argument("--processor-report", type=Path, required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--model-type", default="qwen3_5")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-context", type=int, required=True)
     parser.add_argument("--max-pixels", type=int)
@@ -274,6 +353,7 @@ def main() -> int:
         dataset_dir=args.dataset_dir,
         processor_report_path=args.processor_report,
         model=args.model,
+        expected_model_type=args.model_type,
         expected_template_contract=_expected_template_contract(args),
         minimum_train_input_tokens=args.minimum_train_input_tokens,
         minimum_train_rows_at_or_above=args.minimum_train_rows_at_or_above,

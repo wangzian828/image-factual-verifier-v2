@@ -556,9 +556,27 @@ def export_trajectory_sft_example(
                 )
             if str(policy_action.get("type", "")) != "tool_call":
                 raise ValueError("react trajectory action must be a tool call")
+            # ``policy_action`` is captured before StageRunner applies runtime
+            # normalization (for example URL canonicalization and filtered
+            # search siblings).  The immutable step is the execution record;
+            # falling back to the pre-execution proposal would silently teach
+            # a call that did not produce the following observation.
+            if not isinstance(step.get("tool_args"), Mapping):
+                raise ValueError(
+                    "react trajectory action lacks recorded executed tool arguments"
+                )
+            executed_arguments = dict(step["tool_args"])
+            executed_tool_name = str(step.get("tool_name", "")).strip()
+            proposed_tool_name = str(policy_action.get("name", "")).strip()
+            if not executed_tool_name:
+                raise ValueError("react trajectory action lacks recorded executed tool name")
+            if proposed_tool_name and proposed_tool_name != executed_tool_name:
+                raise ValueError(
+                    "react trajectory proposal and executed tool names disagree"
+                )
             tool_call = {
-                "name": str(policy_action.get("name", "")).strip(),
-                "arguments": dict(_mapping(policy_action.get("arguments"))),
+                "name": executed_tool_name,
+                "arguments": executed_arguments,
             }
             if not tool_call["name"]:
                 raise ValueError("react trajectory action lacks tool name")
@@ -586,20 +604,28 @@ def export_trajectory_sft_example(
             )
             tool_call_count += 1
             tool_result = str(step.get("tool_result", "") or "").strip()
-            if tool_result:
-                pending_tool_response = _render_tool_response_content(
-                    tool_result,
-                    observation_id=str(
-                        metadata.get("function_call_id", "") or ""
-                    ),
-                    tool_name=tool_call["name"],
-                    tool_success=(
-                        metadata.get("tool_success")
-                        if isinstance(metadata.get("tool_success"), bool)
-                        else None
-                    ),
+            if not tool_result:
+                raise ValueError("react trajectory action lacks a recorded tool result")
+            observation_id = str(metadata.get("function_call_id", "") or "").strip()
+            if not observation_id:
+                raise ValueError(
+                    "react trajectory action lacks a model-visible observation ID"
                 )
-                pending_tool_step_index = position
+            try:
+                _, parsed_tool_success = parse_tool_result(tool_result)
+            except Exception:
+                parsed_tool_success = None
+            pending_tool_response = _render_tool_response_content(
+                tool_result,
+                observation_id=observation_id,
+                tool_name=tool_call["name"],
+                tool_success=(
+                    metadata.get("tool_success")
+                    if isinstance(metadata.get("tool_success"), bool)
+                    else parsed_tool_success
+                ),
+            )
+            pending_tool_step_index = position
         else:
             answer = canonical_json(policy_action)
             assistant_content = (
@@ -722,13 +748,20 @@ def _unified_react_quality_gate(
         raise ValueError(
             "unified-react trace requires at least one ReAct action"
         )
+    if any(not isinstance(step.get("tool_args"), Mapping) for step in actions):
+        raise ValueError(
+            "unified-react trace requires recorded executed tool arguments per action"
+        )
     if any(
         not str(_mapping(step.get("metadata")).get("function_call_id", "")).strip()
-        or not str(step.get("tool_result", "")).strip()
         for step in actions
     ):
         raise ValueError(
-            "unified-react trace requires a function ID and raw tool result per action"
+            "unified-react trace requires a model-visible observation ID per action"
+        )
+    if any(not str(step.get("tool_result", "")).strip() for step in actions):
+        raise ValueError(
+            "unified-react trace requires a recorded tool result per action"
         )
     if require_provider_thought and any(
         not str(step.get("thought", "") or "").strip() for step in actions

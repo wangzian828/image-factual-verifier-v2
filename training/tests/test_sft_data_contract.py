@@ -74,7 +74,17 @@ def _dataset(root: Path) -> tuple[Path, Path]:
             "sha256": sha256_file(path),
         }
     (root / "manifest.json").write_text(
-        json.dumps({"artifacts": artifacts}),
+        json.dumps(
+            {
+                "dataset_version": "ifv-ms-swift-qwen-agent-v4",
+                "row_retention": {
+                    "source_rows": 2,
+                    "output_rows": 2,
+                    "dropped_rows": 0,
+                },
+                "artifacts": artifacts,
+            }
+        ),
         encoding="utf-8",
     )
     return train, validation
@@ -90,10 +100,17 @@ def _processor_report(
     path.write_text(
         json.dumps(
             {
-                "schema_version": "ifv-ms-swift-agent-processor-verification-v2",
+                "schema_version": "ifv-ms-swift-agent-processor-verification-v3",
                 "passed": True,
                 "model": str(model.resolve()),
+                "model_type": "qwen3_5",
                 "template_contract": CONTRACT,
+                "checks": {
+                    "supervised_tool_call_targets": 0,
+                    "masked_tool_call_targets": 0,
+                    "supervised_thought_targets": 2,
+                    "masked_thought_targets": 0,
+                },
                 "dataset_files": [
                     MODULE._file_record(train),
                     MODULE._file_record(validation),

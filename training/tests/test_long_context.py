@@ -83,7 +83,7 @@ def test_long_context_plan_requires_real_120k_coverage(tmp_path: Path) -> None:
     report.write_text(
         json.dumps(
             {
-                "schema_version": "ifv-ms-swift-agent-processor-verification-v2",
+                "schema_version": "ifv-ms-swift-agent-processor-verification-v3",
                 "passed": True,
                 "dataset_files": [
                     {"path": str(train.resolve()), "sha256": sha256_file(train)}

@@ -45,6 +45,22 @@ REACT_RUNTIME_TOOLS = (
     "count_objects",
 )
 
+# Keep the hard action budgets next to the runtime tool contract so training
+# conversion, rollout execution, and offline audits cannot silently drift.
+REACT_RUNTIME_TOOL_CALL_LIMITS = {
+    "current_time": 1,
+    "ocr_with_position": 3,
+    "reverse_image_search": 2,
+    "text_image_search": 6,
+    "text_search": 16,
+    "visit": 16,
+    "compare_with_reference": 6,
+    "crop_and_inspect": 4,
+    "focused_visual_inspection": 2,
+    "check_consistency": 3,
+    "analyze_visual_anomalies": 3,
+}
+
 _INTERNAL_FIELDS = {
     "image_input",
     "image_claim",

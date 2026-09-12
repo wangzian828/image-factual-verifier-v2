@@ -51,6 +51,7 @@ from src.orchestrator.tool_result import parse_tool_result, serialize_tool_resul
 from src.orchestrator.react_runtime import (
     UnifiedReactState as RuntimeReactState,
     MAX_REACT_ACTIONS,
+    REACT_RUNTIME_TOOL_CALL_LIMITS,
     UNIFIED_REACT_RUNTIME_POLICY_VERSION as UNIFIED_REACT_POLICY_VERSION,
     build_react_runtime_tools,
     compile_react_judgment_basis,
@@ -180,19 +181,7 @@ class Orchestrator:
                     "analyze_visual_anomalies",
                 }
             )
-        self.verification_tool_limits = {
-            "current_time": 1,
-            "ocr_with_position": 3,
-            "reverse_image_search": 2,
-            "text_image_search": 6,
-            "text_search": 16,
-            "visit": 16,
-            "compare_with_reference": 6,
-            "crop_and_inspect": 4,
-            "focused_visual_inspection": 2,
-            "check_consistency": 3,
-            "analyze_visual_anomalies": 3,
-        }
+        self.verification_tool_limits = dict(REACT_RUNTIME_TOOL_CALL_LIMITS)
 
         self.llm = APIBackend(
             provider=self.provider,

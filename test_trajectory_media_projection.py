@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from src.trajectory.exporter import export_trajectory_sft_example
 from src.trajectory.media_projection import project_trajectory_media
 
@@ -194,3 +196,51 @@ def test_trajectory_export_matches_image_markers_to_portable_media(
     ]
     assert len(tool_responses) == 2
     assert all(content.count("<image>") == 1 for content in tool_responses)
+
+
+def test_trajectory_export_binds_call_to_executed_args_and_observation_id(
+    tmp_path: Path,
+) -> None:
+    trace = _trace(tmp_path)
+    first = trace["state"]["all_steps"][0]
+    first["tool_args"] = {"query": "runtime-normalized"}
+
+    exported = export_trajectory_sft_example(trace)
+    first_call = next(
+        message for message in exported.messages if message["role"] == "tool_call"
+    )
+    first_response = next(
+        message for message in exported.messages if message["role"] == "tool_response"
+    )
+    call = json.loads(first_call["content"])
+    response = json.loads(first_response["content"].split("\n\n<image>", 1)[0])
+
+    assert json.loads(call["arguments"]) == {"query": "runtime-normalized"}
+    assert response["observation_locator"] == {
+        "observation_id": "req-000001",
+        "tool_name": "example_tool",
+        "tool_success": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda step: step.pop("tool_args"), "executed tool arguments"),
+        (
+            lambda step: step["metadata"].pop("function_call_id"),
+            "model-visible observation ID",
+        ),
+        (lambda step: step.__setitem__("tool_result", ""), "recorded tool result"),
+    ],
+)
+def test_trajectory_export_fails_closed_when_execution_binding_is_missing(
+    tmp_path: Path,
+    mutation,
+    message: str,
+) -> None:
+    trace = _trace(tmp_path)
+    mutation(trace["state"]["all_steps"][0])
+
+    with pytest.raises(ValueError, match=message):
+        export_trajectory_sft_example(trace)

@@ -112,3 +112,32 @@ def test_boundary_summary_counts_rows_and_selects_nearest_candidates() -> None:
     assert summary[0]["closest_at_or_below"]["row_index"] == 0
     assert summary[1]["rows_at_or_above"] == 1
     assert summary[1]["closest_at_or_above"]["row_index"] == 2
+
+
+def test_count_labeled_subsequences_distinguishes_masks() -> None:
+    input_ids = [1, 2, 3, 1, 2, 3]
+    labels = [1, 2, 3, -100, -100, -100]
+
+    assert MODULE._count_labeled_subsequences(input_ids, labels, [1, 2, 3]) == (
+        1,
+        1,
+    )
+
+
+def test_thought_loss_contract_counts_distinct_markers() -> None:
+    class Tokenizer:
+        @staticmethod
+        def encode(_text: str, add_special_tokens: bool = False) -> list[int]:
+            return [7]
+
+    messages = [
+        {"role": "assistant", "content": "<think>a</think>"},
+        {"role": "assistant", "content": "<think>b</think>", "loss": False},
+    ]
+
+    assert MODULE._verify_thought_loss_contract(
+        messages,
+        [7, 7],
+        [7, -100],
+        Tokenizer(),
+    ) == (1, 1)

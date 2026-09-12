@@ -2,22 +2,75 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from collections import Counter, defaultdict
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields
+from functools import lru_cache
+from types import SimpleNamespace
 from typing import Any, Iterable, Mapping, Sequence
 
 from . import _repo_import  # noqa: F401  (adds the repository root to sys.path)
 
 from src.orchestrator.investigation_models import RawHistoryJudgmentOutput
+from src.orchestrator.react_runtime import (
+    FinishInvestigationTool,
+    MAX_REACT_ACTIONS,
+    REACT_RUNTIME_TOOL_CALL_LIMITS,
+    REACT_RUNTIME_TOOLS,
+    RuntimeToolAdapter,
+    UnifiedReactState,
+    record_react_action,
+    validate_react_action,
+)
+from src.orchestrator.route_policy import routes_semantically_equivalent
 
 
 ANSWER_RE = re.compile(r"(<answer>\s*)(.*?)(\s*</answer>)", re.DOTALL | re.IGNORECASE)
-STAGE_CONTROL_RE = re.compile(
-    r"(?:\n\n(?P<legacy>\{\s*\"stage\"\s*:.*\})\s*$|"
-    r"<stage_control>(?P<tagged>.*?)</stage_control>)",
-    re.DOTALL,
-)
+STAGE_CONTROL_RE = re.compile(r"<stage_control>.*?</stage_control>", re.DOTALL)
+
+LIVE_TOOL_CLASS_PATHS = {
+    "perceive_scene": ("src.tools.perceive_scene", "PerceiveSceneTool"),
+    "ocr_with_position": ("src.tools.ocr_with_position", "OCRWithPositionTool"),
+    "current_time": ("src.tools.current_time", "CurrentTimeTool"),
+    "reverse_image_search": (
+        "src.tools.reverse_image_search",
+        "ReverseImageSearchTool",
+    ),
+    "text_image_search": ("src.tools.text_image_search", "TextImageSearchTool"),
+    "text_search": ("src.tools.text_search", "TextSearchTool"),
+    "visit": ("src.tools.visit", "VisitTool"),
+    "compare_with_reference": (
+        "src.tools.compare_reference",
+        "CompareWithReferenceTool",
+    ),
+    "check_consistency": (
+        "src.tools.check_consistency",
+        "CheckConsistencyTool",
+    ),
+    "analyze_visual_anomalies": (
+        "src.tools.visual_anomaly",
+        "VisualAnomalyTool",
+    ),
+    "crop_and_inspect": ("src.tools.crop_and_inspect", "CropAndInspectTool"),
+    "focused_visual_inspection": (
+        "src.tools.focused_visual_inspection",
+        "FocusedVisualInspectionTool",
+    ),
+    "count_objects": ("src.tools.count_objects", "CountObjectsTool"),
+}
+
+SECRET_MARKERS = {
+    "openai_style_key": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    "google_api_key": re.compile(r"\bAIza[A-Za-z0-9_-]{20,}\b"),
+    "github_token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    "bearer_token": re.compile(
+        r"(?i)\bauthorization\s*:\s*bearer\s+[A-Za-z0-9._~+/-]{20,}"
+    ),
+    "named_secret": re.compile(
+        r'''(?ix)\b(?:api[_-]?key|password|client[_-]?secret)\b\s*[:=]\s*["']?[A-Za-z0-9._~+/-]{24,}'''
+    ),
+}
 
 
 class PolicyCausalContractError(ValueError):
@@ -34,12 +87,96 @@ class ToolProjection:
     arguments: dict[str, Any]
     status: str
     removed_arguments: tuple[str, ...] = ()
+    normalized_arguments: tuple[str, ...] = ()
     issue_code: str = ""
     issue_fields: tuple[str, ...] = ()
 
     @property
     def executable(self) -> bool:
-        return self.status in {"exact", "unknown_arguments_removed"}
+        return self.status != "unrepairable"
+
+
+def _dataclass_default(tool_class: type[Any], name: str) -> Any:
+    for item in fields(tool_class):
+        if item.name != name:
+            continue
+        if item.default is not MISSING:
+            return deepcopy(item.default)
+        if item.default_factory is not MISSING:
+            return item.default_factory()
+    raise RuntimeError(f"{tool_class.__name__}.{name} has no static default")
+
+
+@lru_cache(maxsize=1)
+def live_runtime_tool_contract() -> tuple[str, dict[str, Any]]:
+    """Build schemas from the same tool classes and adapter as production.
+
+    Dataclass defaults are read without constructing network-backed tools, so
+    this contract is deterministic and requires no API credentials.
+    """
+
+    import importlib
+
+    state = UnifiedReactState(case_id="training-contract", image_sha256="0" * 64)
+    definitions: list[dict[str, Any]] = []
+    for name in REACT_RUNTIME_TOOLS:
+        module_name, class_name = LIVE_TOOL_CLASS_PATHS[name]
+        tool_class = getattr(importlib.import_module(module_name), class_name)
+        delegate = SimpleNamespace(
+            name=_dataclass_default(tool_class, "name"),
+            description=_dataclass_default(tool_class, "description"),
+            parameters=_dataclass_default(tool_class, "parameters"),
+        )
+        adapter = RuntimeToolAdapter(delegate=delegate, state=state)
+        definitions.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": adapter.name,
+                    "description": adapter.description,
+                    "parameters": adapter.parameters,
+                },
+            }
+        )
+    finish = FinishInvestigationTool()
+    definitions.append(
+        {
+            "type": "function",
+            "function": {
+                "name": finish.name,
+                "description": finish.description,
+                "parameters": finish.parameters,
+            },
+        }
+    )
+    rendered = json.dumps(definitions, ensure_ascii=False, separators=(",", ":"))
+    metadata = {
+        "schema_version": "ifv-live-react-training-contract-v1",
+        "tool_names": [item["function"]["name"] for item in definitions],
+        "tool_schema_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+        "max_actions": MAX_REACT_ACTIONS,
+        "tool_call_limits": dict(sorted(REACT_RUNTIME_TOOL_CALL_LIMITS.items())),
+    }
+    return rendered, metadata
+
+
+def _has_stage_control(content: str) -> bool:
+    if STAGE_CONTROL_RE.search(content):
+        return True
+    tail = str(content).rsplit("\n\n", 1)[-1].strip()
+    try:
+        payload = json.loads(tail)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, Mapping) and {
+        "stage",
+        "output_mode",
+    }.issubset(payload)
+
+
+def _secret_marker_kinds(value: Any) -> list[str]:
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    return [name for name, pattern in SECRET_MARKERS.items() if pattern.search(text)]
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -211,6 +348,51 @@ def _schema_variants(tools: Any) -> dict[str, list[dict[str, Any]]]:
     return dict(variants)
 
 
+def _safe_argument_normalizations(
+    tool_name: str,
+    arguments: Mapping[str, Any],
+    schema: Mapping[str, Any],
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Apply only shape changes that preserve one unambiguous value."""
+
+    normalized = dict(arguments)
+    changes: list[str] = []
+    properties = _mapping(schema.get("properties"))
+    for field, value in list(normalized.items()):
+        spec = _mapping(properties.get(field))
+        expected = spec.get("type")
+        if (
+            (tool_name, field) == ("text_search", "queries")
+            and expected == "string"
+            and isinstance(value, list)
+            and len(value) == 1
+            and isinstance(value[0], str)
+        ):
+            normalized[field] = value[0]
+            changes.append(f"{field}:singleton_array_to_string")
+            continue
+        if (
+            (tool_name, field) == ("visit", "url")
+            and expected == "array"
+            and isinstance(value, str)
+        ):
+            normalized[field] = [value]
+            changes.append(f"{field}:string_to_singleton_array")
+            continue
+        allowed = spec.get("enum")
+        if isinstance(value, str) and isinstance(allowed, list):
+            matches = [
+                candidate
+                for candidate in allowed
+                if isinstance(candidate, str)
+                and candidate.casefold() == value.casefold()
+            ]
+            if len(matches) == 1 and matches[0] != value:
+                normalized[field] = matches[0]
+                changes.append(f"{field}:enum_case_normalized")
+    return normalized, tuple(changes)
+
+
 def project_tool_call(call: Mapping[str, Any], tools: Any) -> ToolProjection:
     name = str(call.get("name", "")).strip()
     if not name:
@@ -227,26 +409,43 @@ def project_tool_call(call: Mapping[str, Any], tools: Any) -> ToolProjection:
         if not _schema_issues(name, arguments, schema):
             return ToolProjection(name, arguments, "exact")
 
-    repair_candidates: list[tuple[int, dict[str, Any], tuple[str, ...]]] = []
+    repair_candidates: list[
+        tuple[int, int, dict[str, Any], tuple[str, ...], tuple[str, ...]]
+    ] = []
     all_issues: list[list[tuple[str, str]]] = []
     for schema in variants:
         properties = set(_mapping(schema.get("properties")))
         removed = tuple(sorted(set(arguments) - properties))
         sanitized = {key: value for key, value in arguments.items() if key in properties}
+        sanitized, normalized = _safe_argument_normalizations(
+            name,
+            sanitized,
+            schema,
+        )
         issues = _schema_issues(name, sanitized, schema)
-        all_issues.append(_schema_issues(name, arguments, schema))
-        if removed and not issues:
-            repair_candidates.append((len(removed), sanitized, removed))
+        all_issues.append(issues or _schema_issues(name, arguments, schema))
+        if (removed or normalized) and not issues:
+            repair_candidates.append(
+                (len(removed), len(normalized), sanitized, removed, normalized)
+            )
     if repair_candidates:
-        _, sanitized, removed = min(
+        _, _, sanitized, removed, normalized = min(
             repair_candidates,
-            key=lambda item: (item[0], item[2]),
+            key=lambda item: (item[0] + item[1], item[0], item[3], item[4]),
+        )
+        status = (
+            "safe_projection"
+            if removed and normalized
+            else "unknown_arguments_removed"
+            if removed
+            else "safe_value_normalized"
         )
         return ToolProjection(
             name,
             sanitized,
-            "unknown_arguments_removed",
+            status,
             removed_arguments=removed,
+            normalized_arguments=normalized,
         )
 
     best = min(all_issues, key=lambda issues: (len(issues), issues)) if all_issues else []
@@ -359,8 +558,16 @@ def _raw_json_prefix(content: str) -> Any:
 
 def successful_observation_ids(messages: Sequence[Mapping[str, Any]]) -> set[str]:
     result: set[str] = set()
+    pending_calls: list[bool] = []
     for message in messages:
-        if str(message.get("role", "")) != "tool_response":
+        role = str(message.get("role", ""))
+        if role == "tool_call":
+            pending_calls.append(message.get("loss") is not False)
+            continue
+        if role != "tool_response":
+            continue
+        causally_executable = pending_calls.pop(0) if pending_calls else False
+        if not causally_executable:
             continue
         payload = _raw_json_prefix(str(message.get("content", "")))
         locator = _mapping(_mapping(payload).get("observation_locator"))
@@ -388,7 +595,7 @@ def _response_outcome(content: str) -> str:
 
 
 def project_final_observation_ids(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
 ) -> dict[str, int | bool]:
     if not messages or messages[-1].get("role") != "assistant":
         return {
@@ -434,6 +641,52 @@ def project_final_observation_ids(
     }
 
 
+def _mask_action_turn(messages: list[Any], message_index: int) -> None:
+    message = messages[message_index]
+    if isinstance(message, dict):
+        message["loss"] = False
+    if (
+        message_index > 0
+        and isinstance(messages[message_index - 1], dict)
+        and messages[message_index - 1].get("role") == "assistant"
+    ):
+        messages[message_index - 1]["loss"] = False
+
+
+def _runtime_rejection(
+    *,
+    state: UnifiedReactState,
+    tool_name: str,
+    tool_args: Mapping[str, Any],
+    accepted_routes: Sequence[tuple[str, Mapping[str, Any]]],
+    accepted_counts: Mapping[str, int],
+    finished: bool,
+) -> str:
+    if finished:
+        return "after_finish_investigation"
+    error = validate_react_action(
+        state,
+        tool_name=tool_name,
+        tool_args=tool_args,
+    )
+    if error:
+        return "runtime_action_policy"
+    if any(
+        routes_semantically_equivalent(
+            prior_name,
+            prior_args,
+            tool_name,
+            tool_args,
+        )
+        for prior_name, prior_args in accepted_routes
+    ):
+        return "semantic_duplicate"
+    limit = REACT_RUNTIME_TOOL_CALL_LIMITS.get(tool_name)
+    if limit is not None and int(accepted_counts.get(tool_name, 0)) >= limit:
+        return "tool_budget_exceeded"
+    return ""
+
+
 def project_converted_policy_row(
     row: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -441,10 +694,16 @@ def project_converted_policy_row(
     messages = projected.get("messages")
     if not isinstance(messages, list):
         raise PolicyCausalContractError("messages must be a list", codes=["invalid_messages"])
-    tools = projected.get("tools", "")
+    source_tools = projected.get("tools", "")
+    tools, live_contract = live_runtime_tool_contract()
     call_counts: Counter[str] = Counter()
     removed_fields: Counter[str] = Counter()
+    normalized_fields: Counter[str] = Counter()
     masked_call_counts: Counter[str] = Counter()
+    accepted_routes: list[tuple[str, Mapping[str, Any]]] = []
+    accepted_counts: Counter[str] = Counter()
+    state = UnifiedReactState(case_id="training-row", image_sha256="0" * 64)
+    finished = False
     for message_index, message in enumerate(messages):
         if not isinstance(message, dict) or message.get("role") != "tool_call":
             continue
@@ -456,22 +715,20 @@ def project_converted_policy_row(
             )
             call_counts[projection.status] += 1
             masked_call_counts[projection.issue_code] += 1
-            message["loss"] = False
-            if message_index > 0 and messages[message_index - 1].get("role") == "assistant":
-                messages[message_index - 1]["loss"] = False
+            _mask_action_turn(messages, message_index)
             continue
         projection = project_tool_call(call, tools)
         call_counts[projection.status] += 1
         if not projection.executable:
             # Preserve the entire historical turn and its observation as
             # context, but do not teach a call rejected by the live runtime.
-            message["loss"] = False
-            if message_index > 0 and messages[message_index - 1].get("role") == "assistant":
-                messages[message_index - 1]["loss"] = False
+            _mask_action_turn(messages, message_index)
             masked_call_counts[projection.issue_code or "schema_mismatch"] += 1
             continue
         for field in projection.removed_arguments:
             removed_fields[f"{projection.name}.{field}"] += 1
+        for field in projection.normalized_arguments:
+            normalized_fields[f"{projection.name}.{field}"] += 1
         message["content"] = json.dumps(
             {
                 "name": projection.name,
@@ -484,18 +741,36 @@ def project_converted_policy_row(
             ensure_ascii=False,
             separators=(",", ":"),
         )
-    try:
-        canonical_tools, schema_stats = canonicalize_tool_schemas(tools)
-    except PolicyCausalContractError:
-        canonical_tools = str(tools)
-        schema_stats = {
-            "input_schema_count": len(_tool_functions(tools)),
-            "output_schema_count": len(_tool_functions(tools)),
-            "duplicate_schema_entries_removed": 0,
-            "conflicting_schema_projection_skipped": 1,
-        }
-    if canonical_tools != "[]" or str(tools).strip():
-        projected["tools"] = canonical_tools
+        if message.get("loss") is False:
+            masked_call_counts["preexisting_mask"] += 1
+            continue
+        runtime_issue = _runtime_rejection(
+            state=state,
+            tool_name=projection.name,
+            tool_args=projection.arguments,
+            accepted_routes=accepted_routes,
+            accepted_counts=accepted_counts,
+            finished=finished,
+        )
+        if runtime_issue:
+            _mask_action_turn(messages, message_index)
+            masked_call_counts[runtime_issue] += 1
+            continue
+        accepted_routes.append((projection.name, dict(projection.arguments)))
+        accepted_counts[projection.name] += 1
+        record_react_action(
+            state,
+            tool_name=projection.name,
+            tool_args=projection.arguments,
+            call_id=f"training-{message_index}",
+        )
+        finished = projection.name == "finish_investigation"
+    projected["tools"] = tools
+    schema_stats = {
+        "source_schema_count": len(_tool_functions(source_tools)),
+        "output_schema_count": len(_tool_functions(tools)),
+        "live_schema_sha256_matches": True,
+    }
     final_stats = project_final_observation_ids(messages)
     response_counts = Counter(
         _response_outcome(str(message.get("content", "")))
@@ -506,13 +781,16 @@ def project_converted_policy_row(
         "tool_calls": dict(call_counts),
         "masked_unrepairable_tool_calls": dict(masked_call_counts),
         "removed_argument_fields": dict(removed_fields),
+        "normalized_argument_fields": dict(normalized_fields),
         "tool_schemas": schema_stats,
+        "live_runtime_contract": live_contract,
         "final_observation_ids": final_stats,
         "tool_responses": dict(response_counts),
     }
 
 
 def audit_policy_contract_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    live_tools, live_contract = live_runtime_tool_contract()
     row_count = 0
     rows_with_calls = 0
     rows_with_unmasked_unrepairable_calls = 0
@@ -521,6 +799,9 @@ def audit_policy_contract_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, A
     rows_with_invisible_final_ids = 0
     rows_with_conflicting_schemas = 0
     rows_with_legacy_stage_control = 0
+    rows_with_non_live_tool_schemas = 0
+    rows_with_unmasked_runtime_rejections = 0
+    rows_with_secret_markers = 0
     call_status: Counter[str] = Counter()
     call_issue_codes: Counter[str] = Counter()
     call_issue_fields: Counter[str] = Counter()
@@ -530,12 +811,23 @@ def audit_policy_contract_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, A
     final_counts: Counter[str] = Counter()
     role_counts: Counter[str] = Counter()
     locator_counts: Counter[str] = Counter()
+    secret_marker_counts: Counter[str] = Counter()
 
     for row in rows:
         row_count += 1
+        secret_kinds = _secret_marker_kinds(row)
+        if secret_kinds:
+            rows_with_secret_markers += 1
+            secret_marker_counts.update(secret_kinds)
         messages = row.get("messages")
         messages = messages if isinstance(messages, list) else []
         tools = row.get("tools", "")
+        if tools:
+            try:
+                if json.loads(str(tools)) != json.loads(live_tools):
+                    rows_with_non_live_tool_schemas += 1
+            except Exception:
+                rows_with_non_live_tool_schemas += 1
         try:
             variants = _schema_variants(tools)
             for name, schemas in variants.items():
@@ -569,14 +861,14 @@ def audit_policy_contract_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, A
                         or locator.get("successful") is True
                         else "unsuccessful_or_unknown"
                     ] += 1
-                if STAGE_CONTROL_RE.search(content):
+                if _has_stage_control(content):
                     rows_with_legacy_stage_control += 1
             if role != "tool_call":
                 continue
             row_call_count += 1
             try:
                 call = _json_object(content, label="tool call")
-                projection = project_tool_call(call, tools)
+                projection = project_tool_call(call, live_tools)
             except Exception:
                 projection = ToolProjection(
                     "", {}, "unrepairable", issue_code="malformed_tool_call"
@@ -595,6 +887,22 @@ def audit_policy_contract_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, A
             rows_with_calls += 1
         if row_has_unmasked_unrepairable:
             rows_with_unmasked_unrepairable_calls += 1
+
+        try:
+            reprojected, _ = project_converted_policy_row(row)
+            projected_messages = reprojected.get("messages", [])
+            gained_mask = any(
+                isinstance(original, Mapping)
+                and isinstance(repaired, Mapping)
+                and original.get("role") == "tool_call"
+                and original.get("loss") is not False
+                and repaired.get("loss") is False
+                for original, repaired in zip(messages, projected_messages)
+            )
+            if gained_mask:
+                rows_with_unmasked_runtime_rejections += 1
+        except Exception:
+            rows_with_unmasked_runtime_rejections += 1
 
         if not messages or not isinstance(messages[-1], Mapping):
             rows_with_final_errors += 1
@@ -635,9 +943,14 @@ def audit_policy_contract_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, A
         "rows_with_unmasked_unrepairable_tool_calls": (
             rows_with_unmasked_unrepairable_calls
         ),
+        "rows_with_unmasked_live_runtime_rejections": (
+            rows_with_unmasked_runtime_rejections
+        ),
+        "rows_with_non_live_tool_schemas": rows_with_non_live_tool_schemas,
+        "rows_with_high_confidence_secret_markers": rows_with_secret_markers,
     }
     return {
-        "schema_version": "ifv-policy-causal-contract-audit-v1",
+        "schema_version": "ifv-policy-causal-contract-audit-v2",
         "passed": not any(blockers.values()),
         "row_count": row_count,
         "production_blockers": blockers,
@@ -652,6 +965,7 @@ def audit_policy_contract_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, A
             ),
         },
         "tool_schemas": {
+            "live_runtime_contract": live_contract,
             "duplicate_variant_entries_by_name": dict(
                 schema_variant_counts.most_common(100)
             ),
@@ -661,6 +975,11 @@ def audit_policy_contract_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, A
             "status_counts": dict(sorted(response_status.items())),
             "observation_locator_counts": dict(sorted(locator_counts.items())),
             "legacy_stage_control_occurrences": rows_with_legacy_stage_control,
+        },
+        "security": {
+            "rows_with_high_confidence_secret_markers": rows_with_secret_markers,
+            "marker_kind_counts": dict(sorted(secret_marker_counts.items())),
+            "matched_values_redacted": True,
         },
         "final_targets": dict(sorted(final_counts.items())),
         "masked_invalid_final_output_rows": rows_with_masked_final_errors,

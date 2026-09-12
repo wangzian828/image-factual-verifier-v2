@@ -270,7 +270,7 @@ def build_long_context_plan(
     data_checks = {
         "processor_report_schema": _check(
             report.get("schema_version"),
-            "ifv-ms-swift-agent-processor-verification-v2",
+            "ifv-ms-swift-agent-processor-verification-v3",
         ),
         "processor_report_passed": _check(report.get("passed"), True),
         "train_file_covered": {"passed": train_record is not None},

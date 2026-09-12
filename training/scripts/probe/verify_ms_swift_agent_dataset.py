@@ -111,6 +111,45 @@ def _contains_supervised_subsequence(
     return False
 
 
+def _contains_masked_subsequence(
+    input_ids: list[int],
+    labels: list[int],
+    needle: list[int],
+) -> bool:
+    if not needle or len(needle) > len(input_ids):
+        return False
+    width = len(needle)
+    return any(
+        input_ids[index : index + width] == needle
+        and all(labels[index + offset] == -100 for offset in range(width))
+        for index in range(len(input_ids) - width + 1)
+    )
+
+
+def _count_labeled_subsequences(
+    input_ids: list[int],
+    labels: list[int],
+    needle: list[int],
+) -> tuple[int, int]:
+    """Return fully supervised and fully masked non-overlapping occurrences."""
+
+    if not needle:
+        return 0, 0
+    supervised = 0
+    masked = 0
+    index = 0
+    width = len(needle)
+    while index <= len(input_ids) - width:
+        if input_ids[index : index + width] != needle:
+            index += 1
+            continue
+        span = labels[index : index + width]
+        supervised += int(all(value != -100 for value in span))
+        masked += int(all(value == -100 for value in span))
+        index += width
+    return supervised, masked
+
+
 def _text_for_presence_check(content: str) -> str:
     # In multimodal rows ms-swift consumes each <image> marker and replaces it
     # with image tokens. Check the surrounding public text separately.
@@ -189,6 +228,77 @@ def _verify_rendered_tool_calls(
                 f"{name}.{parameter_name} parameters"
             )
     return sum(expected_functions.values())
+
+
+def _verify_tool_call_loss_contract(
+    messages: list[Mapping[str, Any]],
+    input_ids: list[int],
+    labels: list[int],
+    tokenizer: Any,
+) -> tuple[int, int]:
+    expected_supervised: Counter[str] = Counter()
+    expected_masked: Counter[str] = Counter()
+    for message in messages:
+        if str(message.get("role", "")) != "tool_call":
+            continue
+        name, _ = _tool_call_contract(str(message.get("content", "")))
+        target = (
+            expected_masked if message.get("loss") is False else expected_supervised
+        )
+        target[name] += 1
+
+    for name in sorted(set(expected_supervised) | set(expected_masked)):
+        marker_ids = _encode(tokenizer, f"<function={name}>")
+        supervised, masked = _count_labeled_subsequences(
+            input_ids,
+            labels,
+            marker_ids,
+        )
+        if supervised < expected_supervised[name]:
+            raise ValueError(
+                f"only {supervised}/{expected_supervised[name]} {name} call markers "
+                "are fully supervised"
+            )
+        if masked < expected_masked[name]:
+            raise ValueError(
+                f"only {masked}/{expected_masked[name]} {name} call markers "
+                "are fully masked"
+            )
+    return sum(expected_supervised.values()), sum(expected_masked.values())
+
+
+def _verify_thought_loss_contract(
+    messages: list[Mapping[str, Any]],
+    input_ids: list[int],
+    labels: list[int],
+    tokenizer: Any,
+) -> tuple[int, int]:
+    expected_supervised = 0
+    expected_masked = 0
+    for message in messages:
+        if str(message.get("role", "")) != "assistant" or "<think>" not in str(
+            message.get("content", "")
+        ):
+            continue
+        if message.get("loss") is False:
+            expected_masked += 1
+        else:
+            expected_supervised += 1
+    supervised, masked = _count_labeled_subsequences(
+        input_ids,
+        labels,
+        _encode(tokenizer, "<think>"),
+    )
+    if supervised < expected_supervised:
+        raise ValueError(
+            f"only {supervised}/{expected_supervised} <think> markers are fully "
+            "supervised"
+        )
+    if masked < expected_masked:
+        raise ValueError(
+            f"only {masked}/{expected_masked} <think> markers are fully masked"
+        )
+    return expected_supervised, expected_masked
 
 
 def _validate_roles(messages: Any, *, kind: str) -> list[str]:
@@ -288,6 +398,7 @@ def main() -> None:
         description="Encode IFV agent/perception rows with the real ms-swift processor."
     )
     parser.add_argument("--model", required=True)
+    parser.add_argument("--model-type", default="qwen3_5")
     parser.add_argument("--policy-dir", type=Path, required=True)
     parser.add_argument("--perception-dir", type=Path)
     parser.add_argument("--output", type=Path, required=True)
@@ -322,7 +433,7 @@ def main() -> None:
 
     from swift import get_processor, get_template
 
-    processor = get_processor(args.model)
+    processor = get_processor(args.model, model_type=args.model_type)
     template_contract = _template_kwargs(args)
     template = get_template(processor, **template_contract)
     template.set_mode("train")
@@ -392,17 +503,29 @@ def main() -> None:
                         messages,
                         decoded_text,
                     )
+                    supervised_calls, masked_calls = _verify_tool_call_loss_contract(
+                        messages,
+                        input_ids,
+                        labels,
+                        tokenizer,
+                    )
+                    checks["supervised_tool_call_targets"] += supervised_calls
+                    checks["masked_tool_call_targets"] += masked_calls
+
+                supervised_thoughts, masked_thoughts = _verify_thought_loss_contract(
+                    messages,
+                    input_ids,
+                    labels,
+                    tokenizer,
+                )
+                checks["supervised_thought_targets"] += supervised_thoughts
+                checks["masked_thought_targets"] += masked_thoughts
 
                 for message in messages:
                     if not isinstance(message, Mapping):
                         continue
                     role = str(message.get("role", ""))
                     content = str(message.get("content", ""))
-                    if role == "assistant" and "<think>" in content:
-                        marker_ids = _encode(tokenizer, "<think>")
-                        if not _contains_supervised_subsequence(input_ids, labels, marker_ids):
-                            raise ValueError("native <think> marker is not supervised")
-                        checks["thought_targets"] += 1
                     if role == "tool_response":
                         presence_text = _text_for_presence_check(content)
                         content_ids = _encode(tokenizer, presence_text)
@@ -444,9 +567,10 @@ def main() -> None:
                 )
 
     report = {
-        "schema_version": "ifv-ms-swift-agent-processor-verification-v2",
+        "schema_version": "ifv-ms-swift-agent-processor-verification-v3",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model": str(Path(args.model).expanduser().resolve()),
+        "model_type": args.model_type,
         "processor_class": type(processor).__name__,
         "template_class": type(template).__name__,
         "template_contract": {

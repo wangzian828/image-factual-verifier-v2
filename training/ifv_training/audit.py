@@ -105,10 +105,22 @@ def audit_derived_dataset(dataset_dir: Path) -> dict[str, Any]:
             except Exception as exc:
                 errors.append(str(exc))
             rows_seen += 1
-    causal_contract = audit_policy_contract_rows(contract_rows)
-    for blocker, count in causal_contract["production_blockers"].items():
-        if count:
-            errors.append(f"policy causal contract blocker: {blocker}={count}")
+    is_policy_dataset = str(manifest.get("dataset_version", "")).startswith(
+        "ifv-ms-swift-qwen-agent-"
+    )
+    if is_policy_dataset:
+        causal_contract = audit_policy_contract_rows(contract_rows)
+        for blocker, count in causal_contract["production_blockers"].items():
+            if count:
+                errors.append(f"policy causal contract blocker: {blocker}={count}")
+    else:
+        causal_contract = {
+            "schema_version": "ifv-policy-causal-contract-audit-v2",
+            "passed": True,
+            "applicable": False,
+            "reason": "dataset is not a Qwen Agent policy dataset",
+            "production_blockers": {},
+        }
     return {
         "schema_version": "ifv-ms-swift-dataset-audit-v2",
         "passed": not errors,

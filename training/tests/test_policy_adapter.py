@@ -146,12 +146,13 @@ def test_react_uses_ms_swift_native_agent_format() -> None:
     call = json.loads(converted["messages"][3]["content"])
     assert call["name"] == "text_search"
     assert json.loads(call["arguments"]) == {
-        "queries": ["museum object official collection"],
-        "question_id": "task-1",
+        "queries": "museum object official collection",
     }
     assert converted["messages"][4]["role"] == "tool_response"
     assert "<answer>" in converted["messages"][5]["content"]
-    assert json.loads(converted["tools"])[0]["function"]["name"] == "text_search"
+    assert "text_search" in {
+        item["function"]["name"] for item in json.loads(converted["tools"])
+    }
     assert set(converted) == {"messages", "images", "tools"}
     answer = json.loads(
         converted["messages"][-1]["content"].split("<answer>", 1)[1].split(
@@ -269,9 +270,35 @@ def test_dataset_conversion_is_deterministic_and_auditable(
 
     assert manifest["example_count"] == 4
     assert manifest["artifacts"]["train"]["rows"] == 4
+    assert manifest["row_retention"] == {
+        "source_rows": 4,
+        "output_rows": 4,
+        "dropped_rows": 0,
+    }
     assert audit["passed"] is True
     for path in first.iterdir():
         assert path.read_bytes() == (second / path.name).read_bytes()
+
+
+def test_dataset_conversion_rejects_source_manifest_count_drift(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    write_json(
+        source / "manifest.json",
+        {
+            "dataset_version": "ifv-trajectory-sft-dataset-v3",
+            "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
+            "example_counts": {"train": 2, "validation": 0, "test": 0},
+        },
+    )
+    write_jsonl(source / "train.jsonl", [_trajectory_row()])
+    write_jsonl(source / "validation.jsonl", [])
+    write_jsonl(source / "test.jsonl", [])
+
+    with pytest.raises(ValueError, match="example counts do not match"):
+        convert_policy_dataset(source, tmp_path / "output")
 
 
 def test_legacy_step_dataset_is_rejected() -> None:
@@ -393,6 +420,30 @@ def test_converter_masks_unrepairable_action_but_keeps_complete_trajectory() -> 
     assert converted["messages"][3]["loss"] is False
     assert converted["messages"][4]["role"] == "tool_response"
     assert converted["messages"][-1].get("loss") is not False
+
+
+def test_converter_uses_live_schema_and_masks_semantic_duplicate() -> None:
+    row = _trajectory_row()
+    row["messages"] = [
+        *row["messages"][:-1],
+        {"role": "assistant", "content": "<think>repeat</think>"},
+        row["messages"][3],
+        row["messages"][4],
+        row["messages"][-1],
+    ]
+
+    converted = convert_policy_row(row)
+    tools = {
+        item["function"]["name"]: item["function"]
+        for item in json.loads(converted["tools"])
+    }
+
+    assert "finish_investigation" in tools
+    assert tools["text_search"]["parameters"]["properties"]["queries"][
+        "type"
+    ] == "string"
+    assert converted["messages"][5]["loss"] is False
+    assert converted["messages"][6]["loss"] is False
 
 
 def test_converter_drops_only_noncausal_final_ids() -> None:

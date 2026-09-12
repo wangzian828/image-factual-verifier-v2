@@ -15,7 +15,7 @@ from .io import (
     write_json,
     write_jsonl,
 )
-from .policy_contract import project_converted_policy_row
+from .policy_contract import live_runtime_tool_contract, project_converted_policy_row
 
 
 SUPPORTED_DATASET_VERSIONS = frozenset(
@@ -25,7 +25,7 @@ SUPPORTED_DATASET_VERSIONS = frozenset(
     }
 )
 LEGACY_STEP_DATASET_VERSION = "ifv-policy-dataset-v2"
-OUTPUT_VERSION = "ifv-ms-swift-qwen-agent-v3"
+OUTPUT_VERSION = "ifv-ms-swift-qwen-agent-v4"
 SPLITS = ("train", "validation", "test")
 TARGET_ROLES = frozenset(
     {"system", "user", "assistant", "tool_call", "tool_response"}
@@ -399,6 +399,7 @@ def _empty_projection_totals() -> dict[str, Any]:
         "tool_calls": Counter(),
         "masked_unrepairable_tool_calls": Counter(),
         "removed_argument_fields": Counter(),
+        "normalized_argument_fields": Counter(),
         "tool_responses": Counter(),
         "tool_schemas": Counter(),
         "final_observation_ids": Counter(),
@@ -414,6 +415,7 @@ def _accumulate_projection(
         "tool_calls",
         "masked_unrepairable_tool_calls",
         "removed_argument_fields",
+        "normalized_argument_fields",
         "tool_responses",
         "tool_schemas",
         "final_observation_ids",
@@ -434,6 +436,7 @@ def _render_projection_totals(totals: Mapping[str, Any]) -> dict[str, Any]:
                 "tool_calls",
                 "masked_unrepairable_tool_calls",
                 "removed_argument_fields",
+                "normalized_argument_fields",
                 "tool_responses",
                 "tool_schemas",
                 "final_observation_ids",
@@ -497,13 +500,25 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
         "rows": len(index_rows),
         "sha256": sha256_file(index_path),
     }
+    declared_counts = source_manifest.get("example_counts")
+    if isinstance(declared_counts, Mapping) and all(
+        isinstance(declared_counts.get(split), int) for split in SPLITS
+    ):
+        source_rows = sum(int(declared_counts[split]) for split in SPLITS)
+        if source_rows != row_id:
+            raise ValueError(
+                "source manifest example counts do not match exported JSONL rows: "
+                f"declared={source_rows}, observed={row_id}"
+            )
+    else:
+        source_rows = row_id
     manifest = {
         "schema_version": "ifv-ms-swift-dataset-manifest-v1",
         "dataset_version": OUTPUT_VERSION,
         "framework": {"name": "ms-swift", "version": "4.4.2"},
         "format_contract": {
             "name": "ms-swift-qwen-agent",
-            "version": "v2",
+            "version": "v4",
             "message_roles": [
                 "system",
                 "user",
@@ -523,7 +538,13 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
         },
         "example_count": row_id,
         "trajectory_format": "one_episode_per_row",
+        "row_retention": {
+            "source_rows": source_rows,
+            "output_rows": row_id,
+            "dropped_rows": 0,
+        },
         "contract_projection": _render_projection_totals(projection_totals),
+        "live_runtime_contract": live_runtime_tool_contract()[1],
         "artifacts": artifacts,
     }
     write_json(output_dir / "manifest.json", manifest)
@@ -541,9 +562,10 @@ def repair_derived_policy_dataset(
     if source_version not in {
         "ifv-ms-swift-qwen-agent-v2",
         "ifv-ms-swift-qwen-agent-v3",
+        "ifv-ms-swift-qwen-agent-v4",
     }:
         raise ValueError(
-            "repair-policy-contract requires an ms-swift Qwen Agent v2/v3 dataset"
+            "repair-policy-contract requires an ms-swift Qwen Agent v2/v3/v4 dataset"
         )
     require_new_or_empty(output_dir)
     source_index_path = input_dir / "index.jsonl"
@@ -608,7 +630,7 @@ def repair_derived_policy_dataset(
         ),
         "format_contract": {
             "name": "ms-swift-qwen-agent",
-            "version": "v3",
+            "version": "v4",
             "message_roles": [
                 "system",
                 "user",
@@ -637,6 +659,7 @@ def repair_derived_policy_dataset(
             "dropped_rows": 0,
         },
         "contract_projection": _render_projection_totals(projection_totals),
+        "live_runtime_contract": live_runtime_tool_contract()[1],
         "artifacts": artifacts,
     }
     write_json(output_dir / "manifest.json", manifest)
