@@ -71,6 +71,7 @@ launch_replicas() {
     port="${PORTS[$index]}"
     served_name="$MODEL_ALIAS"
     lora_args=()
+    execution_args=()
     if [[ -n "$LORA_ADAPTER" ]]; then
       served_name="${MODEL_ALIAS}-base"
       lora_args=(
@@ -79,6 +80,12 @@ launch_replicas() {
         --enable-tower-connector-lora
         --lora-modules "$MODEL_ALIAS=$LORA_ADAPTER"
       )
+    fi
+    if [[ "${IFV_QWEN_ENFORCE_EAGER:-false}" == "true" ]]; then
+      # vLLM 0.18.1 cannot CUDA-graph-warm all packed multimodal LoRA
+      # projections. Eager mode bypasses graph capture without changing the
+      # loaded adapter, KV cache, chunked prefill, or async scheduler.
+      execution_args+=(--enforce-eager)
     fi
     setsid env \
       CUDA_VISIBLE_DEVICES="$gpu" \
@@ -106,6 +113,7 @@ launch_replicas() {
         --enable-tokenizer-info-endpoint \
         --max-log-len 4000 \
         --disable-uvicorn-access-log \
+        "${execution_args[@]}" \
         "${lora_args[@]}" \
       </dev/null >"${LOG_ROOT}/replica-${gpu}.log" 2>&1 &
     echo "$!" >"$(pid_path "$gpu")"

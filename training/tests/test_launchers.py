@@ -289,6 +289,8 @@ def test_h20_replica_launcher_can_rebalance_without_killing_inflight_requests() 
     assert "gateway-draining-${old_pid}.pid" in launcher
     assert 'kill -KILL "$old_pid"' not in launcher
     assert 'curl -fsS --max-time 5 "http://127.0.0.1:${port}/health"' in launcher
+    assert "IFV_QWEN_ENFORCE_EAGER" in launcher
+    assert "--enforce-eager" in launcher
 
 
 def test_gpu_runtime_policy_is_shared_by_serving_and_training() -> None:
