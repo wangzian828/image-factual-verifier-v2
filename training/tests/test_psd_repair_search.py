@@ -144,6 +144,25 @@ def test_preserve_verified_hint_verbatim_and_private_judge_text_is_absent(tmp_pa
     assert not context["needs_relocalization"]
 
 
+def test_revision_context_keeps_only_latest_full_repaired_trace():
+    history = []
+    for index in range(3):
+        history.append({"feedback": {"attempts": [{
+            "hint": f"hint-{index}", "checker": {},
+            "repaired_steps": [{"tool_result": f"unique-full-trace-{index}"}],
+        }], "status": "generated"}})
+    original = json.loads(json.dumps(history))
+    context = revision_context(history)
+    encoded = json.dumps(context)
+    assert "unique-full-trace-0" not in encoded
+    assert "unique-full-trace-1" not in encoded
+    assert "unique-full-trace-2" in encoded
+    assert context["excluded_hints"] == ["hint-0", "hint-1", "hint-2"]
+    assert context["feedback_compaction"] == {
+        "full_repaired_steps_kept": 1, "prior_repaired_steps_omitted": 2}
+    assert history == original
+
+
 def test_wrong_anchor_requests_relocalization_without_judge_explanation(tmp_path):
     record, episode = make_round(tmp_path / "round")
     record["local_verification"]["review"].update(anchor_matches=False, earliest_error_step=2)

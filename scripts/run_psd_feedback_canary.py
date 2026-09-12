@@ -86,6 +86,9 @@ async def run(args):
         if not audit_feedback_run(output)["passed"]:
             raise ValueError("completed feedback search no longer passes verification")
         return load_json(progress)
+    previous_progress = load_json(progress) if progress.exists() else {}
+    previous_wall_seconds = float(previous_progress.get("search_wall_seconds") or 0)
+    previous_invocations = list(previous_progress.get("search_invocations") or [])
     summary = {"status": "repairing", "training_started": False, "cases": [],
                "case_concurrency": args.case_concurrency,
                "scheduling": "completion_order_within_one_frozen_checkpoint"}
@@ -127,6 +130,12 @@ async def run(args):
     async for index, candidate, outcome, error in completed_cases(load_jsonl(candidates_path),
             repair_case, concurrency=args.case_concurrency):
         completed_after_seconds = time.monotonic() - search_started
+        summary["search_wall_seconds"] = previous_wall_seconds + completed_after_seconds
+        summary["search_invocations"] = [*previous_invocations, {
+            "wall_seconds": completed_after_seconds,
+            "resumed": bool(previous_progress),
+            "complete": False,
+        }]
         if error:
             summary["cases"].append({"case_id": candidate["case_id"], "input_index": index,
                 "completed_after_seconds": completed_after_seconds,
@@ -144,7 +153,8 @@ async def run(args):
     load_bound(marker, identity={**identity, "inputs": {name: sha256_file(Path(name)) for name in identity["inputs"]}})
     # Completion order is useful progress, not a nondeterministic dataset order.
     attempts.sort(key=lambda row: (row["case_id"], row["attempt_id"]))
-    search_wall_seconds = time.monotonic() - search_started
+    invocation_wall_seconds = time.monotonic() - search_started
+    search_wall_seconds = previous_wall_seconds + invocation_wall_seconds
     serial_case_seconds = sum(
         float(row.get("result", {}).get("elapsed_seconds") or 0)
         for row in summary["cases"]
@@ -152,6 +162,11 @@ async def run(args):
     summary.update(accepted=sum(r.get("accepted") is True for r in attempts),
                    continuations=len(attempts), original_bank_unchanged=True,
                    search_wall_seconds=search_wall_seconds,
+                   search_invocations=[*previous_invocations, {
+                       "wall_seconds": invocation_wall_seconds,
+                       "resumed": bool(previous_progress),
+                       "complete": True,
+                   }],
                    sum_case_elapsed_seconds=serial_case_seconds,
                    observed_parallel_speedup=(serial_case_seconds / search_wall_seconds
                                               if search_wall_seconds else None))

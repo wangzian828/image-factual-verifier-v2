@@ -6,6 +6,55 @@ are separate milestones. A component test is not an end-to-end acceptance.
 
 ## Current evidence (2026-09-12)
 
+### Acceptance update at 21:41 China time
+
+- The isolated real H20 SP4 optimizer/capacity probe completed at
+  `/volume/ybo/wza/logs/psd-h20-sp4-real-optimizer-probe-20260912-r5`.
+  It encoded all 46 immutable real datums and completed `global_step=1` in
+  55.84 seconds with four-way sequence parallelism, FSDP2 and LoRA rank 32.
+  Per-process GPU-memory peaks were 16,310/16,310/16,310/17,490 MiB; every H20
+  reached 100% sampled utilization, with no OOM or non-finite failure. Loss
+  166.6 is the configured weighted token-loss sum per datum, consistent with
+  the earlier real CPU diagnostic; it is not mean cross entropy. This probe
+  used `save_strategy=no`, so it proves the real optimizer/update path and
+  capacity gate, not a saved adapter fingerprint.
+- The immutable feedback run r2 passed a new full cost/integrity audit at
+  `/volume/ybo/wza/runs/psd-feedback-canary-20260912-r2/feedback-audit.json`:
+  33 proposal requests, 9 Qwen continuations, 42 unique completed Gemini judge
+  requests, no changed bound snapshot and no audit error. Provider usage was
+  2,048,820 proposer input tokens plus 1,382,860 judge input tokens (643,877
+  cached), 11,817 judge output tokens and 152,326 thought tokens. Currency cost
+  is deliberately not estimated.
+- A real interrupted assembly recovery passed using one admitted repair and one
+  real preservation trajectory. Resume quarantined exactly one partial output,
+  rebuilt 13 files/531,109,297 bytes in 11.377 seconds, and a third invocation
+  reused the completed package without rebuilding or making provider calls.
+  The temporary 531 MB test output and quarantine were removed after hashes and
+  `/volume/ybo/wza/runs/psd-real-interrupted-assembly-recovery-20260912-r1/result.json`
+  were retained.
+- The bounded three-case live pool exercised real Gemini proposals, Qwen
+  trajectories and Gemini task judges concurrently. The first invocation used
+  160.609 wall seconds for 381.117 summed case seconds, an observed **2.37x**
+  speedup. It exposed a genuine judge binding bug when one repair emitted a
+  format-error retry before its token-bound tool action. Commit `25c6246`
+  allows only such parser retries, identifies exactly one bound replacement,
+  and still refuses to skip a valid policy decision. Cached resume finalized
+  that case as rejected, not admitted; the final three-case audit passes with
+  zero errors, 3 proposal calls, 2 Qwen continuations and 5 unique judge calls.
+  The 1-attempt/1-proposal probe had zero admissions and is a throughput/control
+  test, not a repair-rate estimate.
+- The historical r2 cost audit also showed near-quadratic proposer context
+  growth because every prior full repaired trajectory was copied into every
+  later prompt. Feedback-search v2 now retains all prior hints/checker outcomes
+  but only the latest full repaired trajectory. Tests prove input history is
+  immutable and earlier full traces are omitted. Resumable pool timing is now
+  accumulated across invocations instead of reporting the final resume alone.
+- H20 capacity/update, real asynchronous case scheduling, judge recovery,
+  interrupted materialization and detailed cost gates are now closed. The
+  remaining end-to-end acceptance gates are a complete next PSD training round,
+  fresh on-policy rollout from its new checkpoint, and held-out capability/
+  regression measurement. No production PSD training round has been started.
+
 ### Acceptance update at 02:47 China time
 
 - Real 9B CPU diagnostic completed in 5,574.53 seconds. Its `result.json`

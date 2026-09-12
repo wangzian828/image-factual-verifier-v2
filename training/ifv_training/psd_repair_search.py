@@ -8,6 +8,7 @@ patches or hint-bearing prefixes become independent on-policy training seeds.
 from __future__ import annotations
 
 import contextlib
+import copy
 import os
 import time
 from pathlib import Path
@@ -17,7 +18,7 @@ from .psd_repair import _sha
 from .psd_repair_storage import load_bound, save_bound
 from .psd_gemini_judge import CHECKS, _atomic_json, trace_steps
 
-VERSION = "ifv-psd-feedback-search-v1"
+VERSION = "ifv-psd-feedback-search-v2"
 MAX_SEARCH_ARTIFACT_BYTES = 2 * 1024 ** 3
 
 
@@ -78,13 +79,32 @@ def revision_context(history):
             if not locked or attempt["hint"] == locked or attempt["hint"].startswith(locked + "\n"):
                 locked = attempt["hint"]
     last = attempts[-1] if attempts else {}
+    previous_rounds = []
+    attempt_index = 0
+    for row in history:
+        feedback = copy.deepcopy(row["feedback"])
+        compacted = []
+        for attempt in feedback["attempts"]:
+            attempt_index += 1
+            if attempt_index < len(attempts):
+                # Keep every public checker decision and hint, but do not
+                # duplicate all prior full trajectories in every later prompt.
+                # The latest observed rerun remains complete for diagnosis.
+                attempt.pop("repaired_steps", None)
+            compacted.append(attempt)
+        feedback["attempts"] = compacted
+        previous_rounds.append(feedback)
     return {
-        "previous_rounds": [row["feedback"] for row in history],
+        "previous_rounds": previous_rounds,
         "locked_hint": locked,
         "excluded_hints": [attempt["hint"] for attempt in attempts],
         "needs_relocalization": bool(last and not locked and
             last.get("checker", {}).get("anchor_matches") is False),
         "anchor_feedback": {k: last[k] for k in ("selected_source_step", "earliest_error_step", "checker") if k in last},
+        "feedback_compaction": {
+            "full_repaired_steps_kept": int(bool(attempts)),
+            "prior_repaired_steps_omitted": max(0, len(attempts) - 1),
+        },
     }
 
 
