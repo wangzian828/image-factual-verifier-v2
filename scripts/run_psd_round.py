@@ -268,8 +268,13 @@ async def prepare(args):
 
 def train(args):
     ready = load_ready(args.ready)
+    training_data_root = args.training_data_root.resolve()
+    if not training_data_root.is_dir():
+        raise ValueError("PSD training data root must be an existing directory")
     env = os.environ.copy()
-    env.update(IFV_PSD_SERVING_PROFILE=ready["serving_profile"],
+    env.update(IFV_MODEL_ID=ready["model"],
+        IFV_TRAINING_DATA_ROOT=str(training_data_root),
+        IFV_PSD_SERVING_PROFILE=ready["serving_profile"],
         IFV_PSD_ROUND_START_MANIFEST=ready["checkpoint_manifest"],
         IFV_PSD_INITIAL_ADAPTER=ready["adapter"] or "", IFV_PSD_ROUND_READY=str(args.ready.resolve()))
     command = ["bash", str(ROOT / "training/scripts/train/run_psd_topk.sh"),
@@ -327,6 +332,7 @@ def main():
     train_parser = commands.add_parser("train")
     for name in ("ready", "model-profile", "psd-profile"):
         train_parser.add_argument("--" + name, type=Path, required=True)
+    train_parser.add_argument("--training-data-root", type=Path, required=True)
     train_parser.add_argument("--experiment-id", required=True)
     train_parser.add_argument("--resume-checkpoint", type=Path)
     finalize_parser = commands.add_parser("finalize")

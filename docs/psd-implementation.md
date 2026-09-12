@@ -68,6 +68,20 @@ is invented before the real GPU probe. Training is launched only after the
 existing baseline/SFT/post-training evaluation sequence and the required
 training-only repair admission gates; evaluation cases are never PSD data.
 
+The production round entrypoint requires an explicit storage root so a missing
+host profile cannot silently place checkpoints on the system disk. It also
+loads the student model path from the attested ready stage rather than requiring
+a second, potentially inconsistent environment override:
+
+```bash
+python scripts/run_psd_round.py train \
+  --ready <round-root>/ready.json \
+  --model-profile training/configs/models/qwen3.5-9b.env \
+  --psd-profile training/configs/psd/qwen3.5-lora-r32-h20-dp4-128k.env \
+  --training-data-root <large-training-volume> \
+  --experiment-id <round-id>
+```
+
 This repository implements the IFV adaptation of Essam Sleiman's
 [Privileged On-Policy Self-Distillation](https://canvas.inc/research/privileged-self-distillation)
 (PSD) as a verifier-gated data path. A failed rollout is only raw experience;
