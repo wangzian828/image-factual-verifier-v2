@@ -91,6 +91,7 @@ def run(args):
         inputs = {"runs": [str(p.resolve()) for p in [args.run_dir, *args.retry_dir]],
                   "benchmark": digest(args.benchmark), "gold": digest(args.gold),
                   "manifest": digest(args.manifest), "judge_model": args.judge_model,
+                  "thinking_level": args.thinking_level,
                   "judge_script": digest(ROOT / "scripts/audit_agent_private_gold.py"),
                   "judge_contract": digest(ROOT / "src/eval/private_gold_judge_contract.py"),
                   "expected_count": args.expected_count}
@@ -145,7 +146,7 @@ def run(args):
                     "--run-dir", str(args.run_dir), "--results-path", str(selection),
                     "--manifest", str(args.manifest), "--private-gold-sidecar", str(args.gold),
                     "--output-dir", str(directory), "--judge-model", args.judge_model,
-                    "--thinking-level", "high", "--max-output-tokens", "8192",
+                    "--thinking-level", args.thinking_level, "--max-output-tokens", "8192",
                     "--timeout", "240", "--max-retries", "2", "--concurrency", str(concurrency)]
                 with (output / f"judge-{batch}.log").open("ab") as log:
                     subprocess.run(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)
@@ -168,6 +169,7 @@ if __name__ == "__main__":
     parser.add_argument("--retry-dir", action="append", type=Path, default=[])
     parser.add_argument("--expected-count", type=int, default=1682)
     parser.add_argument("--concurrency", type=int, default=16)
-    parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
+    parser.add_argument("--judge-model", default="gemini-3.7-flash")
+    parser.add_argument("--thinking-level", choices=("low", "medium", "high"), default="low")
     parser.add_argument("--wait-seconds", type=int, default=2100)
     run(parser.parse_args())
