@@ -192,6 +192,28 @@ the main experiment. It must not promote diagnostic adapters or start an
 unrequested production PSD training round. Local scheduling requires the app
 and computer to remain running. The main experiment's ordering is unchanged.
 
+### Final live diagnostic results — 2026-09-12
+
+- The real 9B CPU optimizer/resume diagnostic completed successfully at
+  `/volume/ybo/wza/runs/psd-real-datum-9b-cpu-20260912/result.json`. It used one
+  admitted repair and one preservation datum, observed non-zero visual gradients,
+  reproduced the second step exactly after loading model/optimizer/scheduler/RNG
+  state, and verified next-round old weights with a fresh optimizer. This closes
+  the CPU optimizer and full-state resume acceptance gate only; it is not an H20
+  capacity result or a capability result.
+- The fixed three-case feedback search completed at
+  `/volume/ybo/wza/runs/psd-feedback-canary-20260912-r2`. Two cases converged to
+  one admitted repair each; one exhausted all 12 proposal rounds with no admitted
+  repair. The run retained nine complete continuations and seven rejected
+  attempts rather than resampling judge votes.
+- The resulting immutable bank has **46/46** complete top-20 datums: 2 repair and
+  44 preservation targets, 13,440 supervised positions, zero materialization
+  rejections, and a maximum sequence length of 26,331 tokens. The original
+  frozen bank remained unchanged.
+- Remaining gates are intentionally unchanged: isolated H20 SP4 optimizer/
+  throughput/capacity validation must wait for the main SFT/evaluation sequence,
+  and no production PSD round or held-out capability improvement has been run.
+
 The abandoned preparation directory without `-r2` contains only a failed
 projection attempt; it is not an accepted dataset/run.
 

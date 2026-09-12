@@ -2,6 +2,15 @@
 
 ## Current phase: formal SFT launched after user storage confirmation
 
+10:46 update: formal SFT remained healthy at step 449/982 (45.7%), with four H20s
+at 100% utilization and finite loss/gradients. The corrected pre-training judge
+rerun is separate from the obsolete 3.1 Pro/high audit: it uses
+`gemini-3.7-flash`, `thinking_level=low` under
+`qwen35-base-agent-full1682-c40-pretrain-20260911-rejudged-gemini37flash-low`.
+It had completed 1,100/1,682 records and was still active with no action required.
+Training must continue uninterrupted; the post-training judge must use this same
+3.7 Flash/low prompt and schema.
+
 The user explicitly confirmed sufficient storage and requested immediate launch.
 The prior storage hold below is superseded. Four keepers were stopped; after
 their CUDA allocations released, all four GPUs were verified at1MiB. Main judge
