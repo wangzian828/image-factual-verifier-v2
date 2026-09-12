@@ -53,6 +53,7 @@ def test_finalization_separates_deployable_adapter_from_training_state(
     }
     gate = tmp_path / "initialization.json"
     write_json(gate, initialization)
+    write_json(tmp_path / "base-manifest.json", {"checkpoint": {"path": ready["model"]}})
     monkeypatch.setattr(run_psd_round, "load_ready", lambda _: ready)
     captured = {}
 
