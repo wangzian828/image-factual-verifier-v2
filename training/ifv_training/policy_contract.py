@@ -366,6 +366,54 @@ def _safe_argument_normalizations(
         spec = _mapping(properties.get(field))
         expected = spec.get("type")
         if (
+            (tool_name, field) == ("ocr_with_position", "bbox")
+            and value in (None, [])
+        ):
+            # OCRWithPositionTool._normalize_bbox treats both spellings as a
+            # full-image request.  Omitting the optional field is therefore
+            # execution-equivalent and satisfies the provider schema.
+            normalized.pop(field)
+            changes.append(f"{field}:empty_region_omitted")
+            continue
+        if (
+            (tool_name, field) == ("focused_visual_inspection", "anchor_regions")
+            and isinstance(value, list)
+            and len(value) > 4
+            and all(
+                isinstance(region, (list, tuple))
+                and len(region) == 4
+                and all(
+                    isinstance(coordinate, (int, float))
+                    and not isinstance(coordinate, bool)
+                    for coordinate in region
+                )
+                for region in value[:4]
+            )
+        ):
+            # The historical tool normalized and truncated this field before
+            # constructing views.  Preserve exactly the executed first four.
+            normalized[field] = [list(region) for region in value[:4]]
+            value = normalized[field]
+            changes.append(f"{field}:runtime_first_four")
+        if (
+            (tool_name, field) == ("focused_visual_inspection", "scope")
+            and isinstance(value, str)
+            and value.casefold() in {"physical_consistency", "physics"}
+        ):
+            # These historical spellings selected the same non-relation view
+            # path as the current, semantically matching integrity scope.
+            normalized[field] = "integrity"
+            value = normalized[field]
+            changes.append(f"{field}:physical_consistency_to_integrity")
+        if (
+            (tool_name, field) == ("check_consistency", "aspect")
+            and isinstance(value, str)
+            and value.casefold() == "physical_consistency"
+        ):
+            normalized[field] = "physics"
+            value = normalized[field]
+            changes.append(f"{field}:physical_consistency_to_physics")
+        if (
             (tool_name, field) == ("text_search", "queries")
             and expected == "string"
             and isinstance(value, list)
@@ -461,6 +509,112 @@ def project_tool_call(call: Mapping[str, Any], tools: Any) -> ToolProjection:
         "unrepairable",
         issue_code=issue_code,
         issue_fields=issue_fields,
+    )
+
+
+def _successful_tool_response_result(
+    content: str,
+    *,
+    tool_name: str,
+) -> Mapping[str, Any]:
+    payload = _mapping(_raw_json_prefix(content))
+    locator = _mapping(payload.get("observation_locator"))
+    if (
+        locator.get("tool_success") is not True
+        or str(locator.get("tool_name", "")).strip() != tool_name
+    ):
+        return {}
+    result = payload.get("result")
+    return _mapping(result)
+
+
+def project_tool_call_with_response(
+    call: Mapping[str, Any],
+    tools: Any,
+    *,
+    response_content: str = "",
+) -> ToolProjection:
+    """Project a call using only execution facts visible in its paired result.
+
+    Early accepted traces contain a small set of schema-shaped wrapper calls
+    that the historical runtime passed through to permissive tools.  The tools
+    ignored those wrappers and executed documented defaults.  For successful
+    observations only, recover the explicit current-schema arguments from
+    fields echoed by the result.  This avoids teaching either the malformed
+    wrapper or an intended nested value that was not actually executed.
+    """
+
+    direct = project_tool_call(call, tools)
+    if direct.executable:
+        return direct
+    name = direct.name
+    result = _successful_tool_response_result(
+        response_content,
+        tool_name=name,
+    )
+    if not result:
+        return direct
+    try:
+        arguments = _json_object(call.get("arguments", {}), label="tool arguments")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return direct
+
+    candidates: list[
+        tuple[int, dict[str, Any], tuple[str, ...], tuple[str, ...]]
+    ] = []
+    for schema in _schema_variants(tools).get(name, []):
+        properties = set(_mapping(schema.get("properties")))
+        removed = tuple(sorted(set(arguments) - properties))
+        repaired = {key: value for key, value in arguments.items() if key in properties}
+        repaired, normalized = _safe_argument_normalizations(name, repaired, schema)
+        recovered: list[str] = []
+        if name == "reverse_image_search" and "branch" not in repaired:
+            branch = str(result.get("branch", "")).strip().casefold()
+            if branch in {"lens", "semantic"}:
+                repaired["branch"] = branch
+                recovered.append("branch:recovered_from_executed_result")
+        elif name == "check_consistency" and "aspect" not in repaired:
+            aspect = str(result.get("aspect_checked", "")).strip().casefold()
+            if aspect:
+                repaired["aspect"] = aspect
+                recovered.append("aspect:recovered_from_executed_result")
+        elif name == "focused_visual_inspection":
+            for field in ("question", "expected_property", "scope"):
+                if field not in repaired and isinstance(result.get(field), str):
+                    repaired[field] = str(result[field])
+                    recovered.append(f"{field}:recovered_from_executed_result")
+            if "anchor_regions" not in repaired:
+                views = result.get("views")
+                if (
+                    isinstance(views, list)
+                    and len(views) == 1
+                    and isinstance(views[0], Mapping)
+                    and str(views[0].get("kind", "")) == "original"
+                ):
+                    repaired["anchor_regions"] = []
+                    recovered.append("anchor_regions:recovered_full_image_default")
+        if not recovered or _schema_issues(name, repaired, schema):
+            continue
+        candidates.append(
+            (
+                len(removed) + len(normalized) + len(recovered),
+                repaired,
+                removed,
+                tuple([*normalized, *recovered]),
+            )
+        )
+    if not candidates:
+        return direct
+    _, repaired, removed, normalized = min(
+        candidates,
+        key=lambda item: (item[0], item[2], item[3]),
+    )
+    return ToolProjection(
+        name,
+        repaired,
+        "execution_equivalent",
+        removed_arguments=removed,
+        normalized_arguments=normalized,
     )
 
 
@@ -721,7 +875,16 @@ def project_converted_policy_row(
             masked_call_counts[projection.issue_code] += 1
             _mask_action_turn(messages, message_index)
             continue
-        projection = project_tool_call(call, tools)
+        response_content = ""
+        if message_index + 1 < len(messages):
+            response = messages[message_index + 1]
+            if isinstance(response, Mapping) and response.get("role") == "tool_response":
+                response_content = str(response.get("content", ""))
+        projection = project_tool_call_with_response(
+            call,
+            tools,
+            response_content=response_content,
+        )
         call_counts[projection.status] += 1
         if not projection.executable:
             # Preserve the entire historical turn and its observation as

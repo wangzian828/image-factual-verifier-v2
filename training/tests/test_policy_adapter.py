@@ -131,6 +131,34 @@ def _trajectory_row() -> dict:
     }
 
 
+def _replace_single_tool(
+    row: dict,
+    *,
+    name: str,
+    arguments: dict,
+    result: dict,
+    successful: bool = True,
+) -> None:
+    row["messages"][3]["content"] = json.dumps(
+        {
+            "name": name,
+            "arguments": json.dumps(arguments, ensure_ascii=False),
+        },
+        ensure_ascii=False,
+    )
+    row["messages"][4]["content"] = json.dumps(
+        {
+            "observation_locator": {
+                "observation_id": "obs-1",
+                "tool_name": name,
+                "tool_success": successful,
+            },
+            "result": result,
+        },
+        ensure_ascii=False,
+    )
+
+
 def test_react_uses_ms_swift_native_agent_format() -> None:
     converted = convert_policy_row(_trajectory_row())
 
@@ -452,6 +480,167 @@ def test_converter_repairs_unknown_arguments_without_dropping_row() -> None:
     repaired = json.loads(converted["messages"][3]["content"])
     assert "transport_wrapper" not in json.loads(repaired["arguments"])
     assert converted["messages"][3].get("loss") is not False
+
+
+def test_converter_recovers_historical_reverse_default_from_executed_result() -> None:
+    row = _trajectory_row()
+    _replace_single_tool(
+        row,
+        name="reverse_image_search",
+        arguments={"parameters": json.dumps({"branch": "semantic"})},
+        result={"status": "success", "branch": "lens", "lens_results": []},
+    )
+
+    converted = convert_policy_row(row)
+
+    call = json.loads(converted["messages"][3]["content"])
+    assert json.loads(call["arguments"]) == {"branch": "lens"}
+    assert converted["messages"][3].get("loss") is not False
+    assert "obs-1" in converted["messages"][-1]["content"]
+
+
+def test_converter_recovers_historical_focused_defaults_from_result() -> None:
+    row = _trajectory_row()
+    _replace_single_tool(
+        row,
+        name="focused_visual_inspection",
+        arguments={
+            "parameters": json.dumps(
+                {
+                    "question": "Nested but historically ignored",
+                    "expected_property": "Nested but historically ignored",
+                    "scope": "text",
+                    "anchor_regions": [[0.1, 0.1, 0.2, 0.2]],
+                }
+            )
+        },
+        result={
+            "status": "success",
+            "question": "Check the most relevant factual detail in the image.",
+            "expected_property": "Check the most relevant factual detail in the image.",
+            "scope": "scene",
+            "views": [
+                {
+                    "view_index": 0,
+                    "kind": "original",
+                    "region": [0.0, 0.0, 1.0, 1.0],
+                }
+            ],
+        },
+    )
+
+    converted = convert_policy_row(row)
+
+    call = json.loads(converted["messages"][3]["content"])
+    assert json.loads(call["arguments"]) == {
+        "question": "Check the most relevant factual detail in the image.",
+        "expected_property": "Check the most relevant factual detail in the image.",
+        "scope": "scene",
+        "anchor_regions": [],
+    }
+    assert converted["messages"][3].get("loss") is not False
+    assert "obs-1" in converted["messages"][-1]["content"]
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "expected"),
+    [
+        (
+            "check_consistency",
+            {"aspect": "physical_consistency"},
+            {"aspect": "physics"},
+        ),
+        (
+            "ocr_with_position",
+            {"bbox": [], "goal": "read all text"},
+            {"goal": "read all text"},
+        ),
+        (
+            "focused_visual_inspection",
+            {
+                "question": "Inspect physical plausibility",
+                "expected_property": "consistent contact",
+                "scope": "physical_consistency",
+                "anchor_regions": [[0.0, 0.0, 1.0, 1.0]],
+            },
+            {
+                "question": "Inspect physical plausibility",
+                "expected_property": "consistent contact",
+                "scope": "integrity",
+                "anchor_regions": [[0.0, 0.0, 1.0, 1.0]],
+            },
+        ),
+        (
+            "focused_visual_inspection",
+            {
+                "question": "Read five labels",
+                "expected_property": "all labels",
+                "scope": "text",
+                "anchor_regions": [
+                    [0.0, 0.0, 0.1, 0.1],
+                    [0.1, 0.1, 0.2, 0.2],
+                    [0.2, 0.2, 0.3, 0.3],
+                    [0.3, 0.3, 0.4, 0.4],
+                    [0.4, 0.4, 0.5, 0.5],
+                ],
+            },
+            {
+                "question": "Read five labels",
+                "expected_property": "all labels",
+                "scope": "text",
+                "anchor_regions": [
+                    [0.0, 0.0, 0.1, 0.1],
+                    [0.1, 0.1, 0.2, 0.2],
+                    [0.2, 0.2, 0.3, 0.3],
+                    [0.3, 0.3, 0.4, 0.4],
+                ],
+            },
+        ),
+    ],
+)
+def test_converter_applies_execution_equivalent_value_normalizations(
+    name: str,
+    arguments: dict,
+    expected: dict,
+) -> None:
+    row = _trajectory_row()
+    _replace_single_tool(
+        row,
+        name=name,
+        arguments=arguments,
+        result={"status": "success"},
+    )
+
+    converted = convert_policy_row(row)
+
+    call = json.loads(converted["messages"][3]["content"])
+    assert json.loads(call["arguments"]) == expected
+    assert converted["messages"][3].get("loss") is not False
+    assert "obs-1" in converted["messages"][-1]["content"]
+
+
+def test_converter_does_not_repair_failed_historical_wrapper() -> None:
+    row = _trajectory_row()
+    _replace_single_tool(
+        row,
+        name="crop_and_inspect",
+        arguments={
+            "parameters": json.dumps(
+                {
+                    "bbox": [0.1, 0.1, 0.9, 0.9],
+                    "focus_question": "Read the sign",
+                }
+            )
+        },
+        result={"status": "error", "error": "bbox is required"},
+        successful=False,
+    )
+
+    converted = convert_policy_row(row)
+
+    assert converted["messages"][2]["loss"] is False
+    assert converted["messages"][3]["loss"] is False
+    assert "obs-1" not in converted["messages"][-1]["content"]
 
 
 def test_source_exporter_makes_successful_observation_id_causally_visible() -> None:
