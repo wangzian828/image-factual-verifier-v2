@@ -21,7 +21,12 @@ sys.path[:0] = [str(ROOT), str(ROOT / "training")]
 from ifv_training.io import load_json, load_jsonl, sha256_file, write_json
 from ifv_training.psd_materialization import completed_package
 from ifv_training.psd_candidates import build_psd_candidate_package, _load_train_case_allowlist
-from ifv_training.psd_round import verify_psd_round_rollout, complete_psd_round
+from ifv_training.psd_round import (
+    PSD_ROLLOUT_GATE_SCHEMA_VERSION,
+    complete_psd_round,
+    validate_rollout_gate_for_candidates,
+    verify_psd_round_rollout,
+)
 from ifv_training.psd_initialization import verify_initialization, frozen_base_binding
 from ifv_training.psd_preflight import verify_psd_training_input
 from ifv_training.psd_repair_storage import load_bound, save_bound
@@ -42,6 +47,152 @@ def load_ready(path):
     if not gate["passed"]:
         raise ValueError("PSD prepared datums no longer pass verification")
     return ready
+
+
+def attest(args):
+    """Bind an already completed, verified PSD bank to its rollout policy.
+
+    Repair search and exact top-k collection are expensive, crash-safe stages.
+    This entry point lets an immutable completed bank enter the normal
+    production launcher without resampling either stage.  It deliberately
+    rechecks the rollout artifacts, datum package, target lineage and frozen
+    student initialization before emitting ``ready.json``.
+    """
+
+    root = args.output.resolve()
+    ready_path = root / "ready.json"
+    if ready_path.exists():
+        ready = load_ready(ready_path)
+        expected = {
+            "rollout_gate": str(args.rollout_gate.resolve()),
+            "datums": str(args.datums.resolve()),
+        }
+        if any(ready.get(name) != value for name, value in expected.items()):
+            raise ValueError("existing PSD ready stage is bound to different inputs")
+        return {
+            "status": "ready_for_training",
+            "ready": str(ready_path),
+            "training_started": False,
+            "reused": True,
+        }
+    if root.exists() and any(root.iterdir()):
+        raise ValueError("PSD attestation output must be new or already complete")
+    root.mkdir(parents=True, exist_ok=True)
+
+    gate_path = args.rollout_gate.resolve()
+    gate = load_json(gate_path)
+    gate_run = gate.get("run") if isinstance(gate.get("run"), dict) else {}
+    gate_cases = (
+        gate.get("train_cases")
+        if isinstance(gate.get("train_cases"), dict)
+        else {}
+    )
+    if (
+        gate.get("schema_version") != PSD_ROLLOUT_GATE_SCHEMA_VERSION
+        or gate.get("passed") is not True
+    ):
+        raise ValueError("PSD rollout gate is not a passing round gate")
+    run_dir = Path(str(gate_run.get("directory") or "")).resolve()
+    train_cases = Path(str(gate_cases.get("path") or "")).resolve()
+    validate_rollout_gate_for_candidates(
+        rollout_gate_path=gate_path,
+        run_dir=run_dir,
+        train_cases_path=train_cases,
+    )
+
+    datums = args.datums.resolve()
+    datum_manifest = (
+        args.datum_manifest.resolve()
+        if args.datum_manifest
+        else datums.parent / "manifest.json"
+    )
+    datum_gate = verify_psd_training_input(
+        datums_path=datums,
+        manifest_path=datum_manifest,
+        expected_topk=20,
+        max_context=131072,
+    )
+    if not datum_gate["passed"]:
+        raise ValueError("completed PSD bank does not pass datum verification")
+
+    datum_record = load_json(datum_manifest)
+    targets = Path(datum_record["source"]["targets"]).resolve()
+    target_rows = load_jsonl(targets)
+    gate_sha256 = sha256_file(gate_path)
+    round_index = gate.get("round_index")
+    run_id = str(gate_run.get("run_id") or "")
+    if not target_rows:
+        raise ValueError("completed PSD bank has no source targets")
+    lineage_errors = []
+    for index, row in enumerate(target_rows):
+        source = row.get("source") if isinstance(row.get("source"), dict) else {}
+        if source.get("psd_rollout_gate_sha256") != gate_sha256:
+            lineage_errors.append(f"target[{index}].rollout_gate")
+        if source.get("psd_round_index") != round_index:
+            lineage_errors.append(f"target[{index}].round_index")
+        if source.get("source_run_id") != run_id:
+            lineage_errors.append(f"target[{index}].run_id")
+        if row.get("target_status") != "complete":
+            lineage_errors.append(f"target[{index}].status")
+    if lineage_errors:
+        raise ValueError(
+            "PSD target lineage differs from rollout gate: "
+            + ",".join(lineage_errors[:20])
+        )
+
+    snapshot = args.snapshot.resolve()
+    serving = snapshot / "serving-profile.json"
+    checkpoint = snapshot / "checkpoint-manifest.json"
+    profile = load_json(serving)
+    base = profile.get("engine_model_path") or profile["model_path"]
+    adapter = profile["model_path"] if base != profile["model_path"] else None
+    initialization = verify_initialization(
+        datum_manifest_path=datum_manifest,
+        serving_profile_path=serving,
+        checkpoint_manifest_path=checkpoint,
+        model_path=base,
+        adapter_path=adapter,
+    )
+    ready = {
+        "schema_version": "ifv-psd-round-ready-v1",
+        "round_index": round_index,
+        "rollout_gate": str(gate_path),
+        "datums": str(datums),
+        "datum_manifest": str(datum_manifest),
+        "serving_profile": str(serving),
+        "checkpoint_manifest": str(checkpoint),
+        "model": base,
+        "adapter": adapter,
+        "initialization": initialization,
+        "preparation_mode": "attested_completed_bank_without_resampling",
+    }
+    identity_paths = (gate_path, datums, datum_manifest, targets, serving, checkpoint)
+    ready_identity = {
+        "files": {
+            str(path.resolve()): sha256_file(path) for path in identity_paths
+        }
+    }
+    save_bound(ready_path, identity=ready_identity, payload=ready)
+    write_json(
+        root / "attestation.json",
+        {
+            "schema_version": "ifv-psd-completed-bank-attestation-v1",
+            "passed": True,
+            "round_index": round_index,
+            "source_run_id": run_id,
+            "rollout_gate_sha256": gate_sha256,
+            "target_count": len(target_rows),
+            "datum_count": datum_gate["datums"]["rows"],
+            "datum_sha256": datum_gate["datums"]["sha256"],
+            "initialization": initialization,
+        },
+    )
+    return {
+        "status": "ready_for_training",
+        "ready": str(ready_path),
+        "training_started": False,
+        "reused": False,
+    }
 
 
 async def prepare(args):
@@ -169,6 +320,10 @@ def main():
     prepare_parser.add_argument("--case-concurrency", type=int, default=1)
     prepare_parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     prepare_parser.add_argument("--teacher-device", default="cpu")
+    attest_parser = commands.add_parser("attest")
+    for name in ("rollout-gate", "datums", "snapshot", "output"):
+        attest_parser.add_argument("--" + name, type=Path, required=True)
+    attest_parser.add_argument("--datum-manifest", type=Path)
     train_parser = commands.add_parser("train")
     for name in ("ready", "model-profile", "psd-profile"):
         train_parser.add_argument("--" + name, type=Path, required=True)
