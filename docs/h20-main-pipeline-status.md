@@ -1,5 +1,30 @@
 # H20 main pipeline handoff — 2026-09-12 03:28 China time
 
+## 20:49 update: partial canonical-v2 run intentionally stopped; merged retrain blocked on package-02 media
+
+The user chose to stop the 2,578-row canonical-v2 run and replace it with one
+clean-base retrain over the initial and package-02 canonical sources. The run at
+`/volume/ybo/wza/training-artifacts/h20-formal-sft-canonical-v2-20260912` was
+interrupted at step 259/1,004 before any accepted checkpoint was written. Its
+outer trap restored the four owned 60 GiB GPU keepers. Do not restart or resume
+that run and do not report it as an effectiveness result.
+
+Package 02 is `ifv-package02-quality-reroll01-passed1652-raw-traces.tar.gz`,
+SHA-256 `153dac2e15efcc46385f35af158213f6d5720363a6475641ad4ed54f18729119`.
+Archive and per-trace hashes passed; all 1,652 canonical traces passed the source
+audit. There is zero case/episode overlap with the initial 2,607 raw traces.
+
+Merged training is not launchable yet: package 02 contains no media/runtime
+stores, the existing delivery resolves only 7/1,652 initial images, and 1,373
+traces used multiple images. Do not degrade them to text-only or single-image
+training. Obtain and verify a package-02 runtime-store or policy-media sidecar,
+then follow `docs/h20-full-4259-retrain-plan.md`.
+
+The replacement run uses model-only checkpoints every 400 optimizer steps with
+the latest three retained. It intentionally omits optimizer/scheduler/RNG state
+to bound storage. PSD and post-SFT evaluation remain paused until merged SFT
+finishes.
+
 ## Current phase: formal SFT launched after user storage confirmation
 
 11:30 update: the authoritative filtered 1,527 metadata was recovered from the
