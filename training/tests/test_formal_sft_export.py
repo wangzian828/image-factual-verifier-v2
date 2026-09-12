@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 
 import ifv_training.checkpoints as checkpoints
-from scripts.h20.export_formal_sft import (
-    _bool_arg,
-    _full_state_weight_files,
-    _link_or_copy,
-)
+
+
+_EXPORT_PATH = Path(__file__).parents[1] / "scripts" / "h20" / "export_formal_sft.py"
+_EXPORT_SPEC = importlib.util.spec_from_file_location("ifv_export_formal_sft", _EXPORT_PATH)
+assert _EXPORT_SPEC is not None and _EXPORT_SPEC.loader is not None
+_EXPORT_MODULE = importlib.util.module_from_spec(_EXPORT_SPEC)
+_EXPORT_SPEC.loader.exec_module(_EXPORT_MODULE)
+_bool_arg = _EXPORT_MODULE._bool_arg
+_full_state_weight_files = _EXPORT_MODULE._full_state_weight_files
+_link_or_copy = _EXPORT_MODULE._link_or_copy
 
 
 def test_full_state_weight_files_follow_index(tmp_path: Path) -> None:
