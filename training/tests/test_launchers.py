@@ -316,6 +316,17 @@ def test_gpu_keeper_waits_for_clean_stop_and_complete_restart() -> None:
     assert "recognized_pid" in keeper
 
 
+def test_h20_formal_sft_plan_requires_canonical_v2_release_gates() -> None:
+    planner = _source("scripts/h20/prepare_formal_sft.py")
+
+    assert "ifv-sft-raw-data-gate-v2" in planner
+    assert "ifv-ms-swift-agent-processor-verification-v3" in planner
+    assert "independent-audit.json" in planner
+    assert "causal policy audit has production blockers" in planner
+    assert "delete_maps_to_template_raise_in_ms_swift_4.4.2" in planner
+    assert "input_tokens_by_dataset" in planner
+
+
 def test_cache_and_checkpoint_tools_remain_audited() -> None:
     encode_cache = _source("ifv_training/encode_cache.py")
     bootstrap = _source("ifv_training_bootstrap/sitecustomize.py")
