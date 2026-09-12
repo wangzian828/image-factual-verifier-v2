@@ -57,6 +57,33 @@ python -m ifv_training convert-accepted-perception `
   --output <ms-swift-perception>
 ```
 
+如果接手的是已发布的 canonical raw-trace 归档，而不是仍可访问的
+`accepted-teacher-release`，禁止从旧版 ms-swift JSONL 反推目标。应使用原始轨迹
+提供 thought、工具调用、真实工具结果和最终答案，只从经过校验的旧交付包复用媒体
+文件及 `<image>` 标记位置：
+
+```powershell
+python scripts/trajectory/export_canonical_trace_bundle.py `
+  --raw-root <verified-raw-traces> `
+  --reference-delivery <verified-reference-delivery> `
+  --raw-archive <raw-traces.tar.gz> `
+  --raw-archive-sha256 <published-sha256> `
+  --reference-archive <reference-delivery.tar.gz> `
+  --reference-archive-sha256 <published-sha256> `
+  --output <new-empty-output>
+
+python scripts/trajectory/audit_canonical_trace_rebuild.py `
+  --rebuilt-root <new-output> `
+  --raw-root <verified-raw-traces> `
+  --reference-delivery <verified-reference-delivery> `
+  --verify-source-archives `
+  --output <new-output>/independent-audit.json
+```
+
+独立审计器不调用导出函数；它从原始轨迹重新构造每一轮并逐项比对 thought、调用、
+实际参数、结果、图片绑定和最终证据 ID。两个来源归档的 SHA-256、交付包内部校验和、
+零丢行以及最终证据对先前未掩码成功观察的因果可见性必须同时通过。
+
 `ms-swift-policy` 和 `ms-swift-perception` 是两个独立数据集：
 
 - policy：完整 ReAct episode，保留 provider 原生 `<think>`；
@@ -77,6 +104,9 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
   --perception-dir <ms-swift-perception> `
   --output <processor-verification.json>
 ```
+
+processor 的上下文、图片、截断、padding-free、sequence-parallel 和 thinking 参数必须
+逐项取自实际训练 profile。当前四卡 H20 使用 SP4；不能复用八卡 SP8 的报告。
 
 JSON 审计只检查结构；真实 processor 验证还必须通过：
 

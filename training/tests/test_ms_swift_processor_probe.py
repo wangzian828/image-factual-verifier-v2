@@ -124,6 +124,26 @@ def test_count_labeled_subsequences_distinguishes_masks() -> None:
     )
 
 
+def test_subsequence_search_skips_false_prefixes_and_overlaps() -> None:
+    sequence = [1, 9, 1, 2, 1, 2, 3, 1, 2, 3]
+
+    assert list(MODULE._subsequence_starts(sequence, [1, 2, 3])) == [4, 7]
+    assert MODULE._contains_subsequence(sequence, [1, 2, 3]) is True
+    assert MODULE._contains_subsequence(sequence, [2, 3, 4]) is False
+
+
+def test_labeled_subsequence_search_checks_every_real_match() -> None:
+    input_ids = [7, 8, 7, 8]
+    labels = [-100, -100, 7, 8]
+
+    assert MODULE._contains_supervised_subsequence(input_ids, labels, [7, 8])
+    assert MODULE._contains_masked_subsequence(input_ids, labels, [7, 8])
+    assert MODULE._count_labeled_subsequences(input_ids, labels, [7, 8]) == (
+        1,
+        1,
+    )
+
+
 def test_thought_loss_contract_counts_distinct_markers() -> None:
     class Tokenizer:
         @staticmethod

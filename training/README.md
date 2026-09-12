@@ -68,7 +68,7 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
   --max-pixels 262144 `
   --truncation-strategy raise `
   --padding-free true `
-  --sequence-parallel-size 8 `
+  --sequence-parallel-size 4 `
   --loss-scale ignore_empty_think `
   --enable-thinking false `
   --add-non-thinking-prefix false `
@@ -80,6 +80,8 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
 结果进入输入、图片未丢失，同时逐一确认正常动作被监督、`loss=false` 动作确实被
 掩码，并使用与训练完全相同的 template 参数检查上下文长度。
 报告记录输入 JSONL 的绝对路径、大小和 SHA-256，供训练启动门禁绑定。
+`--sequence-parallel-size` 必须与随后使用的训练 profile 完全一致；上例是当前
+四卡 H20 的 SP4 配置。八卡 SP8 报告不能作为四卡 SP4 训练的启动依据，反之亦然。
 
 直接用 raw JSONL 调用 `run_sft.sh` 时必须设置：
 
@@ -120,8 +122,8 @@ check`、CUDA/GPU、Qwen3.5 上下文、ms-swift RL 参数契约，以及 `swift
 ## PSD
 
 PSD 使用当前 round-start Qwen 的冻结副本生成 top-20 分布，Gemini 等外部模型只可
-构造 privileged hint，不能提供 self-teacher logits。训练入口固定为 8 卡 SP8、128K、
-LoRA rank 32；不再保留 SP1 profile：
+构造 privileged hint，不能提供 self-teacher logits。当前 H20 训练入口是四卡 SP4、
+128K、LoRA rank 32；历史八卡环境才使用 SP8，不再保留 SP1 profile：
 
 ```bash
 python -m ifv_training collect-psd-topk \

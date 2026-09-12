@@ -91,8 +91,33 @@ def _encode(tokenizer: Any, text: str) -> list[int]:
 def _contains_subsequence(sequence: list[int], needle: list[int]) -> bool:
     if not needle or len(needle) > len(sequence):
         return False
+    return next(_subsequence_starts(sequence, needle), None) is not None
+
+
+def _subsequence_starts(sequence: list[int], needle: list[int]) -> Iterable[int]:
+    """Yield non-overlapping matches without a Python-level full-token scan.
+
+    ``list.index`` performs the common first-token search in C.  Tool-response
+    presence checks call this tens of thousands of times on long conversations,
+    so avoiding a sliced comparison at every token materially reduces full-data
+    verification time while preserving the previous non-overlap semantics.
+    """
+
+    if not needle or len(needle) > len(sequence):
+        return
     width = len(needle)
-    return any(sequence[index : index + width] == needle for index in range(len(sequence) - width + 1))
+    limit = len(sequence) - width
+    index = 0
+    while index <= limit:
+        try:
+            index = sequence.index(needle[0], index, limit + 1)
+        except ValueError:
+            return
+        if sequence[index : index + width] == needle:
+            yield index
+            index += width
+        else:
+            index += 1
 
 
 def _contains_supervised_subsequence(
@@ -103,8 +128,8 @@ def _contains_supervised_subsequence(
     if not needle or len(needle) > len(input_ids):
         return False
     width = len(needle)
-    for index in range(len(input_ids) - width + 1):
-        if input_ids[index : index + width] == needle and all(
+    for index in _subsequence_starts(input_ids, needle):
+        if all(
             labels[index + offset] != -100 for offset in range(width)
         ):
             return True
@@ -120,9 +145,8 @@ def _contains_masked_subsequence(
         return False
     width = len(needle)
     return any(
-        input_ids[index : index + width] == needle
-        and all(labels[index + offset] == -100 for offset in range(width))
-        for index in range(len(input_ids) - width + 1)
+        all(labels[index + offset] == -100 for offset in range(width))
+        for index in _subsequence_starts(input_ids, needle)
     )
 
 
@@ -137,16 +161,11 @@ def _count_labeled_subsequences(
         return 0, 0
     supervised = 0
     masked = 0
-    index = 0
     width = len(needle)
-    while index <= len(input_ids) - width:
-        if input_ids[index : index + width] != needle:
-            index += 1
-            continue
+    for index in _subsequence_starts(input_ids, needle):
         span = labels[index : index + width]
         supervised += int(all(value != -100 for value in span))
         masked += int(all(value == -100 for value in span))
-        index += width
     return supervised, masked
 
 
