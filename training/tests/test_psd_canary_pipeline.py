@@ -7,9 +7,21 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.continue_psd_canary import completed_stage
 from scripts.prepare_psd_training_canary import project_frozen_training
+from scripts.run_psd_feedback_canary import _build_parser
 from src.orchestrator.source_access import benchmark_source_access_policy
 from ifv_training.io import load_jsonl
 from ifv_training.psd_repair_runtime import QwenContinuationAdapter
+
+
+def test_feedback_canary_exposes_bounded_search_only_throughput_probe():
+    args = _build_parser().parse_args([
+        "--source", "source", "--snapshot", "snapshot", "--output", "output",
+        "--attempts", "1", "--proposal-rounds", "1", "--case-concurrency", "3",
+        "--search-only",
+    ])
+    assert args.attempts == args.proposal_rounds == 1
+    assert args.case_concurrency == 3
+    assert args.search_only is True
 
 
 def test_completed_proposer_response_cached_before_json_validation(tmp_path):

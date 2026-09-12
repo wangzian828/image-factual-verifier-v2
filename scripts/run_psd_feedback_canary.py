@@ -12,6 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "training")]
@@ -43,9 +44,19 @@ async def run(args):
         gold_path, serving, checkpoint]
     if (source / "datums/datums.jsonl").exists():
         input_paths.append(source / "datums/datums.jsonl")
+    proposal_rounds = getattr(args, "proposal_rounds", 12)
+    search_only = getattr(args, "search_only", False)
+    if type(proposal_rounds) is not int or not args.attempts <= proposal_rounds <= 64:
+        raise ValueError("proposal rounds must be between attempt budget and 64")
     identity = {"inputs": {str(p.resolve()): sha256_file(p) for p in input_paths},
         "attempt_budget": args.attempts, "judge_model": args.judge_model,
         "selection": "all fixed original failed training cases, independent of repair outcomes"}
+    # Keep the default identity byte-compatible with the immutable historical
+    # canary; only bind fields that change its execution/materialization policy.
+    if proposal_rounds != 12:
+        identity["proposal_budget"] = proposal_rounds
+    if search_only:
+        identity["search_only"] = True
     marker = output / "inputs.json"
     if marker.exists():
         load_bound(marker, identity=identity)
@@ -56,7 +67,8 @@ async def run(args):
     if type(args.case_concurrency) is not int or not 1 <= args.case_concurrency <= 64:
         raise ValueError("case concurrency must be 1..64")
     progress = output / "progress.json"
-    if progress.exists() and load_json(progress).get("status") == "search_complete_datums_materialized":
+    completed_status = load_json(progress).get("status") if progress.exists() else ""
+    if completed_status == "search_complete_datums_materialized":
         # Completed banks (including the historical canary) are immutable and
         # need no live model, API key, repeated judge, or repeated repair call.
         from ifv_training.psd_preflight import verify_psd_training_input
@@ -64,6 +76,15 @@ async def run(args):
             manifest_path=output / "datums/manifest.json", expected_topk=20, max_context=131072)
         if not gate["passed"]:
             raise ValueError("completed feedback bank no longer passes verification")
+        return load_json(progress)
+    if completed_status in {
+            "search_complete_unmaterialized_throughput_probe",
+            "search_complete_no_verified_repairs"}:
+        # A search-only probe is also immutable and resumable without a live
+        # model or provider key. Verify all bound child snapshots before reuse.
+        from scripts.audit_psd_feedback_run import audit_feedback_run
+        if not audit_feedback_run(output)["passed"]:
+            raise ValueError("completed feedback search no longer passes verification")
         return load_json(progress)
     summary = {"status": "repairing", "training_started": False, "cases": [],
                "case_concurrency": args.case_concurrency,
@@ -95,20 +116,25 @@ async def run(args):
             "--round-start-checkpoint-manifest", str(checkpoint), "--hint-constructor-provider", "gemini",
             "--hint-constructor-model", args.judge_model, "--hint-constructor-wire-api", "interactions",
             "--judge-model", args.judge_model, "--repair-attempts", str(args.attempts),
+            "--proposal-rounds", str(proposal_rounds),
             "--search-mode", "feedback", "--max-suffix-actions", "8"]
         if (directory / "search-state.json").exists():
             cli.append("--resume")
         result = await _run(_parser().parse_args(cli))
         return {"case_id": case, "directory": str(directory), "result": result}
 
+    search_started = time.monotonic()
     async for index, candidate, outcome, error in completed_cases(load_jsonl(candidates_path),
             repair_case, concurrency=args.case_concurrency):
+        completed_after_seconds = time.monotonic() - search_started
         if error:
             summary["cases"].append({"case_id": candidate["case_id"], "input_index": index,
+                "completed_after_seconds": completed_after_seconds,
                 "result": {"status": "paused_case_exception", "error_type": error}})
             _atomic_json(output / "progress.json", summary)
             continue
-        summary["cases"].append({**outcome, "input_index": index})
+        summary["cases"].append({**outcome, "input_index": index,
+                                 "completed_after_seconds": completed_after_seconds})
         directory = Path(outcome["directory"])
         for row in load_jsonl(directory / "repair_candidates.jsonl"):
             merged_candidates[row["candidate_id"]] = row
@@ -118,10 +144,21 @@ async def run(args):
     load_bound(marker, identity={**identity, "inputs": {name: sha256_file(Path(name)) for name in identity["inputs"]}})
     # Completion order is useful progress, not a nondeterministic dataset order.
     attempts.sort(key=lambda row: (row["case_id"], row["attempt_id"]))
+    search_wall_seconds = time.monotonic() - search_started
+    serial_case_seconds = sum(
+        float(row.get("result", {}).get("elapsed_seconds") or 0)
+        for row in summary["cases"]
+    )
     summary.update(accepted=sum(r.get("accepted") is True for r in attempts),
-                   continuations=len(attempts), original_bank_unchanged=True)
+                   continuations=len(attempts), original_bank_unchanged=True,
+                   search_wall_seconds=search_wall_seconds,
+                   sum_case_elapsed_seconds=serial_case_seconds,
+                   observed_parallel_speedup=(serial_case_seconds / search_wall_seconds
+                                              if search_wall_seconds else None))
     if any(row["result"]["status"].startswith("paused_") for row in summary["cases"]):
         summary["status"] = "paused_search_requires_resume"
+    elif summary["accepted"] and search_only:
+        summary["status"] = "search_complete_unmaterialized_throughput_probe"
     elif summary["accepted"]:
         merge = output / "merged"
         write_jsonl(merge / "repair_candidates.jsonl", [merged_candidates[k] for k in sorted(merged_candidates)])
@@ -140,15 +177,22 @@ async def run(args):
     return summary
 
 
-if __name__ == "__main__":
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--attempts", type=int, default=6)
+    parser.add_argument("--proposal-rounds", type=int, default=12)
     parser.add_argument("--case-concurrency", type=int, default=1,
                         help="Bounded asynchronous case pool; keep 1 while prioritizing the main experiment")
+    parser.add_argument("--search-only", action="store_true",
+                        help="Measure repair search without rebuilding an already proven datum bank")
     parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     parser.add_argument("--score-missing-topk", action="store_true")
     parser.add_argument("--teacher-device", default="cpu")
-    print(json.dumps(asyncio.run(run(parser.parse_args())), ensure_ascii=False, indent=2))
+    return parser
+
+
+if __name__ == "__main__":
+    print(json.dumps(asyncio.run(run(_build_parser().parse_args())), ensure_ascii=False, indent=2))
