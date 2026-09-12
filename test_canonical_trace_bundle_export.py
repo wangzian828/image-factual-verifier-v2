@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+import pytest
+
+from scripts.trajectory.export_canonical_trace_bundle import bind_reference_media
+
+
+def _media(root: Path, content: bytes) -> str:
+    digest = hashlib.sha256(content).hexdigest()
+    path = root / "images" / f"{digest}.jpg"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return f"images/{path.name}"
+
+
+def _messages() -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": "generated system"},
+        {"role": "user", "content": "<image>\ngenerated user"},
+        {"role": "assistant", "content": "<think>generated</think>"},
+        {"role": "tool_call", "content": "generated call"},
+        {"role": "tool_response", "content": "generated response"},
+        {"role": "assistant", "content": "<answer>generated</answer>"},
+    ]
+
+
+def _reference(images: list[str]) -> dict:
+    return {
+        "roles": [message["role"] for message in _messages()],
+        "marker_counts": [0, 1, 0, 0, 2, 0],
+        "images": images,
+    }
+
+
+def test_media_binding_copies_only_verified_layout_and_paths(tmp_path: Path) -> None:
+    images = [_media(tmp_path, value) for value in (b"one", b"two", b"three")]
+    generated = _messages()
+
+    messages, paths, digests = bind_reference_media(
+        generated,
+        _reference(images),
+        delivery_root=tmp_path,
+        digest_cache={},
+    )
+
+    assert messages[0]["content"] == "generated system"
+    assert messages[3]["content"] == "generated call"
+    assert messages[4]["content"].startswith("generated response")
+    assert messages[4]["content"].count("<image>") == 2
+    assert sum(message["content"].count("<image>") for message in messages) == 3
+    assert all(Path(path).is_file() for path in paths)
+    assert [Path(path).stem for path in paths] == digests
+    assert generated[4]["content"] == "generated response"
+
+
+def test_media_binding_rejects_role_or_marker_drift(tmp_path: Path) -> None:
+    images = [_media(tmp_path, value) for value in (b"one", b"two", b"three")]
+    wrong_role = _reference(images)
+    wrong_role["roles"][4] = "assistant"
+    with pytest.raises(ValueError, match="role sequence"):
+        bind_reference_media(
+            _messages(), wrong_role, delivery_root=tmp_path, digest_cache={}
+        )
+
+    wrong_marker = _reference(images)
+    wrong_marker["marker_counts"] = [0, 1, 0, 1, 1, 0]
+    with pytest.raises(ValueError, match="tool response"):
+        bind_reference_media(
+            _messages(), wrong_marker, delivery_root=tmp_path, digest_cache={}
+        )
+
+
+def test_media_binding_rejects_unverified_or_escaping_media(tmp_path: Path) -> None:
+    valid = [_media(tmp_path, value) for value in (b"one", b"two")]
+    outside = tmp_path / "outside.jpg"
+    outside.write_bytes(b"three")
+    reference = _reference([*valid, "../outside.jpg"])
+    with pytest.raises(ValueError, match="escapes or is missing"):
+        bind_reference_media(
+            _messages(), reference, delivery_root=tmp_path, digest_cache={}
+        )
+
+    bad = tmp_path / "images" / ("0" * 64 + ".jpg")
+    bad.write_bytes(b"not-zero-hash")
+    reference = _reference([*valid, f"images/{bad.name}"])
+    with pytest.raises(ValueError, match="filename/hash mismatch"):
+        bind_reference_media(
+            _messages(), reference, delivery_root=tmp_path, digest_cache={}
+        )
