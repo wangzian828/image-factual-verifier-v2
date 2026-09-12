@@ -56,6 +56,7 @@ new_output_dir "$LOG_DIR"
 record_environment "$LOG_DIR"
 
 export PYTHONPATH="$REPO_ROOT/training${PYTHONPATH:+:$PYTHONPATH}"
+export IFV_PSD_DATASET_PATH="$PSD_DATUMS"
 PSD_INPUT_GATE="$LOG_DIR/psd-input-gate.json"
 PSD_DATUM_MANIFEST="${IFV_PSD_DATUM_MANIFEST:-$(dirname "$PSD_DATUMS")/manifest.json}"
 python -m ifv_training verify-psd-datums \

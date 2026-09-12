@@ -17,6 +17,36 @@ PSD_MS_SWIFT_TEMPLATE = "ifv_psd_topk"
 PSD_MS_SWIFT_LOSS = "ifv_psd_topk"
 
 
+class PsdDatasetPreprocessor:
+    """Keep token arrays verbatim; the launcher/template validate each datum.
+
+    AutoPreprocessor otherwise invents an empty messages list and rejects a
+    pre-tokenized PSD row before our template is ever reached.
+    """
+
+    def __call__(self, dataset: Any, **_: Any) -> Any:
+        columns = set(dataset.features)
+        required = {"schema_version", "input_ids", "topk", "loss_positions"}
+        if not required <= columns or not (
+            {"target_tokens", "weights"} <= columns
+            or {"sparse_target_tokens", "sparse_weights"} <= columns
+        ):
+            raise ValueError("registered PSD dataset is missing pre-tokenized targets")
+        return dataset
+
+
+def register_psd_dataset(path: str) -> None:
+    """Register only the explicitly selected local PSD path, not all datasets."""
+    from pathlib import Path
+    from swift.dataset import DatasetMeta, register_dataset
+
+    selected = Path(path).expanduser().resolve(strict=True)
+    if not selected.is_file():
+        raise ValueError("PSD dataset must be a local file")
+    register_dataset(DatasetMeta(dataset_path=str(selected),
+        preprocess_func=PsdDatasetPreprocessor()), exist_ok=True)
+
+
 def _validate_sparse_targets(
     target_tokens: Any,
     weights: Any,
@@ -278,6 +308,9 @@ def install_ms_swift_psd_plugin() -> None:
     from swift.template import Template, TemplateMeta, register_template
     from swift.template.templates.qwen import Qwen3_5Template
     from swift.trainers.seq2seq_trainer import Seq2SeqTrainer
+
+    if os.environ.get("IFV_PSD_DATASET_PATH"):
+        register_psd_dataset(os.environ["IFV_PSD_DATASET_PATH"])
 
     class IfvPsdTopKLoss(BaseLoss):
         def __call__(

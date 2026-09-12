@@ -59,6 +59,7 @@ def main():
         rows.append(compact_datum(build_sparse_topk_datum(target, topk=20)))
     dataset = root / "datums.jsonl"
     dataset.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    os.environ["IFV_PSD_DATASET_PATH"] = str(dataset)
     from swift.pipelines import sft_main
     output = root / "train"
     arguments = dict(model=str(model_dir), model_type="qwen3_5", dataset=str(dataset),
