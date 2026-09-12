@@ -27,6 +27,8 @@ def _command(output: Path) -> list[str]:
         "8",
         "--padding-free",
         "true",
+        "--use-logits-to-keep",
+        "false",
         "--max-context",
         "131072",
         "--topk",
@@ -67,16 +69,30 @@ def test_production_psd_profile_gate_accepts_upstream_recipe(tmp_path: Path) -> 
     assert gate["optimization"]["unique_targets_per_step"] == 32
 
 
-def test_production_psd_profile_gate_rejects_sp1(tmp_path: Path) -> None:
+def test_production_psd_profile_gate_accepts_dp8_with_sparse_logits(tmp_path: Path) -> None:
     output = tmp_path / "gate.json"
     command = _command(output)
-    index = command.index("--sequence-parallel-size") + 1
-    command[index] = "1"
+    command[command.index("--sequence-parallel-size") + 1] = "1"
+    command[command.index("--gradient-accumulation-steps") + 1] = "4"
+    command[command.index("--use-logits-to-keep") + 1] = "true"
+    result = subprocess.run(command, check=False, capture_output=True)
+
+    assert result.returncode == 0, result.stderr.decode()
+    gate = json.loads(output.read_text(encoding="utf-8"))
+    assert gate["parallelism"]["data_parallel_size"] == 8
+    assert gate["optimization"]["unique_targets_per_step"] == 32
+
+
+def test_production_psd_profile_gate_rejects_dp_without_sparse_logits(tmp_path: Path) -> None:
+    output = tmp_path / "gate.json"
+    command = _command(output)
+    command[command.index("--sequence-parallel-size") + 1] = "1"
+    command[command.index("--gradient-accumulation-steps") + 1] = "4"
     result = subprocess.run(command, check=False, capture_output=True)
 
     assert result.returncode == 1
     gate = json.loads(output.read_text(encoding="utf-8"))
-    assert "sequence_parallel_size_must_equal_world_size" in gate["errors"]
+    assert "data_parallel_training_requires_logits_to_keep" in gate["errors"]
 
 
 def test_h20_sp4_preserves_optimizer_batch(tmp_path: Path) -> None:

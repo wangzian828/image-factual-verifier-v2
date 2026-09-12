@@ -105,6 +105,7 @@ profile_gate_args=(
   --world-size "$NPROC_PER_NODE"
   --sequence-parallel-size "$IFV_SEQUENCE_PARALLEL_SIZE"
   --padding-free "$IFV_PADDING_FREE"
+  --use-logits-to-keep "${IFV_USE_LOGITS_TO_KEEP:-false}"
   --max-context "$IFV_MAX_LENGTH"
   --topk "$IFV_PSD_TOPK"
   --loss-chunk-tokens "$IFV_PSD_LOSS_CHUNK_TOKENS"
@@ -153,13 +154,27 @@ python "$REPO_ROOT/training/scripts/probe/psd_ms_swift_plugin_smoke.py" \
 CUDA_VISIBLE_DEVICES="" python "$REPO_ROOT/training/scripts/probe/psd_trainer_accumulation_smoke.py" \
   --output "$LOG_DIR/psd-trainer-accumulation-preflight.json"
 
-PSD_SP_PREFLIGHT="$LOG_DIR/psd-sequence-parallel-preflight.json"
-CUDA_VISIBLE_DEVICES="" \
-IFV_PSD_SP_SMOKE_OUTPUT="$PSD_SP_PREFLIGHT" \
-python -m torch.distributed.run \
-  --standalone \
-  --nproc_per_node "$IFV_SEQUENCE_PARALLEL_SIZE" \
-  "$REPO_ROOT/training/scripts/probe/psd_sequence_parallel_smoke.py"
+PSD_SP_PREFLIGHT=""
+if (( IFV_SEQUENCE_PARALLEL_SIZE > 1 )); then
+  PSD_SP_PREFLIGHT="$LOG_DIR/psd-sequence-parallel-preflight.json"
+  CUDA_VISIBLE_DEVICES="" \
+  IFV_PSD_SP_SMOKE_OUTPUT="$PSD_SP_PREFLIGHT" \
+  python -m torch.distributed.run \
+    --standalone \
+    --nproc_per_node "$IFV_SEQUENCE_PARALLEL_SIZE" \
+    "$REPO_ROOT/training/scripts/probe/psd_sequence_parallel_smoke.py"
+fi
+
+PSD_DP_PREFLIGHT=""
+if (( IFV_DATA_PARALLEL_SIZE > 1 )); then
+  PSD_DP_PREFLIGHT="$LOG_DIR/psd-data-parallel-preflight.json"
+  CUDA_VISIBLE_DEVICES="" \
+  IFV_PSD_DP_SMOKE_OUTPUT="$PSD_DP_PREFLIGHT" \
+  python -m torch.distributed.run \
+    --standalone \
+    --nproc_per_node "$IFV_DATA_PARALLEL_SIZE" \
+    "$REPO_ROOT/training/scripts/probe/psd_data_parallel_smoke.py"
+fi
 
 ENVIRONMENT_PREFLIGHT=""
 if [[ "${IFV_REQUIRE_TRAINING_ENV_PREFLIGHT:-false}" == "true" ]]; then

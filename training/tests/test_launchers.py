@@ -186,6 +186,7 @@ def test_psd_and_grpo_use_framework_entrypoints() -> None:
     assert 'IFV_SEQUENCE_PARALLEL_SIZE' in psd
     assert 'IFV_PSD_LOSS_CHUNK_TOKENS' in psd
     assert "psd_sequence_parallel_smoke.py" in psd
+    assert "psd_data_parallel_smoke.py" in psd
     assert "verify_psd_training_profile.py" in psd
     assert '--lora_rank "$IFV_LORA_RANK"' in psd
     assert '--lora_alpha "$IFV_LORA_ALPHA"' in psd
@@ -216,6 +217,12 @@ def test_psd_and_grpo_use_framework_entrypoints() -> None:
     assert "IFV_NUM_TRAIN_EPOCHS=5" in psd_production
     assert "IFV_GRADIENT_ACCUMULATION_STEPS=32" in psd_production
     assert "IFV_LEARNING_RATE=4e-5" in psd_production
+
+    h20_dp4 = _source("configs/psd/qwen3.5-lora-r32-h20-dp4-128k.env")
+    assert "IFV_SEQUENCE_PARALLEL_SIZE=1" in h20_dp4
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=8" in h20_dp4
+    assert "IFV_USE_LOGITS_TO_KEEP=true" in h20_dp4
+    assert "IFV_MAX_LENGTH=131072" in h20_dp4
 
     assert "swift rlhf" in grpo
     assert "--multi_turn_scheduler gym_scheduler" in grpo

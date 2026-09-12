@@ -17,6 +17,57 @@ PSD_MS_SWIFT_TEMPLATE = "ifv_psd_topk"
 PSD_MS_SWIFT_LOSS = "ifv_psd_topk"
 
 
+def data_parallel_sum_loss(loss: Any, *, data_parallel_size: int) -> Any:
+    """Undo DDP/FSDP gradient averaging for Tinker's summed objective.
+
+    Every data-parallel replica owns a different datum. PyTorch averages the
+    replica gradients, while the PSD reference objective sums them. Scaling
+    each local loss by the DP degree before backward makes the averaged model
+    gradient exactly equal to the global datum sum. The returned scalar is a
+    DP-scaled local estimator, avoiding a scalar collective per microbatch.
+    """
+
+    if not isinstance(data_parallel_size, int) or data_parallel_size < 1:
+        raise ValueError("PSD data_parallel_size must be a positive integer")
+    return loss if data_parallel_size == 1 else loss * data_parallel_size
+
+
+def prepare_psd_logits_to_keep(inputs: dict[str, Any]) -> int:
+    """Keep model logits only at positions supervised by sparse PSD targets."""
+
+    import torch
+
+    target_tokens = inputs.get("psd_target_tokens")
+    weights = inputs.get("psd_weights")
+    labels = inputs.get("labels")
+    if target_tokens is None or weights is None or labels is None:
+        raise ValueError("PSD logits_to_keep requires targets, weights, and labels")
+    if labels.ndim != 2 or tuple(labels.shape) != tuple(target_tokens.shape[:2]):
+        raise ValueError("PSD labels must match target batch and sequence dimensions")
+    if torch.any(labels != -100):
+        raise ValueError("PSD logits_to_keep requires supervision only from sparse targets")
+    active = _validate_sparse_targets(
+        target_tokens,
+        weights,
+        batch_size=target_tokens.shape[0],
+        sequence_length=target_tokens.shape[1],
+        require_active_per_datum=True,
+    )
+    if target_tokens.shape[0] != 1:
+        raise ValueError("PSD logits_to_keep requires one datum per device")
+    mask = active[0]
+    if mask.ndim != 1 or not torch.any(mask):
+        raise ValueError("PSD logits_to_keep found no supervised position")
+    # Qwen3.5 accepts an arbitrary boolean selection over prediction
+    # positions. PSD targets already use causal prediction positions, so the
+    # SFT label shift in Swift's default implementation must not be applied.
+    inputs["logits_to_keep"] = mask
+    inputs["labels"] = labels[:, mask]
+    inputs["psd_target_tokens"] = target_tokens[:, mask]
+    inputs["psd_weights"] = weights[:, mask]
+    return int(mask.sum().item())
+
+
 class PsdDatasetPreprocessor:
     """Keep token arrays verbatim; the launcher/template validate each datum.
 
@@ -535,6 +586,18 @@ def install_ms_swift_psd_plugin() -> None:
         return
     original_compute_loss = Seq2SeqTrainer.compute_loss
     original_count_items = Seq2SeqTrainer._get_num_items_in_batch
+    original_prepare_logits_to_keep = Seq2SeqTrainer.prepare_logits_to_keep
+
+    def prepare_logits_to_keep_with_psd(
+        self: Any,
+        inputs: dict[str, Any],
+    ) -> Any:
+        if "psd_weights" not in inputs:
+            return original_prepare_logits_to_keep(self, inputs)
+        if self.template.sequence_parallel_size != 1:
+            raise ValueError("PSD logits_to_keep is supported only with SP=1")
+        prepare_psd_logits_to_keep(inputs)
+        return None
 
     def count_items_with_psd(self: Any, batch_samples: list, device: Any) -> Any:
         sparse = ["psd_weights" in batch for batch in batch_samples]
@@ -571,8 +634,14 @@ def install_ms_swift_psd_plugin() -> None:
         if getattr(self.accelerator, "gradient_accumulation_steps", 1) != 1:
             raise ValueError("PSD requires Trainer-managed accumulation (Accelerate GAS=1)")
         world_size = getattr(self.accelerator, "num_processes", 1)
-        if world_size != self.template.sequence_parallel_size:
-            raise ValueError("PSD summed objective requires one SP group (world_size == SP)")
+        sequence_parallel_size = self.template.sequence_parallel_size
+        if (
+            not isinstance(sequence_parallel_size, int)
+            or sequence_parallel_size < 1
+            or world_size % sequence_parallel_size != 0
+        ):
+            raise ValueError("PSD SP size must be a positive divisor of world size")
+        data_parallel_size = world_size // sequence_parallel_size
         _validate_sparse_targets(
             target_tokens,
             weights,
@@ -597,12 +666,16 @@ def install_ms_swift_psd_plugin() -> None:
             labels: Any,
             **kwargs: Any,
         ) -> Any:
-            return base_loss_func(
+            local_group_loss = base_loss_func(
                 outputs,
                 labels,
                 psd_target_tokens=target_tokens,
                 psd_weights=weights,
                 **kwargs,
+            )
+            return data_parallel_sum_loss(
+                local_group_loss,
+                data_parallel_size=data_parallel_size,
             )
 
         inputs["compute_loss_func"] = bound_loss
@@ -618,4 +691,5 @@ def install_ms_swift_psd_plugin() -> None:
 
     Seq2SeqTrainer.compute_loss = compute_loss_with_psd_topk
     Seq2SeqTrainer._get_num_items_in_batch = count_items_with_psd
+    Seq2SeqTrainer.prepare_logits_to_keep = prepare_logits_to_keep_with_psd
     Seq2SeqTrainer._ifv_psd_topk_bridge_installed = True

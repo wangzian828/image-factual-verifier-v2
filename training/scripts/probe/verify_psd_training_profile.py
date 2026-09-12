@@ -22,6 +22,7 @@ def main() -> None:
     parser.add_argument("--world-size", type=int, required=True)
     parser.add_argument("--sequence-parallel-size", type=int, required=True)
     parser.add_argument("--padding-free", type=_bool, required=True)
+    parser.add_argument("--use-logits-to-keep", type=_bool, required=True)
     parser.add_argument("--max-context", type=int, required=True)
     parser.add_argument("--topk", type=int, required=True)
     parser.add_argument("--loss-chunk-tokens", type=int, required=True)
@@ -55,8 +56,12 @@ def main() -> None:
             errors.append("published_" + name + "_mismatch")
     if args.world_size not in {4, 8}:
         errors.append("world_size_must_be_4_or_8")
-    if args.sequence_parallel_size != args.world_size:
-        errors.append("sequence_parallel_size_must_equal_world_size")
+    if (
+        args.sequence_parallel_size < 1
+        or args.sequence_parallel_size > args.world_size
+        or args.world_size % args.sequence_parallel_size != 0
+    ):
+        errors.append("sequence_parallel_size_must_divide_world_size")
     if not args.padding_free:
         errors.append("padding_free_required")
     if args.max_context != 131_072:
@@ -87,6 +92,10 @@ def main() -> None:
         and args.world_size % args.sequence_parallel_size == 0
         else 0
     )
+    if args.sequence_parallel_size == 1 and not args.use_logits_to_keep:
+        errors.append("data_parallel_training_requires_logits_to_keep")
+    if args.sequence_parallel_size > 1 and args.use_logits_to_keep:
+        errors.append("sequence_parallel_training_forbids_logits_to_keep")
     unique_targets_per_step = (
         args.train_batch_size
         * data_parallel_size
@@ -120,6 +129,7 @@ def main() -> None:
             "world_size": args.world_size,
             "sequence_parallel_size": args.sequence_parallel_size,
             "data_parallel_size": data_parallel_size,
+            "use_logits_to_keep": args.use_logits_to_keep,
         },
         "optimization": {
             "unique_targets_per_step": unique_targets_per_step,
