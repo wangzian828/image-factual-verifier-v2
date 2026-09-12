@@ -94,7 +94,7 @@ def _load_behavior_metrics(path: Path | None) -> dict[int, dict[str, Any]]:
     if path.suffix.lower() == ".jsonl":
         payloads = [
             json.loads(line)
-            for line in text.splitlines()
+            for line in text.split("\n")
             if line.strip()
         ]
     else:

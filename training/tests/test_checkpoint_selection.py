@@ -76,6 +76,7 @@ def test_explicit_behavior_score_can_choose_earlier_checkpoint(
                 json.dumps(
                     {
                         "global_step": 2,
+                        "note": "before\u2028after",
                         "metrics": {
                             "behavior_score": 0.95,
                             "verdict_accuracy": 0.95,

@@ -5,6 +5,23 @@ import json
 from pathlib import Path
 
 
+def _row(path: Path, row_index: int) -> dict:
+    if row_index < 0:
+        raise IndexError("row index must be non-negative")
+    current = 0
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            if current == row_index:
+                value = json.loads(line)
+                if not isinstance(value, dict):
+                    raise ValueError(f"{path}:{current + 1} is not an object")
+                return value
+            current += 1
+    raise IndexError(f"row index {row_index} is outside {path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
@@ -14,12 +31,7 @@ def main() -> None:
 
     from swift import get_processor, get_template
 
-    lines = [
-        line
-        for line in args.dataset.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    data = json.loads(lines[args.row])
+    data = _row(args.dataset, args.row)
     processor = get_processor(args.model)
     template = get_template(processor, loss_scale="default+ignore_empty_think")
     template.set_mode("train")

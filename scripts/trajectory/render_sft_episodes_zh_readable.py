@@ -295,7 +295,7 @@ def main() -> None:
 
     rows = [
         json.loads(line)
-        for line in input_path.read_text(encoding="utf-8").splitlines()
+        for line in input_path.read_text(encoding="utf-8").split("\n")
         if line.strip()
     ]
     if any(not isinstance(row, dict) for row in rows):

@@ -17,7 +17,7 @@ SCHEMA_VERSION = "ifv-sft-case-split-v1"
 def _load_jsonl(path: Path) -> list[Dict[str, Any]]:
     rows: list[Dict[str, Any]] = []
     for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
+        path.read_text(encoding="utf-8").split("\n"), start=1
     ):
         if not line.strip():
             continue

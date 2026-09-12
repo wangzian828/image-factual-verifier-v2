@@ -60,7 +60,7 @@ def _load_jsonl(path: Path) -> list[Dict[str, Any]]:
     if not path.is_file():
         return []
     rows: list[Dict[str, Any]] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
         if not line.strip():
             continue
         value = json.loads(line)

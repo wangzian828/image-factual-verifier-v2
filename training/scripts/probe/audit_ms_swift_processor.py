@@ -14,12 +14,13 @@ LENGTH_CANDIDATES = (4096, 8192, 16384, 32768, 65536, 131072)
 
 
 def _rows(path: Path) -> Iterable[tuple[int, dict[str, Any]]]:
-    for index, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
-        if line.strip():
-            value = json.loads(line)
-            if not isinstance(value, dict):
-                raise ValueError(f"{path}:{index + 1} is not an object")
-            yield index, value
+    with path.open(encoding="utf-8") as stream:
+        for index, line in enumerate(stream):
+            if line.strip():
+                value = json.loads(line)
+                if not isinstance(value, dict):
+                    raise ValueError(f"{path}:{index + 1} is not an object")
+                yield index, value
 
 
 def _quantile(values: list[int], fraction: float) -> int:
