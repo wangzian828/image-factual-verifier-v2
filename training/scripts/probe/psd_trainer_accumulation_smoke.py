@@ -91,7 +91,7 @@ def main():
             # These Swift options only control unrelated accuracy/auxiliary loss.
             for key, value in {"use_liger_kernel": False, "enable_dft_loss": False,
                 "enable_channel_loss": False, "router_aux_loss_coef": None,
-                "tuner_backend": "unsloth"}.items():
+                "tuner_backend": "unsloth", "max_epochs": None}.items():
                 setattr(training_args, key, value)
             gradients = Gradients()
             optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
