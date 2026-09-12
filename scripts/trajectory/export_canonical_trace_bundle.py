@@ -86,7 +86,47 @@ def _source_metadata(source_manifest: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
-def _reference_policy_rows(delivery_root: Path) -> dict[str, dict[str, Any]]:
+def _delivery_checksums(delivery_root: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    path = delivery_root / "SHA256SUMS"
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            raise ValueError(f"invalid delivery checksum line {line_number}")
+        digest, relative = parts[0].casefold(), parts[1].lstrip(" *")
+        if (
+            len(digest) != 64
+            or any(value not in "0123456789abcdef" for value in digest)
+            or not relative
+            or relative in result
+        ):
+            raise ValueError(f"invalid delivery checksum entry at line {line_number}")
+        result[relative] = digest
+    return result
+
+
+def _verify_delivery_file(
+    delivery_root: Path,
+    relative: str,
+    checksums: Mapping[str, str],
+) -> str:
+    path = (delivery_root / relative).resolve()
+    root = delivery_root.resolve()
+    if path == root or root not in path.parents or not path.is_file():
+        raise ValueError(f"delivery file escapes or is missing: {relative}")
+    expected = str(checksums.get(relative, ""))
+    actual = sha256_file(path)
+    if not expected or actual != expected:
+        raise ValueError(f"delivery-level checksum mismatch: {relative}")
+    return actual
+
+
+def _reference_policy_rows(
+    delivery_root: Path,
+    checksums: Mapping[str, str],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
     policy_root = delivery_root / "ms-swift-policy"
     manifest = load_json(policy_root / "manifest.json")
     if manifest.get("dataset_version") != "ifv-ms-swift-qwen-agent-v2":
@@ -94,13 +134,20 @@ def _reference_policy_rows(delivery_root: Path) -> dict[str, dict[str, Any]]:
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, Mapping):
         raise ValueError("reference policy manifest has no artifacts")
+    stale_inner_hashes: list[str] = []
     for name in (*SPLITS, "index"):
         artifact = artifacts.get(name)
         if not isinstance(artifact, Mapping):
             raise ValueError(f"reference policy manifest lacks {name}")
-        path = policy_root / str(artifact.get("path", f"{name}.jsonl"))
-        if sha256_file(path) != str(artifact.get("sha256", "")):
-            raise ValueError(f"reference policy artifact hash mismatch: {name}")
+        filename = str(artifact.get("path", f"{name}.jsonl"))
+        relative = f"ms-swift-policy/{filename}"
+        actual = _verify_delivery_file(delivery_root, relative, checksums)
+        if actual != str(artifact.get("sha256", "")):
+            # The published bundle rewrote image references to absolute paths
+            # but retained the pre-relocation inner manifest.  Accept only the
+            # file hash bound by the delivery-level checksum list and expose
+            # the stale inner entry in the rebuilt manifest.
+            stale_inner_hashes.append(name)
 
     by_location: dict[tuple[str, int], dict[str, Any]] = {}
     for _, row in _iter_jsonl(policy_root / "index.jsonl"):
@@ -142,7 +189,7 @@ def _reference_policy_rows(delivery_root: Path) -> dict[str, dict[str, Any]]:
             raise ValueError(f"reference policy row count mismatch: {split}")
     if len(result) != int(manifest.get("example_count", -1)):
         raise ValueError("reference policy total row count mismatch")
-    return result
+    return result, stale_inner_hashes
 
 
 def _case_split(path: Path) -> dict[str, dict[str, str]]:
@@ -250,10 +297,25 @@ def _rebind_fallback_image(trace: dict[str, Any], delivery_root: Path) -> tuple[
     return rebound, path
 
 
-def export_bundle(raw_root: Path, delivery_root: Path, output_dir: Path) -> dict[str, Any]:
+def export_bundle(
+    raw_root: Path,
+    delivery_root: Path,
+    output_dir: Path,
+    *,
+    raw_archive: Path,
+    raw_archive_sha256: str,
+    reference_archive: Path,
+    reference_archive_sha256: str,
+) -> dict[str, Any]:
     raw_root = raw_root.expanduser().resolve()
     delivery_root = delivery_root.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
+    raw_archive = raw_archive.expanduser().resolve()
+    reference_archive = reference_archive.expanduser().resolve()
+    if sha256_file(raw_archive) != raw_archive_sha256.casefold():
+        raise ValueError("raw archive SHA-256 mismatch")
+    if sha256_file(reference_archive) != reference_archive_sha256.casefold():
+        raise ValueError("reference delivery archive SHA-256 mismatch")
     if output_dir.exists():
         raise FileExistsError(f"output must not exist: {output_dir}")
     staging = output_dir.with_name(output_dir.name + ".in-progress")
@@ -263,6 +325,13 @@ def export_bundle(raw_root: Path, delivery_root: Path, output_dir: Path) -> dict
 
     source_manifest_path = delivery_root / "SOURCE_MANIFEST.json"
     case_split_path = delivery_root / "case-split" / "case_split.jsonl"
+    delivery_checksums = _delivery_checksums(delivery_root)
+    _verify_delivery_file(delivery_root, "SOURCE_MANIFEST.json", delivery_checksums)
+    _verify_delivery_file(
+        delivery_root,
+        "case-split/case_split.jsonl",
+        delivery_checksums,
+    )
     source_manifest = load_json(source_manifest_path)
     if source_manifest.get("schema_version") != "ifv-sft-training-package-v2":
         raise ValueError("unsupported reference delivery manifest")
@@ -270,7 +339,10 @@ def export_bundle(raw_root: Path, delivery_root: Path, output_dir: Path) -> dict
     counts = counts if isinstance(counts, Mapping) else {}
     source = _source_metadata(source_manifest)
     fixed_split = _case_split(case_split_path)
-    references = _reference_policy_rows(delivery_root)
+    references, stale_inner_hashes = _reference_policy_rows(
+        delivery_root,
+        delivery_checksums,
+    )
 
     raw_index_path = raw_root / "index.jsonl"
     raw_rows = [row for _, row in _iter_jsonl(raw_index_path)]
@@ -459,6 +531,12 @@ def export_bundle(raw_root: Path, delivery_root: Path, output_dir: Path) -> dict
             "uses_reference_roles_and_marker_counts": True,
             "all_media_content_hash_verified": True,
         },
+        "reference_integrity": {
+            "archive_sha256_verified": True,
+            "delivery_level_checksums_verified": True,
+            "stale_inner_policy_manifest_artifacts": stale_inner_hashes,
+            "stale_inner_manifest_accepted_only_via_delivery_checksum": True,
+        },
         "teacher_score_recovered": False,
         "example_counts": {
             split: int(artifacts[split]["rows"]) for split in SPLITS
@@ -470,6 +548,14 @@ def export_bundle(raw_root: Path, delivery_root: Path, output_dir: Path) -> dict
             "dropped_rows": 0,
         },
         "source_artifacts": {
+            "raw_archive": {
+                "path": str(raw_archive),
+                "sha256": raw_archive_sha256.casefold(),
+            },
+            "reference_archive": {
+                "path": str(reference_archive),
+                "sha256": reference_archive_sha256.casefold(),
+            },
             "raw_index": {
                 "path": str(raw_index_path),
                 "sha256": sha256_file(raw_index_path),
@@ -522,9 +608,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-root", type=Path, required=True)
     parser.add_argument("--reference-delivery", type=Path, required=True)
+    parser.add_argument("--raw-archive", type=Path, required=True)
+    parser.add_argument("--raw-archive-sha256", required=True)
+    parser.add_argument("--reference-archive", type=Path, required=True)
+    parser.add_argument("--reference-archive-sha256", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    result = export_bundle(args.raw_root, args.reference_delivery, args.output)
+    result = export_bundle(
+        args.raw_root,
+        args.reference_delivery,
+        args.output,
+        raw_archive=args.raw_archive,
+        raw_archive_sha256=args.raw_archive_sha256,
+        reference_archive=args.reference_archive,
+        reference_archive_sha256=args.reference_archive_sha256,
+    )
     print(
         json.dumps(
             {

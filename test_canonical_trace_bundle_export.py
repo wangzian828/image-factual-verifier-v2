@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.trajectory.export_canonical_trace_bundle import bind_reference_media
+from scripts.trajectory.export_canonical_trace_bundle import (
+    _delivery_checksums,
+    _verify_delivery_file,
+    bind_reference_media,
+)
 
 
 def _media(root: Path, content: bytes) -> str:
@@ -89,4 +93,46 @@ def test_media_binding_rejects_unverified_or_escaping_media(tmp_path: Path) -> N
     with pytest.raises(ValueError, match="filename/hash mismatch"):
         bind_reference_media(
             _messages(), reference, delivery_root=tmp_path, digest_cache={}
+        )
+
+
+def test_delivery_level_checksum_is_authoritative_for_published_bytes(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "ms-swift-policy" / "train.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"published relocated bytes\n")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "SHA256SUMS").write_text(
+        f"{digest}  ms-swift-policy/train.jsonl\n",
+        encoding="utf-8",
+    )
+
+    checksums = _delivery_checksums(tmp_path)
+
+    assert (
+        _verify_delivery_file(
+            tmp_path,
+            "ms-swift-policy/train.jsonl",
+            checksums,
+        )
+        == digest
+    )
+
+
+def test_delivery_level_checksum_rejects_modified_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "SOURCE_MANIFEST.json"
+    path.write_bytes(b"original")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "SHA256SUMS").write_text(
+        f"{digest}  SOURCE_MANIFEST.json\n",
+        encoding="utf-8",
+    )
+    path.write_bytes(b"modified")
+
+    with pytest.raises(ValueError, match="delivery-level checksum mismatch"):
+        _verify_delivery_file(
+            tmp_path,
+            "SOURCE_MANIFEST.json",
+            _delivery_checksums(tmp_path),
         )
