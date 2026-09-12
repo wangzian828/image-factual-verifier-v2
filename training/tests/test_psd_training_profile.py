@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import pytest
 from pathlib import Path
 
 
@@ -100,3 +101,14 @@ def test_h20_rejects_halved_accumulation(tmp_path: Path) -> None:
     assert result.returncode == 1
     gate = json.loads(output.read_text(encoding="utf-8"))
     assert "production_unique_targets_per_step_must_be_32" in gate["errors"]
+
+
+@pytest.mark.parametrize("option,value", [("lr-scheduler-type", "cosine"),
+    ("loss-reduction", "mean"), ("adam-beta2", "0.999"),
+    ("adam-epsilon", "1e-8"), ("weight-decay", "0.1")])
+def test_backend_defaults_cannot_silently_change_recipe(tmp_path, option, value):
+    output = tmp_path / "gate.json"
+    command = _command(output) + ["--" + option, value]
+    result = subprocess.run(command, check=False, capture_output=True)
+    assert result.returncode == 1
+    assert json.loads(output.read_text())["passed"] is False

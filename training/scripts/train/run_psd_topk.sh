@@ -98,6 +98,12 @@ profile_gate_args=(
   --train-batch-size "$IFV_TRAIN_BATCH_SIZE"
   --gradient-accumulation-steps "$IFV_GRADIENT_ACCUMULATION_STEPS"
   --learning-rate "$IFV_LEARNING_RATE"
+  --lr-scheduler-type constant
+  --adam-beta1 0.9
+  --adam-beta2 0.95
+  --adam-epsilon 1e-12
+  --weight-decay 0
+  --loss-reduction sum
   --output "$PSD_PROFILE_GATE"
 )
 if [[ -n "${IFV_NUM_TRAIN_EPOCHS:-}" ]]; then
@@ -126,6 +132,8 @@ PSD_PLUGIN_PREFLIGHT="$LOG_DIR/psd-plugin-preflight.json"
 python "$REPO_ROOT/training/scripts/probe/psd_ms_swift_plugin_smoke.py" \
   --plugin "$REPO_ROOT/training/plugins/ifv_psd_topk_plugin.py" \
   --output "$PSD_PLUGIN_PREFLIGHT"
+CUDA_VISIBLE_DEVICES="" python "$REPO_ROOT/training/scripts/probe/psd_trainer_accumulation_smoke.py" \
+  --output "$LOG_DIR/psd-trainer-accumulation-preflight.json"
 
 PSD_SP_PREFLIGHT="$LOG_DIR/psd-sequence-parallel-preflight.json"
 CUDA_VISIBLE_DEVICES="" \
@@ -213,6 +221,15 @@ args=(
   --per_device_train_batch_size "$IFV_TRAIN_BATCH_SIZE"
   --gradient_accumulation_steps "$IFV_GRADIENT_ACCUMULATION_STEPS"
   --learning_rate "$IFV_LEARNING_RATE"
+  --lr_scheduler_type constant
+  --warmup_steps 0
+  --warmup_ratio 0
+  --optim adamw_torch
+  --adam_beta1 0.9
+  --adam_beta2 0.95
+  --adam_epsilon 1e-12
+  --weight_decay 0
+  --save_only_model false
   --max_grad_norm "${IFV_MAX_GRAD_NORM:-1.0}"
   --seed "${IFV_SEED:-0}"
   --gradient_checkpointing "${IFV_GRADIENT_CHECKPOINTING:-true}"

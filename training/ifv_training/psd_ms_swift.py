@@ -200,11 +200,10 @@ def sparse_topk_cross_entropy(
         chunk_size=chunk_size,
         require_active_per_datum=require_active_per_datum,
     )
-    # Match the official PSD backends: teacher probabilities are multiplied by
-    # the row loss weight, contributing token losses are summed, and the batch
-    # is averaged over datums.  Normalizing by weights.sum() would cancel the
-    # repair/preservation row weights entirely.
-    loss = position_losses.sum() / logits.shape[0]
+    # Tinker's CE backward sums weighted losses, including across datums.
+    # turn_kl.py divides loss:sum by batch size for LOGGING only. Neither a
+    # token mean nor a datum mean belongs in the optimizer objective.
+    loss = position_losses.sum()
     import torch
 
     if not torch.isfinite(loss):
@@ -236,7 +235,7 @@ def sequence_parallel_sparse_topk_cross_entropy(
         1,
         sequence_parallel_instance.real_position_ids,
     )
-    loss = position_losses.sum() / position_losses.shape[0]
+    loss = position_losses.sum()
     if not torch.isfinite(loss):
         raise ValueError("PSD sequence-parallel loss is non-finite")
     return loss
@@ -497,6 +496,18 @@ def install_ms_swift_psd_plugin() -> None:
     if getattr(Seq2SeqTrainer, "_ifv_psd_topk_bridge_installed", False):
         return
     original_compute_loss = Seq2SeqTrainer.compute_loss
+    original_count_items = Seq2SeqTrainer._get_num_items_in_batch
+
+    def count_items_with_psd(self: Any, batch_samples: list, device: Any) -> Any:
+        sparse = ["psd_weights" in batch for batch in batch_samples]
+        if any(sparse):
+            if not all(sparse):
+                raise ValueError("cannot mix PSD and SFT in one accumulation window")
+            # All standard labels are -100. A token count of zero triggers
+            # Swift's global-token multiplier despite our summed objective.
+            # Returning None also works for a short final accumulation window.
+            return None
+        return original_count_items(self, batch_samples, device)
 
     def compute_loss_with_psd_topk(
         self: Any,
@@ -519,6 +530,11 @@ def install_ms_swift_psd_plugin() -> None:
             raise ValueError(
                 "IFV PSD batch must contain both psd_target_tokens and psd_weights"
             )
+        if getattr(self.accelerator, "gradient_accumulation_steps", 1) != 1:
+            raise ValueError("PSD requires Trainer-managed accumulation (Accelerate GAS=1)")
+        world_size = getattr(self.accelerator, "num_processes", 1)
+        if world_size != self.template.sequence_parallel_size:
+            raise ValueError("PSD summed objective requires one SP group (world_size == SP)")
         _validate_sparse_targets(
             target_tokens,
             weights,
@@ -557,8 +573,11 @@ def install_ms_swift_psd_plugin() -> None:
             model,
             inputs,
             return_outputs=return_outputs,
-            num_items_in_batch=num_items_in_batch,
+            # No HF token normalization, extra world-size factor, or GAS
+            # division. GatherLoss already compensates the SP gradient average.
+            num_items_in_batch=None,
         )
 
     Seq2SeqTrainer.compute_loss = compute_loss_with_psd_topk
+    Seq2SeqTrainer._get_num_items_in_batch = count_items_with_psd
     Seq2SeqTrainer._ifv_psd_topk_bridge_installed = True

@@ -58,7 +58,7 @@ def test_sparse_topk_cross_entropy_preserves_row_weight_scale() -> None:
     assert torch.allclose(quarter_loss, full_loss * 0.25)
 
 
-def test_sparse_topk_cross_entropy_sums_tokens_then_averages_batch() -> None:
+def test_sparse_topk_cross_entropy_sums_tokens_and_datums_like_tinker() -> None:
     logits = torch.tensor(
         [
             [[0.0, 1.0, 2.0], [1.0, 0.0, -1.0]],
@@ -89,7 +89,7 @@ def test_sparse_topk_cross_entropy_sums_tokens_then_averages_batch() -> None:
         -1,
         target_tokens,
     )
-    expected = -(selected * weights).sum() / 2
+    expected = -(selected * weights).sum()
     assert torch.allclose(loss, expected)
 
 

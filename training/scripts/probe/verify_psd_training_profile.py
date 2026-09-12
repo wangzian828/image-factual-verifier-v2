@@ -33,12 +33,26 @@ def main() -> None:
     parser.add_argument("--train-batch-size", type=int, required=True)
     parser.add_argument("--gradient-accumulation-steps", type=int, required=True)
     parser.add_argument("--learning-rate", type=float, required=True)
+    parser.add_argument("--lr-scheduler-type", default="constant")
+    parser.add_argument("--adam-beta1", type=float, default=0.9)
+    parser.add_argument("--adam-beta2", type=float, default=0.95)
+    parser.add_argument("--adam-epsilon", type=float, default=1e-12)
+    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--loss-reduction", default="sum")
     parser.add_argument("--num-train-epochs", type=float)
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
     errors: list[str] = []
+    if args.lr_scheduler_type != "constant":
+        errors.append("published_scheduler_must_be_constant")
+    if args.loss_reduction != "sum":
+        errors.append("published_backward_reduction_must_be_sum")
+    for name, expected in (("adam_beta1", 0.9), ("adam_beta2", 0.95),
+                           ("adam_epsilon", 1e-12), ("weight_decay", 0.0)):
+        if not math.isclose(getattr(args, name), expected, rel_tol=1e-12, abs_tol=0.0):
+            errors.append("published_" + name + "_mismatch")
     if args.world_size not in {4, 8}:
         errors.append("world_size_must_be_4_or_8")
     if args.sequence_parallel_size != args.world_size:
@@ -98,7 +112,7 @@ def main() -> None:
             errors.append("memory_probe_epochs_must_be_unset")
 
     result = {
-        "schema_version": "ifv-psd-training-profile-gate-v1",
+        "schema_version": "ifv-psd-training-profile-gate-v2",
         "passed": not errors,
         "mode": args.mode,
         "errors": errors,
@@ -116,6 +130,12 @@ def main() -> None:
             "lora_alpha": args.lora_alpha,
             "lora_dropout": args.lora_dropout,
             "target_modules": target_modules,
+            "loss_reduction": args.loss_reduction,
+            "lr_scheduler_type": args.lr_scheduler_type,
+            "adam_beta1": args.adam_beta1,
+            "adam_beta2": args.adam_beta2,
+            "adam_epsilon": args.adam_epsilon,
+            "weight_decay": args.weight_decay,
         },
         "context": {
             "max_tokens": args.max_context,
