@@ -364,6 +364,70 @@ def test_audit_allows_provider_error_observation_but_rejects_wire_prompt(
     ]
 
 
+def test_audit_does_not_treat_sk_prefixed_url_slug_as_secret(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    write_json(
+        source / "manifest.json",
+        {
+            "dataset_version": "ifv-trajectory-sft-dataset-v3",
+            "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
+        },
+    )
+    row = _trajectory_row()
+    row["messages"][4]["content"] = json.dumps(
+        {"url": "https://example.org/attractions/sk-" + "place-name-" * 3}
+    )
+    write_jsonl(source / "train.jsonl", [row])
+    write_jsonl(source / "validation.jsonl", [])
+    write_jsonl(source / "test.jsonl", [])
+    output = tmp_path / "output"
+
+    convert_policy_dataset(source, output)
+
+    audit = audit_derived_dataset(output)
+    assert audit["passed"] is True
+    assert audit["causal_contract"]["security"] == {
+        "rows_with_high_confidence_secret_markers": 0,
+        "marker_kind_counts": {},
+        "matched_values_redacted": True,
+    }
+
+
+def test_audit_still_blocks_standalone_openai_style_secret(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    write_json(
+        source / "manifest.json",
+        {
+            "dataset_version": "ifv-trajectory-sft-dataset-v3",
+            "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
+        },
+    )
+    row = _trajectory_row()
+    row["messages"][4]["content"] = json.dumps(
+        {"token": "sk-" + "a" * 32}
+    )
+    write_jsonl(source / "train.jsonl", [row])
+    write_jsonl(source / "validation.jsonl", [])
+    write_jsonl(source / "test.jsonl", [])
+    output = tmp_path / "output"
+
+    convert_policy_dataset(source, output)
+
+    audit = audit_derived_dataset(output)
+    assert audit["passed"] is False
+    assert audit["causal_contract"]["security"] == {
+        "rows_with_high_confidence_secret_markers": 1,
+        "marker_kind_counts": {"openai_style_key": 1},
+        "matched_values_redacted": True,
+    }
+
+
 def test_v1_dataset_is_not_silently_accepted(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

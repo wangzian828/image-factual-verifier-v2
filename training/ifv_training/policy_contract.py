@@ -61,7 +61,11 @@ LIVE_TOOL_CLASS_PATHS = {
 }
 
 SECRET_MARKERS = {
-    "openai_style_key": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    # A URL path segment may legitimately begin with ``sk-`` (for example a
+    # human-readable place slug).  Query/header/body values remain covered,
+    # while a slash-prefixed path segment is not treated as a credential by
+    # this high-confidence scanner.
+    "openai_style_key": re.compile(r"(?<!/)\bsk-[A-Za-z0-9_-]{20,}\b"),
     "google_api_key": re.compile(r"\bAIza[A-Za-z0-9_-]{20,}\b"),
     "github_token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
     "bearer_token": re.compile(
