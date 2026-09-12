@@ -77,8 +77,7 @@ def main():
             case_list = output / f"attempt-{attempt}-cases.txt"
             case_list.write_text("".join(case + "\n" for case in pending))
             command = [sys.executable, "-m", "src.eval.run_cases", "--benchmark", str(args.benchmark),
-                "--profile", "student-qwen3.5-local", "--model", "ifv-qwen3.5-9b-sft-982",
-                "--vlm-model", "ifv-qwen3.5-9b-sft-982", "--output-dir", str(directory),
+                "--profile", "student-qwen3.5-local", "--output-dir", str(directory),
                 "--case-list", str(case_list), "--concurrency", str(min(args.concurrency, len(pending))),
                 "--base-sampling-seed", "1729", "--timeout", "1800"]
             if attempt:
