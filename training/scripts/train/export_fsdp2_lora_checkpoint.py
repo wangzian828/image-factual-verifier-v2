@@ -57,8 +57,13 @@ def infer_target_modules(state: Mapping[str, Any]) -> list[str]:
         if suffix is None:
             raise ValueError(f"not a normalized LoRA tensor key: {name}")
         module_path = name[: -len(suffix)]
-        terminal = module_path.rsplit(".", 1)[-1]
-        targets.add(terminal)
+        parts = module_path.rsplit(".", 2)
+        terminal = parts[-1]
+        # Qwen3.5 has both visual attention ``attn.proj`` and patch-embedding
+        # ``patch_embed.proj``. A bare ``proj`` makes PEFT create an extra,
+        # unsupervised patch adapter, so retain the disambiguating parent.
+        target = ".".join(parts[-2:]) if terminal == "proj" else terminal
+        targets.add(target)
         variants.setdefault(module_path, set()).add(suffix)
     incomplete = sorted(path for path, kinds in variants.items() if len(kinds) != 2)
     if incomplete:

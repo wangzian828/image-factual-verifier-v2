@@ -76,6 +76,7 @@ def merge_for_serving(*, base_model: Path, adapter: Path, output: Path) -> dict[
 
     import torch
     from peft import PeftModel
+    from safetensors import safe_open
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
     torch.set_num_threads(16)
@@ -88,6 +89,14 @@ def merge_for_serving(*, base_model: Path, adapter: Path, output: Path) -> dict[
         low_cpu_mem_usage=True,
     )
     model = PeftModel.from_pretrained(model, adapter, is_trainable=False)
+    with safe_open(
+        adapter / "adapter_model.safetensors", framework="pt", device="cpu"
+    ) as handle:
+        source_adapter_parameters = sum(
+            int(handle.get_slice(name).get_shape()[0])
+            * int(handle.get_slice(name).get_shape()[1])
+            for name in handle.keys()
+        )
     adapter_parameters = sum(
         int(parameter.numel())
         for name, parameter in model.named_parameters()
@@ -95,6 +104,11 @@ def merge_for_serving(*, base_model: Path, adapter: Path, output: Path) -> dict[
     )
     if adapter_parameters <= 0:
         raise ValueError("PEFT did not load any LoRA parameters")
+    if adapter_parameters != source_adapter_parameters:
+        raise ValueError(
+            "PEFT adapter parameter count differs from the source tensors: "
+            f"loaded={adapter_parameters} source={source_adapter_parameters}"
+        )
     model = model.merge_and_unload(safe_merge=True, progressbar=True)
     if any("lora_" in name for name, _ in model.named_parameters()):
         raise ValueError("merged model still exposes LoRA parameters")
@@ -134,6 +148,7 @@ def merge_for_serving(*, base_model: Path, adapter: Path, output: Path) -> dict[
             "dtype": "bfloat16",
             "parameter_count": parameter_count,
             "adapter_parameter_count": adapter_parameters,
+            "source_adapter_parameter_count": source_adapter_parameters,
             "weight_file_count": len(weight_files),
             "weight_bytes": sum(path.stat().st_size for path in weight_files),
             "elapsed_seconds": round(time.monotonic() - started, 3),
