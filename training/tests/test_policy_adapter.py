@@ -7,7 +7,12 @@ import pytest
 
 from ifv_training.audit import audit_derived_dataset
 from ifv_training.io import sha256_file, write_json, write_jsonl
-from ifv_training.policy import convert_policy_dataset, convert_policy_row
+from ifv_training.policy import (
+    convert_policy_dataset,
+    convert_policy_row,
+    repair_derived_policy_dataset,
+)
+from src.trajectory.exporter import _render_tool_response_content
 
 
 def _trajectory_row() -> dict:
@@ -56,7 +61,14 @@ def _trajectory_row() -> dict:
             {
                 "role": "tool_response",
                 "content": json.dumps(
-                    {"status": "ok", "results": []},
+                    {
+                        "observation_locator": {
+                            "observation_id": "obs-1",
+                            "tool_name": "text_search",
+                            "tool_success": True,
+                        },
+                        "result": {"status": "ok", "results": []},
+                    },
                     ensure_ascii=False,
                 ),
             },
@@ -68,7 +80,17 @@ def _trajectory_row() -> dict:
                     + json.dumps(
                         {
                             "verdict": "real",
-                            "reason": "evidence is insufficient",
+                            "confidence": 0.6,
+                            "verdict_observation_ids": ["obs-1"],
+                            "overall_assessment": "Evidence remains limited.",
+                            "fact_check_report": {
+                                "headline": "Limited evidence",
+                                "claim_under_review": "The visible museum claim.",
+                                "verdict_summary": "The available evidence is compatible.",
+                                "key_findings": ["The search did not contradict it."],
+                                "evidence_summary": "One retained search observation.",
+                                "remaining_uncertainties": ["Primary records were unavailable."],
+                            },
                         },
                         ensure_ascii=False,
                     )
@@ -131,6 +153,12 @@ def test_react_uses_ms_swift_native_agent_format() -> None:
     assert "<answer>" in converted["messages"][5]["content"]
     assert json.loads(converted["tools"])[0]["function"]["name"] == "text_search"
     assert set(converted) == {"messages", "images", "tools"}
+    answer = json.loads(
+        converted["messages"][-1]["content"].split("<answer>", 1)[1].split(
+            "</answer>", 1
+        )[0]
+    )
+    assert answer["verdict_observation_ids"] == ["obs-1"]
 
 
 def test_policy_adapter_accepts_adjacent_tool_call_batches() -> None:
@@ -318,3 +346,132 @@ def test_v1_dataset_is_not_silently_accepted(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="training adapter accepts only"):
         convert_policy_dataset(source, tmp_path / "output")
+
+
+def test_converter_repairs_unknown_arguments_without_dropping_row() -> None:
+    row = _trajectory_row()
+    call = json.loads(row["messages"][3]["content"])
+    arguments = json.loads(call["arguments"])
+    arguments["transport_wrapper"] = "legacy-only"
+    call["arguments"] = json.dumps(arguments)
+    row["messages"][3]["content"] = json.dumps(call)
+
+    converted = convert_policy_row(row)
+
+    repaired = json.loads(converted["messages"][3]["content"])
+    assert "transport_wrapper" not in json.loads(repaired["arguments"])
+    assert converted["messages"][3].get("loss") is not False
+
+
+def test_source_exporter_makes_successful_observation_id_causally_visible() -> None:
+    rendered = _render_tool_response_content(
+        json.dumps({"status": "ok", "result": {"value": 1}}),
+        observation_id="call-visible-1",
+        tool_name="text_search",
+        tool_success=True,
+    )
+
+    payload = json.loads(rendered)
+    assert payload["observation_locator"] == {
+        "observation_id": "call-visible-1",
+        "tool_name": "text_search",
+        "tool_success": True,
+    }
+    assert payload["result"] == {"value": 1}
+
+
+def test_converter_masks_unrepairable_action_but_keeps_complete_trajectory() -> None:
+    row = _trajectory_row()
+    call = json.loads(row["messages"][3]["content"])
+    call["arguments"] = json.dumps({"question_id": "task-1"})
+    row["messages"][3]["content"] = json.dumps(call)
+
+    converted = convert_policy_row(row)
+
+    assert len(converted["messages"]) == len(row["messages"])
+    assert converted["messages"][2]["loss"] is False
+    assert converted["messages"][3]["loss"] is False
+    assert converted["messages"][4]["role"] == "tool_response"
+    assert converted["messages"][-1].get("loss") is not False
+
+
+def test_converter_drops_only_noncausal_final_ids() -> None:
+    row = _trajectory_row()
+    final = row["messages"][-1]["content"]
+    payload = json.loads(final.split("<answer>", 1)[1].split("</answer>", 1)[0])
+    payload["verdict_observation_ids"] = ["obs-1", "invisible-id"]
+    row["messages"][-1]["content"] = (
+        final.split("<answer>", 1)[0]
+        + "<answer>"
+        + json.dumps(payload)
+        + "</answer>"
+    )
+
+    converted = convert_policy_row(row)
+    converted_payload = json.loads(
+        converted["messages"][-1]["content"].split("<answer>", 1)[1].split(
+            "</answer>", 1
+        )[0]
+    )
+
+    assert converted_payload["verdict_observation_ids"] == ["obs-1"]
+
+
+def test_repair_dataset_retains_every_row_and_records_masks(tmp_path: Path) -> None:
+    source = tmp_path / "derived-v2"
+    source.mkdir()
+    good = convert_policy_row(_trajectory_row())
+    bad = json.loads(json.dumps(good))
+    bad_call = json.loads(bad["messages"][3]["content"])
+    bad_call["arguments"] = json.dumps({"question_id": "task-1"})
+    bad["messages"][3]["content"] = json.dumps(bad_call)
+    write_jsonl(source / "train.jsonl", [good, bad])
+    write_jsonl(source / "validation.jsonl", [])
+    write_jsonl(source / "test.jsonl", [])
+    write_jsonl(
+        source / "index.jsonl",
+        [
+            {"row_id": 0, "split": "train", "source_index": 0},
+            {"row_id": 1, "split": "train", "source_index": 1},
+        ],
+    )
+    artifacts = {}
+    for name in ("train", "validation", "test", "index"):
+        path = source / f"{name}.jsonl"
+        artifacts[name] = {
+            "path": path.name,
+            "rows": sum(
+                1
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line
+            ),
+            "sha256": sha256_file(path),
+        }
+    write_json(
+        source / "manifest.json",
+        {
+            "dataset_version": "ifv-ms-swift-qwen-agent-v2",
+            "artifacts": artifacts,
+        },
+    )
+
+    output = tmp_path / "repaired-v3"
+    manifest = repair_derived_policy_dataset(source, output)
+
+    assert manifest["row_retention"] == {
+        "source_rows": 2,
+        "output_rows": 2,
+        "dropped_rows": 0,
+    }
+    assert manifest["contract_projection"]["masked_unrepairable_tool_calls"] == {
+        "missing_required": 1
+    }
+    repaired_rows = [
+        json.loads(line)
+        for line in (output / "train.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert len(repaired_rows) == 2
+    assert repaired_rows[1]["messages"][3]["loss"] is False
+    assert audit_derived_dataset(output)["passed"] is True

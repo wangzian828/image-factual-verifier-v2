@@ -28,7 +28,7 @@ from .perception import (
     convert_accepted_perception_dataset,
     convert_perception_runs,
 )
-from .policy import convert_policy_dataset
+from .policy import convert_policy_dataset, repair_derived_policy_dataset
 from .profile import write_training_profile
 from .watchdog import build_sft_watchdog_snapshot
 from .psd import (
@@ -61,6 +61,10 @@ def _parser() -> argparse.ArgumentParser:
     policy = subparsers.add_parser("convert-policy")
     policy.add_argument("--input", type=Path, required=True)
     policy.add_argument("--output", type=Path, required=True)
+
+    policy_repair = subparsers.add_parser("repair-policy-contract")
+    policy_repair.add_argument("--input", type=Path, required=True)
+    policy_repair.add_argument("--output", type=Path, required=True)
 
     perception = subparsers.add_parser("convert-perception")
     perception.add_argument("--run-dir", action="append", type=Path, required=True)
@@ -391,6 +395,8 @@ def main() -> None:
     args = _parser().parse_args()
     if args.command == "convert-policy":
         result = convert_policy_dataset(args.input, args.output)
+    elif args.command == "repair-policy-contract":
+        result = repair_derived_policy_dataset(args.input, args.output)
     elif args.command == "convert-perception":
         result = convert_perception_runs(
             args.run_dir,

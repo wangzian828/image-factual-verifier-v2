@@ -218,8 +218,20 @@ def _qwen_tool_call_block(
     return "\n".join(lines)
 
 
-def _render_tool_response_content(value: str) -> str:
-    """Render only the public tool result for a Qwen tool_response message."""
+def _render_tool_response_content(
+    value: str,
+    *,
+    observation_id: str = "",
+    tool_name: str = "",
+    tool_success: bool | None = None,
+) -> str:
+    """Render a result plus the model-visible locator needed by final judgment.
+
+    The opaque provider call ID is the runtime observation ID.  Keeping it only
+    in trace metadata makes a later ``verdict_observation_ids`` target causally
+    impossible, so accepted exports expose a compact locator next to the public
+    result.  No provider transport payload or evaluator data is included.
+    """
 
     raw = value.strip()
     if raw.startswith("<tool_response>") and raw.endswith("</tool_response>"):
@@ -227,7 +239,22 @@ def _render_tool_response_content(value: str) -> str:
     try:
         payload = json.loads(raw)
     except Exception:
-        return raw
+        payload = raw
+    else:
+        if isinstance(payload, Mapping) and "result" in payload:
+            payload = payload["result"]
+    resolved_id = str(observation_id).strip()
+    if resolved_id:
+        return canonical_json(
+            {
+                "observation_locator": {
+                    "observation_id": resolved_id,
+                    "tool_name": str(tool_name).strip(),
+                    "tool_success": tool_success is True,
+                },
+                "result": payload,
+            }
+        )
     if isinstance(payload, Mapping) and "result" in payload:
         payload = payload["result"]
     if isinstance(payload, str):
@@ -509,7 +536,9 @@ def export_trajectory_sft_example(
             # initial prompt.  Keep the stage boundary visible by attaching
             # its compact control to the immediately preceding observation.
             if messages and messages[-1].get("role") == "tool_response":
-                messages[-1]["content"] += "\n\n" + stage_control
+                messages[-1]["content"] += (
+                    "\n\n<stage_control>" + stage_control + "</stage_control>"
+                )
             else:
                 messages[1]["content"] += "\n\n" + stage_control
         thought = str(step.get("thought", "") or "").strip()
@@ -558,7 +587,18 @@ def export_trajectory_sft_example(
             tool_call_count += 1
             tool_result = str(step.get("tool_result", "") or "").strip()
             if tool_result:
-                pending_tool_response = _render_tool_response_content(tool_result)
+                pending_tool_response = _render_tool_response_content(
+                    tool_result,
+                    observation_id=str(
+                        metadata.get("function_call_id", "") or ""
+                    ),
+                    tool_name=tool_call["name"],
+                    tool_success=(
+                        metadata.get("tool_success")
+                        if isinstance(metadata.get("tool_success"), bool)
+                        else None
+                    ),
+                )
                 pending_tool_step_index = position
         else:
             answer = canonical_json(policy_action)

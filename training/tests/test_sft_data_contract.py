@@ -33,11 +33,32 @@ CONTRACT = {
 
 
 def _dataset(root: Path) -> tuple[Path, Path]:
+    final_output = {
+        "verdict": "real",
+        "confidence": 0.5,
+        "verdict_observation_ids": [],
+        "overall_assessment": "The minimal fixture remains uncertain.",
+        "fact_check_report": {
+            "headline": "Fixture report",
+            "claim_under_review": "A test-only claim.",
+            "verdict_summary": "No contradictory evidence is present.",
+            "key_findings": ["This is a contract fixture."],
+            "evidence_summary": "No external evidence is used.",
+            "remaining_uncertainties": ["The fixture has no source material."],
+        },
+    }
     row = {
         "messages": [
             {"role": "system", "content": "system"},
             {"role": "user", "content": "question"},
-            {"role": "assistant", "content": "<think>x</think><answer>y</answer>"},
+            {
+                "role": "assistant",
+                "content": (
+                    "<think>x</think><answer>"
+                    + json.dumps(final_output)
+                    + "</answer>"
+                ),
+            },
         ],
         "images": [],
     }

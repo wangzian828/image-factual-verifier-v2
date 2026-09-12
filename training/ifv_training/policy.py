@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -14,6 +15,7 @@ from .io import (
     write_json,
     write_jsonl,
 )
+from .policy_contract import project_converted_policy_row
 
 
 SUPPORTED_DATASET_VERSIONS = frozenset(
@@ -23,7 +25,7 @@ SUPPORTED_DATASET_VERSIONS = frozenset(
     }
 )
 LEGACY_STEP_DATASET_VERSION = "ifv-policy-dataset-v2"
-OUTPUT_VERSION = "ifv-ms-swift-qwen-agent-v2"
+OUTPUT_VERSION = "ifv-ms-swift-qwen-agent-v3"
 SPLITS = ("train", "validation", "test")
 TARGET_ROLES = frozenset(
     {"system", "user", "assistant", "tool_call", "tool_response"}
@@ -102,6 +104,12 @@ def _render_tool_response(content: str) -> str:
         payload = json.loads(content)
     except json.JSONDecodeError:
         return content.strip()
+    if (
+        isinstance(payload, Mapping)
+        and "observation_locator" in payload
+        and "result" in payload
+    ):
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if isinstance(payload, Mapping) and "result" in payload:
         payload = payload["result"]
     if isinstance(payload, str):
@@ -260,10 +268,14 @@ def _validate_qwen_agent_messages(
         role = str(message.get("role", ""))
         if role not in TARGET_ROLES:
             raise ValueError(f"messages[{index}] has unsupported role {role!r}")
-        if set(message) != {"role", "content"}:
+        allowed_keys = {"role", "content", "loss", "loss_scale"}
+        unexpected = set(message) - allowed_keys
+        if unexpected:
             raise ValueError(
-                f"messages[{index}] must contain only role and content"
+                f"messages[{index}] has unsupported keys: {sorted(unexpected)}"
             )
+        if "loss" in message and not isinstance(message["loss"], bool):
+            raise ValueError(f"messages[{index}].loss must be boolean")
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
             raise ValueError(f"messages[{index}].content must be non-empty")
@@ -304,7 +316,9 @@ def _validate_qwen_agent_messages(
         raise ValueError(f"messages[{index}] has an invalid turn role {role!r}")
 
 
-def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
+def _convert_policy_row_with_stats(
+    row: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if row.get("dataset_version") == LEGACY_STEP_DATASET_VERSION:
         raise ValueError(
             "step-level ifv-policy-dataset-v2 rows are no longer accepted "
@@ -367,7 +381,65 @@ def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
                 "message"
             )
         output["images"] = list(images)
-    return output
+    output, projection_stats = project_converted_policy_row(output)
+    _validate_qwen_agent_messages(
+        output["messages"],
+        image_count=len(output.get("images") or []),
+    )
+    return output, projection_stats
+
+
+def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    return _convert_policy_row_with_stats(row)[0]
+
+
+def _empty_projection_totals() -> dict[str, Any]:
+    return {
+        "rows": 0,
+        "tool_calls": Counter(),
+        "masked_unrepairable_tool_calls": Counter(),
+        "removed_argument_fields": Counter(),
+        "tool_responses": Counter(),
+        "tool_schemas": Counter(),
+        "final_observation_ids": Counter(),
+    }
+
+
+def _accumulate_projection(
+    totals: dict[str, Any],
+    stats: Mapping[str, Any],
+) -> None:
+    totals["rows"] += 1
+    for section in (
+        "tool_calls",
+        "masked_unrepairable_tool_calls",
+        "removed_argument_fields",
+        "tool_responses",
+        "tool_schemas",
+        "final_observation_ids",
+    ):
+        for key, value in (stats.get(section) or {}).items():
+            if isinstance(value, bool):
+                totals[section][str(key)] += int(value)
+            elif isinstance(value, (int, float)):
+                totals[section][str(key)] += value
+
+
+def _render_projection_totals(totals: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "rows": int(totals["rows"]),
+        **{
+            section: dict(sorted(totals[section].items()))
+            for section in (
+                "tool_calls",
+                "masked_unrepairable_tool_calls",
+                "removed_argument_fields",
+                "tool_responses",
+                "tool_schemas",
+                "final_observation_ids",
+            )
+        },
+    }
 
 
 def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
@@ -388,11 +460,13 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
 
     artifacts: dict[str, dict[str, Any]] = {}
     index_rows: list[dict[str, Any]] = []
+    projection_totals = _empty_projection_totals()
     row_id = 0
     for split in SPLITS:
         converted_rows: list[dict[str, Any]] = []
         for source_index, row in enumerate(load_jsonl(input_dir / f"{split}.jsonl")):
-            converted = convert_policy_row(row)
+            converted, projection_stats = _convert_policy_row_with_stats(row)
+            _accumulate_projection(projection_totals, projection_stats)
             converted_rows.append(converted)
             index_rows.append(
                 {
@@ -438,7 +512,10 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
                 "tool_response",
             ],
             "preserves_native_think": True,
-            "assistant_loss_metadata": "omitted; inferred by ms-swift template",
+            "assistant_loss_metadata": (
+                "message.loss=false masks only historical actions that the live "
+                "runtime rejects; all complete trajectories are retained"
+            ),
         },
         "source": {
             "dataset_version": source_manifest["dataset_version"],
@@ -446,6 +523,120 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
         },
         "example_count": row_id,
         "trajectory_format": "one_episode_per_row",
+        "contract_projection": _render_projection_totals(projection_totals),
+        "artifacts": artifacts,
+    }
+    write_json(output_dir / "manifest.json", manifest)
+    return manifest
+
+
+def repair_derived_policy_dataset(
+    input_dir: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Repair a v2/v3 ms-swift package without dropping complete trajectories."""
+
+    source_manifest = load_json(input_dir / "manifest.json")
+    source_version = str(source_manifest.get("dataset_version", ""))
+    if source_version not in {
+        "ifv-ms-swift-qwen-agent-v2",
+        "ifv-ms-swift-qwen-agent-v3",
+    }:
+        raise ValueError(
+            "repair-policy-contract requires an ms-swift Qwen Agent v2/v3 dataset"
+        )
+    require_new_or_empty(output_dir)
+    source_index_path = input_dir / "index.jsonl"
+    source_index = load_jsonl(source_index_path) if source_index_path.is_file() else []
+    source_index_by_split: dict[tuple[str, int], Mapping[str, Any]] = {}
+    for item in source_index:
+        if not isinstance(item, Mapping):
+            continue
+        source_index_by_split[
+            (str(item.get("split", "")), int(item.get("source_index", -1)))
+        ] = item
+
+    artifacts: dict[str, dict[str, Any]] = {}
+    output_index: list[dict[str, Any]] = []
+    projection_totals = _empty_projection_totals()
+    row_id = 0
+    for split in SPLITS:
+        source_artifact = (source_manifest.get("artifacts") or {}).get(split, {})
+        source_path = input_dir / str(source_artifact.get("path", f"{split}.jsonl"))
+        rows = load_jsonl(source_path) if source_path.is_file() else []
+        projected_rows: list[dict[str, Any]] = []
+        for source_index_value, row in enumerate(rows):
+            projected, projection_stats = project_converted_policy_row(row)
+            _validate_qwen_agent_messages(
+                projected["messages"],
+                image_count=len(projected.get("images") or []),
+            )
+            projected_rows.append(projected)
+            _accumulate_projection(projection_totals, projection_stats)
+            old_index = dict(
+                source_index_by_split.get((split, source_index_value), {})
+            )
+            old_index.update(
+                {
+                    "row_id": row_id,
+                    "split": split,
+                    "source_index": source_index_value,
+                }
+            )
+            output_index.append(old_index)
+            row_id += 1
+        output_path = output_dir / f"{split}.jsonl"
+        write_jsonl(output_path, projected_rows)
+        artifacts[split] = {
+            "path": output_path.name,
+            "rows": len(projected_rows),
+            "sha256": sha256_file(output_path),
+        }
+
+    index_path = output_dir / "index.jsonl"
+    write_jsonl(index_path, output_index)
+    artifacts["index"] = {
+        "path": index_path.name,
+        "rows": len(output_index),
+        "sha256": sha256_file(index_path),
+    }
+    manifest = {
+        "schema_version": "ifv-ms-swift-dataset-manifest-v1",
+        "dataset_version": OUTPUT_VERSION,
+        "framework": source_manifest.get(
+            "framework", {"name": "ms-swift", "version": "4.4.2"}
+        ),
+        "format_contract": {
+            "name": "ms-swift-qwen-agent",
+            "version": "v3",
+            "message_roles": [
+                "system",
+                "user",
+                "assistant",
+                "tool_call",
+                "tool_response",
+            ],
+            "preserves_native_think": True,
+            "assistant_loss_metadata": (
+                "message.loss=false masks only historical actions that the live "
+                "runtime rejects; all complete trajectories are retained"
+            ),
+        },
+        "source": {
+            "dataset_version": source_version,
+            "manifest_sha256": sha256_file(input_dir / "manifest.json"),
+        },
+        "example_count": row_id,
+        "trajectory_format": "one_episode_per_row",
+        "row_retention": {
+            "source_rows": sum(
+                int(((source_manifest.get("artifacts") or {}).get(split) or {}).get("rows", 0))
+                for split in SPLITS
+            ),
+            "output_rows": row_id,
+            "dropped_rows": 0,
+        },
+        "contract_projection": _render_projection_totals(projection_totals),
         "artifacts": artifacts,
     }
     write_json(output_dir / "manifest.json", manifest)
