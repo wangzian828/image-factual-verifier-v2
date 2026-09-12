@@ -24,10 +24,10 @@ def test_normalizes_fsdp_wrapper_and_infers_paired_targets() -> None:
     }
     normalized = normalize_lora_state_dict(state)
     assert sorted(normalized) == [
-        "base_model.model.visual.blocks.0.attn.proj.lora_A.weight",
-        "base_model.model.visual.blocks.0.attn.proj.lora_B.weight",
         "base_model.model.layers.0.q_proj.lora_A.weight",
         "base_model.model.layers.0.q_proj.lora_B.weight",
+        "base_model.model.visual.blocks.0.attn.proj.lora_A.weight",
+        "base_model.model.visual.blocks.0.attn.proj.lora_B.weight",
     ]
     assert infer_target_modules(normalized) == ["attn.proj", "q_proj"]
 
