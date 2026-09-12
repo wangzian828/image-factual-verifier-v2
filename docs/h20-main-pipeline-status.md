@@ -1,6 +1,20 @@
 # H20 main pipeline handoff — 2026-09-12 03:28 China time
 
-## Current phase: pre-training independent judge
+## Current phase: formal SFT launched after user storage confirmation
+
+The user explicitly confirmed sufficient storage and requested immediate launch.
+The prior storage hold below is superseded. Four keepers were stopped; after
+their CUDA allocations released, all four GPUs were verified at1MiB. Main judge
+completion and the frozen training-data SHA were checked again. Formal SFT was
+dispatched with resource monitor PID203959 to
+`/volume/ybo/wza/training-artifacts/h20-formal-sft-20260912`.
+Read `launch.json`, `train.log`, `resource-samples.jsonl` and eventual
+`resource-summary.json`; do not launch a duplicate. Command is the frozen
+`training-plan.json`: one full-data epoch, full parameters, 64K packing/SP4,
+128K ceiling, final full-state epoch checkpoint. Dispatch is not completion;
+verify actual steps, finite losses/gradients, final checkpoint and export next.
+The original utilization guard remains active, and keepers must not run while
+training is using the GPUs. If training fails, inspect before restoring protection.
 
 06:34 update: **pre-training judge finished**. `progress.json` is
 `judge_complete`, 1,682/1,682, no remaining cases. Independent checks verified
