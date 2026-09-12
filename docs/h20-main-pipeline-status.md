@@ -2,6 +2,15 @@
 
 ## Current phase: formal SFT launched after user storage confirmation
 
+11:30 update: the authoritative filtered 1,527 metadata was recovered from the
+recorded gpu-13 path and hash-verified on H20. Exact case-ID matching reused
+1,526 corrected Gemini 3.7 Flash/low judgments from the old-1,682 baseline; no
+new Judge calls were made. One missing formal real case is counted as a miss.
+Formal baseline metrics are accuracy 63.4578%, balanced accuracy 65.6654%, real
+recall 70.0265%, fake recall 61.3043%, and strict SESR 2.8815% (44/1,527). See
+`docs/reports/2026-09-12-qwen35-9b-pretrain-formal1527.md` and server summary
+`qwen35-base-agent-formal1527-pretrain-from-old1682-20260912/summary.json`.
+
 10:46 update: formal SFT remained healthy at step 449/982 (45.7%), with four H20s
 at 100% utilization and finite loss/gradients. The corrected pre-training judge
 rerun is separate from the obsolete 3.1 Pro/high audit: it uses

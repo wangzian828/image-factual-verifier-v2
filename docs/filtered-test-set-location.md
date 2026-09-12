@@ -4,7 +4,7 @@ The existing comparison uses 1,527 cases (377 real, 1,150 fake), as documented
 in `evaluation-comparison-20260909.md`. Do not create a replacement split or use
 the legacy full archive as if it were this filtered release.
 
-## Historical location, not yet recovered on H20
+## Recovered frozen release
 
 The previous task history records this directory on the old server:
 
@@ -18,9 +18,25 @@ Recorded contents:
 - `selection-summary.json`, `README.md`, `.complete`
 - `images` symlink to the original dataset image directory
 
-These names and counts were recovered from historical task records, not freshly
-validated against the old server. The current H20 data directory and repository
-do not yet contain the recovered authoritative filtered manifest.
+The directory was re-opened and validated on gpu-13 on 2026-09-12. The manifest,
+private gold, selection summary and removed-case list were transferred to H20 as
+metadata only; no test images were copied and no Judge API was called.
+
+H20 metadata root:
+
+`/volume/ybo/wza/data/factcheck-test-1527-filtered-frozen-20260909`
+
+Verified SHA-256 values:
+
+- `test-manifest.jsonl`: `9df1b0f6f8b6285f411d600fa230a70fdce4cefe9c2be264f7bd8b925358d1f0`
+- `private-gold.jsonl`: `49a5785522b982dc4f97b28270a4b5bf5f4da0d7247f8dc7fd30cdf0de5ea671`
+- `selection-summary.json`: `733e32dc09c8e8e9f620d43631811e22d4ead27da8cfdab6d5cecf513616310f`
+- `removed-case-ids.txt`: `b9479c69ae0e76f4c7a991ed6aa4ea86412a581987a098f1b5e8028a869adf6b`
+
+Exact case-ID reconciliation against the completed old-1,682 baseline found
+1,526 shared cases, one formal case absent from the old run, and 156 old-run
+cases outside the formal release. The formal summary counts the missing real
+case as a miss rather than shrinking the denominator.
 
 History describes filtering 157 from an original 1,684: 79 capability-balancing
 removals (38 source_grounded_mutation, 41 no_prototype_fabrication), plus 70
