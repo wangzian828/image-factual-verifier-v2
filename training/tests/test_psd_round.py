@@ -116,13 +116,21 @@ def test_psd_round_chain_requires_fresh_rollout_from_previous_output(
         },
     )
     completion1 = tmp_path / "round-1-completion.json"
+    initialization = tmp_path / "initialization.json"
+    _write(initialization, {"passed": True, "checkpoint_manifest_sha256": sha256_file(base_manifest)})
     completed = complete_psd_round(
         rollout_gate_path=rollout_gate1,
         training_profile_path=training_profile,
         output_checkpoint_manifest_path=trained_manifest,
         output=completion1,
+        initialization_gate_path=initialization,
     )
     assert completed["passed"] is True
+    wrong_initialization = tmp_path / "wrong-initialization.json"
+    _write(wrong_initialization, {"passed": True, "checkpoint_manifest_sha256": "another-round"})
+    assert not complete_psd_round(rollout_gate_path=rollout_gate1,
+        training_profile_path=training_profile, output_checkpoint_manifest_path=trained_manifest,
+        output=tmp_path / "wrong-round.json", initialization_gate_path=wrong_initialization)["passed"]
     for check in ("optimizer_state_available", "scheduler_state_available", "rng_state_available"):
         changed = json.loads(trained_manifest.read_text())
         changed["checkpoint"][check] = False
@@ -130,13 +138,13 @@ def test_psd_round_chain_requires_fresh_rollout_from_previous_output(
         _write(tampered, changed)
         rejected = complete_psd_round(rollout_gate_path=rollout_gate1,
             training_profile_path=training_profile, output_checkpoint_manifest_path=tampered,
-            output=tmp_path / "rejected.json")
+            output=tmp_path / "rejected.json", initialization_gate_path=initialization)
         assert not rejected["passed"]
     original_weights = (trained_path / "model.safetensors").read_bytes()
     (trained_path / "model.safetensors").write_bytes(b"changed after manifest")
     assert not complete_psd_round(rollout_gate_path=rollout_gate1,
         training_profile_path=training_profile, output_checkpoint_manifest_path=trained_manifest,
-        output=tmp_path / "rejected.json")["passed"]
+        output=tmp_path / "rejected.json", initialization_gate_path=initialization)["passed"]
     (trained_path / "model.safetensors").write_bytes(original_weights)
 
     run2, cases2, serving2 = _rollout(

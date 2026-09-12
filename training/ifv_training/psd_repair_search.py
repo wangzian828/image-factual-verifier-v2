@@ -117,12 +117,22 @@ def validate_live_model(profile, models):
     if len(rows) != 1:
         raise ValueError("live PSD model alias missing or ambiguous")
     row = rows[0]
-    expected = profile.get("engine_model_path") or profile["model_path"]
+    expected = profile["model_path"]
     if not row.get("root") or Path(row["root"]).resolve() != Path(expected).resolve():
         raise ValueError("live PSD service no longer serves the frozen checkpoint")
-    if row.get("max_model_len") != profile["context_length"]:
+    context_card = row
+    base = profile.get("engine_model_path") or expected
+    if Path(base).resolve() != Path(expected).resolve():
+        # vLLM adapter cards use root=adapter and parent=base alias. Their
+        # context limit is inherited from the base card, not repeated here.
+        parents = [card for card in models.get("data", []) if card.get("id") == row.get("parent")]
+        if len(parents) != 1 or not parents[0].get("root") or Path(parents[0]["root"]).resolve() != Path(base).resolve():
+            raise ValueError("live PSD adapter parent differs from frozen base")
+        context_card = parents[0]
+    if context_card.get("max_model_len") != profile["context_length"]:
         raise ValueError("live PSD context cap differs from frozen profile")
-    return {"model_id": row["id"], "root": row["root"], "max_model_len": row["max_model_len"]}
+    return {"model_id": row["id"], "root": row["root"], "parent": row.get("parent"),
+            "max_model_len": context_card["max_model_len"]}
 
 
 def inspect_round(directory):

@@ -212,6 +212,7 @@ def complete_psd_round(
     training_profile_path: Path,
     output_checkpoint_manifest_path: Path,
     output: Path,
+    initialization_gate_path: Path | None = None,
 ) -> dict[str, Any]:
     """Close a round only after a gated optimizer run emitted a new checkpoint."""
 
@@ -227,6 +228,7 @@ def complete_psd_round(
     raw_gate = _mapping(training.get("raw_dataset_gate"))
     input_gate = _mapping(raw_gate.get("verification"))
     input_manifest = _mapping(input_gate.get("manifest"))
+    initialization = _load_object(initialization_gate_path) if initialization_gate_path else {}
     saved_paths = {
         _text(item.get("path"))
         for item in checkpoint_save.get("states", [])
@@ -259,6 +261,9 @@ def complete_psd_round(
         "training_production_gate": _check(
             training.get("passed_production_gate"), True
         ),
+        "initialization_gate_passed": _check(initialization.get("passed"), True),
+        "optimizer_started_from_rollout_policy": _check(
+            initialization.get("checkpoint_manifest_sha256"), start_checkpoint.get("sha256")),
         "output_checkpoint_schema": _check(
             checkpoint.get("schema_version"), "ifv-qwen-checkpoint-manifest-v1"
         ),
@@ -316,6 +321,10 @@ def complete_psd_round(
             "sha256": sha256_file(training_profile_path),
         },
         "input_checkpoint_manifest": dict(start_checkpoint),
+        "initialization_gate": {
+            "path": str(initialization_gate_path.resolve()) if initialization_gate_path else None,
+            "sha256": sha256_file(initialization_gate_path) if initialization_gate_path else None,
+        },
         "output_checkpoint_manifest": {
             "path": str(output_checkpoint_manifest_path.resolve()),
             "sha256": checkpoint_sha,

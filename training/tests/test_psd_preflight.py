@@ -82,3 +82,11 @@ def test_psd_training_input_preflight_detects_post_manifest_mutation(
 
     assert result["passed"] is False
     assert "manifest_datums_sha256_mismatch" in result["errors"]
+
+
+def test_changed_source_targets_fail_even_when_datums_are_unchanged(tmp_path):
+    package = _package(tmp_path)
+    (tmp_path / "targets.jsonl").write_text("{}\n")
+    result = verify_psd_training_input(datums_path=package / "datums.jsonl",
+        manifest_path=package / "manifest.json", expected_topk=2, max_context=16)
+    assert "manifest_source_targets_changed_or_missing" in result["errors"]

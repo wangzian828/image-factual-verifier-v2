@@ -212,6 +212,7 @@ def _parser() -> argparse.ArgumentParser:
         "--output-checkpoint-manifest", type=Path, required=True
     )
     psd_round_completion.add_argument("--output", type=Path, required=True)
+    psd_round_completion.add_argument("--initialization-gate", type=Path, required=True)
 
     psd_topk = subparsers.add_parser("materialize-psd-topk")
     psd_topk.add_argument("--targets", type=Path, required=True)
@@ -530,6 +531,7 @@ def main() -> None:
             training_profile_path=args.training_profile,
             output_checkpoint_manifest_path=args.output_checkpoint_manifest,
             output=args.output,
+            initialization_gate_path=args.initialization_gate,
         )
         if not result["passed"]:
             print(json.dumps(result, ensure_ascii=False, indent=2))

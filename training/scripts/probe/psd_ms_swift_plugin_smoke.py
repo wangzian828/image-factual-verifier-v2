@@ -58,6 +58,12 @@ def main() -> None:
         },
     ]
     encoded = [template.encode(row) for row in raw_rows]
+    from ifv_training.psd_datums import compact_datum
+    for raw, expected in zip(raw_rows, encoded, strict=True):
+        compact = compact_datum({**raw, "loss_positions": [index for index, weights in enumerate(raw["weights"])
+                                                           if sum(weights) > 0]})
+        if template.encode(compact) != expected:
+            raise RuntimeError("compact PSD target expansion changes the native template input")
     batch = template.data_collator(encoded)
 
     class ToyModel(torch.nn.Module):
@@ -133,6 +139,7 @@ def main() -> None:
         "gradient_l1": gradient_l1,
         "registered_loss": PSD_MS_SWIFT_LOSS,
         "registered_template": PSD_MS_SWIFT_TEMPLATE,
+        "compact_and_legacy_template_equivalent": True,
         "batch_shapes": {
             name: list(value.shape)
             for name, value in batch.items()

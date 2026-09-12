@@ -10,6 +10,8 @@ from ifv_training.psd_repair import PSDModelRoles
 def fixture(tmp_path, *, adapter=False):
     base = tmp_path / "base"
     base.mkdir()
+    base_weight = base / "model.safetensors"
+    base_weight.write_bytes(b"immutable dense base")
     checkpoint = tmp_path / "adapter" if adapter else base
     checkpoint.mkdir(exist_ok=True)
     weight = checkpoint / ("adapter_model.safetensors" if adapter else "model.safetensors")
@@ -17,6 +19,8 @@ def fixture(tmp_path, *, adapter=False):
     manifest = tmp_path / "checkpoint.json"
     write_json(manifest, {"schema_version": "ifv-qwen-checkpoint-manifest-v1",
         "checkpoint": {"path": str(checkpoint)},
+        "base_model_binding": {"path": str(base), "artifacts": [
+            {"scope": "model", "path": base_weight.name, "sha256": sha256_file(base_weight)}]},
         "artifacts": [{"scope": "model", "path": weight.name, "sha256": sha256_file(weight)}]})
     profile = tmp_path / "profile.json"
     write_json(profile, {"schema_version": "ifv-qwen-serving-profile-v1", "engine": "vllm",
@@ -80,4 +84,11 @@ def test_rebound_targets_from_different_policy_fail(tmp_path):
     datum["source"]["targets_sha256"] = sha256_file(target_path)
     write_json(args["datum_manifest_path"], datum)
     with pytest.raises(ValueError, match="actual student initialization"):
+        verify_initialization(**args)
+
+
+def test_adapter_cannot_hide_a_changed_dense_base(tmp_path):
+    args, _ = fixture(tmp_path, adapter=True)
+    (tmp_path / "base/model.safetensors").write_bytes(b"silently replaced base")
+    with pytest.raises(ValueError, match="base model bytes changed"):
         verify_initialization(**args)

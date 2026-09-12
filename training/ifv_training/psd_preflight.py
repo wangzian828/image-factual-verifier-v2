@@ -13,6 +13,7 @@ from .io import load_json, load_jsonl, sha256_file
 from .psd_datums import (
     PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION,
     PSD_SPARSE_DATUM_SCHEMA_VERSION,
+    PSD_COMPACT_DATUM_SCHEMA_VERSION,
     PSD_WEIGHTING_POLICY,
 )
 
@@ -38,15 +39,16 @@ def _integer(value: Any, *, default: int = 0) -> int:
 
 
 def _datum_error(row: Mapping[str, Any], *, topk: int, max_context: int) -> str:
-    if _text(row.get("schema_version")) != PSD_SPARSE_DATUM_SCHEMA_VERSION:
+    if _text(row.get("schema_version")) not in {PSD_SPARSE_DATUM_SCHEMA_VERSION, PSD_COMPACT_DATUM_SCHEMA_VERSION}:
         return "datum_schema_invalid"
     if _text(row.get("kind")) not in {"repair", "preserve"}:
         return "datum_kind_invalid"
     if _integer(row.get("topk")) != topk:
         return "datum_topk_mismatch"
     input_ids = row.get("input_ids")
-    target_tokens = row.get("target_tokens")
-    weights = row.get("weights")
+    compact = row.get("schema_version") == PSD_COMPACT_DATUM_SCHEMA_VERSION
+    target_tokens = row.get("sparse_target_tokens" if compact else "target_tokens")
+    weights = row.get("sparse_weights" if compact else "weights")
     if not isinstance(input_ids, list) or not input_ids:
         return "datum_input_ids_invalid"
     if any(
@@ -61,9 +63,17 @@ def _datum_error(row: Mapping[str, Any], *, topk: int, max_context: int) -> str:
         require_text_only_psd(row, input_ids)
     except (ValueError, OSError, KeyError, TypeError) as exc:
         return f"datum_media_invalid:{exc}"
-    if not isinstance(target_tokens, list) or len(target_tokens) != len(input_ids):
+    positions = row.get("loss_positions")
+    completion_tokens = row.get("completion_tokens")
+    if (type(completion_tokens) is not int or not 0 < completion_tokens <= len(input_ids)
+            or positions != list(range(len(input_ids) - completion_tokens, len(input_ids)))):
+        return "datum_causal_prediction_positions_invalid"
+    if compact and ("target_tokens" in row or "weights" in row):
+        return "datum_ambiguous_target_layout"
+    expected_length = len(positions) if compact else len(input_ids)
+    if not isinstance(target_tokens, list) or len(target_tokens) != expected_length:
         return "datum_target_shape_invalid"
-    if not isinstance(weights, list) or len(weights) != len(input_ids):
+    if not isinstance(weights, list) or len(weights) != expected_length:
         return "datum_weight_shape_invalid"
     try:
         row_weight = float(row.get("row_weight"))
@@ -85,7 +95,8 @@ def _datum_error(row: Mapping[str, Any], *, topk: int, max_context: int) -> str:
     ):
         return "datum_aggregate_source_rebalancing_detected"
     active = False
-    for tokens, values in zip(target_tokens, weights, strict=True):
+    active_positions = []
+    for index, (tokens, values) in enumerate(zip(target_tokens, weights, strict=True)):
         if not isinstance(tokens, list) or len(tokens) != topk:
             return "datum_target_topk_shape_invalid"
         if any(
@@ -102,6 +113,10 @@ def _datum_error(row: Mapping[str, Any], *, topk: int, max_context: int) -> str:
         if any(not math.isfinite(value) or value < 0 for value in numeric):
             return "datum_weight_invalid"
         position_mass = sum(numeric)
+        if position_mass > 0:
+            active_positions.append(positions[index] if compact else index)
+            if len(set(tokens)) != topk:
+                return "datum_duplicate_topk_token"
         if position_mass > 0 and not math.isclose(
             position_mass,
             row_weight,
@@ -112,6 +127,8 @@ def _datum_error(row: Mapping[str, Any], *, topk: int, max_context: int) -> str:
         active = active or any(value > 0 for value in numeric)
     if not active:
         return "datum_has_no_active_target"
+    if active_positions != positions:
+        return "datum_active_positions_do_not_match_completion"
     return ""
 
 
@@ -147,9 +164,13 @@ def verify_psd_training_input(
             errors.append("datums_jsonl_invalid")
 
     if manifest:
+        source = _mapping(manifest.get("source"))
+        targets = Path(_text(source.get("targets")))
+        if not targets.is_file() or sha256_file(targets) != source.get("targets_sha256"):
+            errors.append("manifest_source_targets_changed_or_missing")
         if (
             manifest.get("schema_version")
-            != PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION
+            not in {PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION, "ifv-psd-sparse-topk-manifest-v3"}
         ):
             errors.append("manifest_schema_invalid")
         if manifest.get("status") != "ready_for_trainer":

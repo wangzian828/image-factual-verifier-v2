@@ -24,6 +24,9 @@ configure_distributed_backend
 require_model_path
 require_dataset "$PSD_DATUMS"
 require_value EXPERIMENT_ID
+if [[ "$IFV_PSD_PROFILE_MODE" == "production" ]]; then
+  require_value IFV_PSD_ROUND_READY
+fi
 for name in \
   IFV_PSD_PROFILE_MODE \
   IFV_PSD_TOPK \
@@ -79,6 +82,19 @@ if [[ -n "${IFV_PSD_INITIAL_ADAPTER:-}" ]]; then
   initialization_args+=(--adapter "$IFV_PSD_INITIAL_ADAPTER")
 fi
 "${initialization_args[@]}"
+if [[ "$IFV_PSD_PROFILE_MODE" == "production" ]]; then
+  PYTHONPATH="$REPO_ROOT:$PYTHONPATH" python - "$IFV_PSD_ROUND_READY" "$PSD_DATUMS" "$LOG_DIR/psd-initialization-gate.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+from scripts.run_psd_round import load_ready
+ready = load_ready(Path(sys.argv[1]))
+if Path(ready['datums']).resolve() != Path(sys.argv[2]).resolve():
+    raise SystemExit('PSD launch datums differ from prepared round')
+if ready['initialization'] != json.loads(Path(sys.argv[3]).read_text()):
+    raise SystemExit('PSD launch initialization differs from prepared round')
+PY
+fi
 
 PSD_PROFILE_GATE="$LOG_DIR/psd-training-profile-gate.json"
 profile_gate_args=(
@@ -400,6 +416,11 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 if profile.get("passed_production_gate") is not True:
     raise SystemExit("PSD optimizer run did not pass its production gate")
 PY
+  python "$REPO_ROOT/scripts/run_psd_round.py" finalize \
+    --ready "$IFV_PSD_ROUND_READY" --checkpoint "$latest_checkpoint" \
+    --training-profile "$LOG_DIR/profile.json" \
+    --initialization-gate "$LOG_DIR/psd-initialization-gate.json" \
+    --output "$LOG_DIR/round-output"
 fi
 
 exit "$train_status"

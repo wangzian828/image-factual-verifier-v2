@@ -80,7 +80,7 @@ profile_args=(
   --context-length "$CONTEXT_LENGTH" \
   --tool-call-parser qwen3_coder \
   --reasoning-parser qwen3 \
-  --thinking-enabled true
+  --thinking-enabled false
 )
 if [[ -n "$LORA_ADAPTER" ]]; then
   profile_args+=(--adapter-path "$LORA_ADAPTER")
@@ -92,7 +92,7 @@ if [[ -n "$CHECKPOINT_MANIFEST" ]]; then
   fi
   profile_args+=(--checkpoint-manifest "$CHECKPOINT_MANIFEST")
 fi
-PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" "${profile_args[@]}"
+PYTHONPATH="$REPO_ROOT/training:$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" "${profile_args[@]}"
 
 ENGINE_SERVED_NAME="$SERVED_NAME"
 if [[ -n "$LORA_ADAPTER" ]]; then
@@ -108,14 +108,14 @@ args=(
   --disable-custom-all-reduce
   --max-model-len "$CONTEXT_LENGTH"
   --gpu-memory-utilization 0.92
-  --max-num-seqs 4
-  --max-num-batched-tokens 8192
+  --max-num-seqs "${IFV_VLLM_MAX_NUM_SEQS:-4}"
+  --max-num-batched-tokens "${IFV_VLLM_MAX_BATCHED_TOKENS:-8192}"
   --reasoning-parser qwen3
   --structured-outputs-config '{"backend":"xgrammar","reasoning_parser":"qwen3","disable_any_whitespace":true}'
   --enable-auto-tool-choice
   --tool-call-parser qwen3_coder
   --default-chat-template-kwargs '{"enable_thinking":false}'
-  --limit-mm-per-prompt '{"image":1,"video":0}'
+  --limit-mm-per-prompt '{"image":32,"video":0}'
   --enable-tokenizer-info-endpoint
   --max-log-len 4000
   --disable-uvicorn-access-log
@@ -123,6 +123,8 @@ args=(
 if [[ -n "$LORA_ADAPTER" ]]; then
   args+=(
     --enable-lora
+    --max-lora-rank 32
+    --enable-tower-connector-lora
     --lora-modules "$SERVED_NAME=$LORA_ADAPTER"
   )
 fi

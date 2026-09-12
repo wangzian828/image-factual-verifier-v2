@@ -8,6 +8,29 @@ from .psd import _validated_model_roles
 from .psd_topk import _validate_attestation
 
 
+def frozen_base_binding(manifest, base):
+    """Preserve the original dense base hashes across adapter-only rounds."""
+    base = Path(base).resolve()
+    checkpoint = Path(manifest["checkpoint"]["path"]).resolve()
+    if base == checkpoint:
+        binding = {"path": str(base), "artifacts": [item for item in manifest.get("artifacts", [])
+                    if item.get("scope") == "model"]}
+    else:
+        binding = manifest.get("base_model_binding", {})
+    if (not binding.get("path") or Path(binding["path"]).resolve() != base
+            or not binding.get("artifacts")):
+        raise ValueError("PSD adapter manifest lacks the immutable base model binding")
+    has_weights = False
+    for item in binding["artifacts"]:
+        path = (base / item["path"]).resolve()
+        if not path.is_relative_to(base) or not path.is_file() or sha256_file(path) != item["sha256"]:
+            raise ValueError("PSD frozen base model bytes changed")
+        has_weights = has_weights or path.suffix in {".safetensors", ".bin"}
+    if not has_weights:
+        raise ValueError("PSD frozen base binding contains no weight artifacts")
+    return binding
+
+
 def verify_initialization(*, datum_manifest_path, serving_profile_path,
                           checkpoint_manifest_path, model_path, adapter_path=None):
     manifest = load_json(datum_manifest_path)
@@ -36,6 +59,8 @@ def verify_initialization(*, datum_manifest_path, serving_profile_path,
                 or teacher["model"] != profile["profile_id"]):
             raise ValueError("PSD target policy differs from actual student initialization")
     checkpoint_manifest = load_json(checkpoint_manifest_path)
+    if expected_adapter:
+        frozen_base_binding(checkpoint_manifest, base)
     model_files = [item for item in checkpoint_manifest.get("artifacts", []) if item.get("scope") == "model"]
     if not model_files:
         raise ValueError("round-start manifest lacks model artifact hashes")

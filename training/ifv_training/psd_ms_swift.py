@@ -321,8 +321,8 @@ def install_ms_swift_psd_plugin() -> None:
             if not isinstance(inputs, Mapping):
                 raise ValueError("IFV PSD template requires a mapping input")
             input_ids = inputs.get("input_ids")
-            target_tokens = inputs.get("target_tokens")
-            weights = inputs.get("weights")
+            from .psd_datums import expand_datum_targets
+            target_tokens, weights = expand_datum_targets(inputs)
             topk = inputs.get("topk")
             if (
                 not isinstance(input_ids, list)

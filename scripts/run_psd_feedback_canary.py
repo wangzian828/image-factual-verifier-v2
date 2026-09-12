@@ -22,6 +22,7 @@ from ifv_training.psd_repairs import assemble_psd_repair_package
 from ifv_training.psd import build_psd_target_package
 from ifv_training.psd_datums import build_sparse_topk_package
 from ifv_training.psd_case_pool import completed_cases
+from ifv_training.psd_materialization import materialize_bank
 from scripts.run_psd_repair_driver import _parser, _run
 
 
@@ -30,15 +31,19 @@ async def run(args):
     if source == output or source in output.parents or output in source.parents:
         raise ValueError("feedback canary must be separate from the frozen source bank")
     preparation = load_json(source / "prepared.json")["preparation"]
+    run_dir = Path(preparation.get("rollout_dir") or source / "on-policy-r1")
     benchmark, split, policy, gold_path = [Path(preparation[k]) for k in (
         "benchmark", "case_split", "source_access_policy", "private_gold")]
     serving, checkpoint = args.snapshot / "serving-profile.json", args.snapshot / "checkpoint-manifest.json"
     profile = load_json(serving)
     candidates_path = source / "candidates/repair_candidates.jsonl"
     preservation_path = source / "candidates/preservation_candidates.jsonl"
-    identity = {"inputs": {str(p.resolve()): sha256_file(p) for p in (
+    input_paths = [
         source / "prepared.json", candidates_path, preservation_path, benchmark, split, policy,
-        gold_path, serving, checkpoint, source / "datums/datums.jsonl")},
+        gold_path, serving, checkpoint]
+    if (source / "datums/datums.jsonl").exists():
+        input_paths.append(source / "datums/datums.jsonl")
+    identity = {"inputs": {str(p.resolve()): sha256_file(p) for p in input_paths},
         "attempt_budget": args.attempts, "judge_model": args.judge_model,
         "selection": "all fixed original failed training cases, independent of repair outcomes"}
     marker = output / "inputs.json"
@@ -50,6 +55,16 @@ async def run(args):
         save_bound(marker, identity=identity, payload={"created": True})
     if type(args.case_concurrency) is not int or not 1 <= args.case_concurrency <= 64:
         raise ValueError("case concurrency must be 1..64")
+    progress = output / "progress.json"
+    if progress.exists() and load_json(progress).get("status") == "search_complete_datums_materialized":
+        # Completed banks (including the historical canary) are immutable and
+        # need no live model, API key, repeated judge, or repeated repair call.
+        from ifv_training.psd_preflight import verify_psd_training_input
+        gate = verify_psd_training_input(datums_path=output / "datums/datums.jsonl",
+            manifest_path=output / "datums/manifest.json", expected_topk=20, max_context=131072)
+        if not gate["passed"]:
+            raise ValueError("completed feedback bank no longer passes verification")
+        return load_json(progress)
     summary = {"status": "repairing", "training_started": False, "cases": [],
                "case_concurrency": args.case_concurrency,
                "scheduling": "completion_order_within_one_frozen_checkpoint"}
@@ -60,7 +75,7 @@ async def run(args):
         key = hashlib.sha256(candidate["candidate_id"].encode()).hexdigest()[:16]
         inputs, directory = output / "case-inputs" / key, output / "repairs" / key
         case = candidate["case_id"]
-        trace = source / "on-policy-r1" / candidate["source"]["source_trace_path"]
+        trace = run_dir / candidate["source"]["source_trace_path"]
         for name, data in (("candidate.json", candidate), ("gold.json", gold[case]),
                            ("public.json", {"case_id": case, "source_steps": trace_steps(load_json(trace))})):
             path = inputs / name
@@ -70,7 +85,7 @@ async def run(args):
             else:
                 write_json(path, data)
         cli = ["--trace", str(trace), "--candidate", str(inputs / "candidate.json"),
-            "--audit", str(source / "on-policy-r1/psd-audits" / (trace.stem + ".json")),
+            "--audit", str(run_dir / "psd-audits" / (trace.stem + ".json")),
             "--image", str(benchmark.parent / public[case]["image_path"]),
             "--gold", str(inputs / "gold.json"), "--private-context", str(inputs / "gold.json"),
             "--public-context", str(inputs / "public.json"), "--train-cases", str(split),
@@ -111,22 +126,14 @@ async def run(args):
         merge = output / "merged"
         write_jsonl(merge / "repair_candidates.jsonl", [merged_candidates[k] for k in sorted(merged_candidates)])
         write_jsonl(merge / "repair_attempts.jsonl", attempts)
-        assembly, targets, datums = output / "assembled", output / "targets", output / "datums"
-        if (datums / "manifest.json").exists():
-            from ifv_training.psd_preflight import verify_psd_training_input
-            summary["datums"] = verify_psd_training_input(datums_path=datums / "datums.jsonl",
-                manifest_path=datums / "manifest.json", expected_topk=20, max_context=131072)
-        else:
-            summary["assembly"] = assemble_psd_repair_package(
-                repair_candidates_path=merge / "repair_candidates.jsonl", repair_attempts_path=merge / "repair_attempts.jsonl",
-                preservation_candidates_path=preservation_path, output_dir=assembly)
-            summary["targets"] = build_psd_target_package(repairs_path=assembly / "repairs.jsonl",
-                preservation_path=assembly / "preservation.jsonl", output_dir=targets)
-            summary["datums"] = build_sparse_topk_package(targets_path=targets / "targets.jsonl",
-                output_dir=datums, topk=20, max_sequence_length=131072, require_both_kinds=True)
-        summary["status"] = "search_complete_datums_materialized" if (
-            summary["datums"].get("status") == "ready_for_trainer" or summary["datums"].get("passed") is True
-        ) else "search_complete_datum_gate_failed"
+        materialized = materialize_bank(output_dir=output,
+            repair_candidates=merge / "repair_candidates.jsonl", repair_attempts=merge / "repair_attempts.jsonl",
+            preservation_candidates=preservation_path, serving_profile=serving, checkpoint_manifest=checkpoint,
+            score_missing_topk=getattr(args, "score_missing_topk", False),
+            teacher_device=getattr(args, "teacher_device", "cpu"))
+        summary["materialization"] = materialized
+        summary["status"] = ("search_complete_datums_materialized" if materialized["status"] == "ready_for_trainer"
+                             else materialized["status"])
     else:
         summary["status"] = "search_complete_no_verified_repairs"
     _atomic_json(output / "progress.json", summary)
@@ -142,4 +149,6 @@ if __name__ == "__main__":
     parser.add_argument("--case-concurrency", type=int, default=1,
                         help="Bounded asynchronous case pool; keep 1 while prioritizing the main experiment")
     parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
+    parser.add_argument("--score-missing-topk", action="store_true")
+    parser.add_argument("--teacher-device", default="cpu")
     print(json.dumps(asyncio.run(run(parser.parse_args())), ensure_ascii=False, indent=2))

@@ -19,8 +19,40 @@ from .psd_modality import require_text_only_psd
 
 
 PSD_SPARSE_DATUM_SCHEMA_VERSION = "ifv-psd-sparse-topk-datum-v3"
-PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION = "ifv-psd-sparse-topk-manifest-v3"
+PSD_COMPACT_DATUM_SCHEMA_VERSION = "ifv-psd-sparse-topk-datum-v4"
+PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION = "ifv-psd-sparse-topk-manifest-v4"
 PSD_WEIGHTING_POLICY = "per_target"
+
+
+def compact_datum(datum):
+    """Store only supervised positions; long prompt zero matrices stay off disk."""
+    result = {key: value for key, value in datum.items() if key not in {"weights", "target_tokens"}}
+    result.update(schema_version=PSD_COMPACT_DATUM_SCHEMA_VERSION,
+        sparse_target_tokens=[datum["target_tokens"][index] for index in datum["loss_positions"]],
+        sparse_weights=[datum["weights"][index] for index in datum["loss_positions"]])
+    return result
+
+
+def expand_datum_targets(datum):
+    """Expand one compact row immediately before collation, not the full bank."""
+    if "sparse_target_tokens" not in datum and "sparse_weights" not in datum:
+        return datum.get("target_tokens"), datum.get("weights")
+    positions, topk = datum.get("loss_positions"), datum.get("topk")
+    length = len(datum["input_ids"])
+    if (type(topk) is not int or topk < 1 or not isinstance(positions, list) or not positions
+            or any(type(index) is not int or not 0 <= index < length for index in positions)
+            or positions != sorted(set(positions))):
+        raise ValueError("invalid compact PSD prediction positions")
+    compact_targets, compact_weights = datum.get("sparse_target_tokens"), datum.get("sparse_weights")
+    if (not isinstance(compact_targets, list) or not isinstance(compact_weights, list)
+            or len(compact_targets) != len(positions) or len(compact_weights) != len(positions)
+            or "target_tokens" in datum or "weights" in datum):
+        raise ValueError("invalid or ambiguous compact PSD target arrays")
+    targets = [[0] * topk for _ in range(length)]
+    weights = [[0.0] * topk for _ in range(length)]
+    for position, tokens, values in zip(positions, compact_targets, compact_weights, strict=True):
+        targets[position], weights[position] = tokens, values
+    return targets, weights
 
 
 def _text(value: Any) -> str:
@@ -227,14 +259,14 @@ def build_sparse_topk_package(
         kind = _text(target.get("kind"))
         source_weight = target.get("row_weight", 1.0)
         try:
-            datums.append(
+            datums.append(compact_datum(
                 build_sparse_topk_datum(
                     target,
                     topk=topk,
                     effective_row_weight=float(source_weight),
                     max_sequence_length=max_sequence_length,
                 )
-            )
+            ))
         except (KeyError, TypeError, ValueError) as exc:
             rejections.append(
                 {
@@ -257,7 +289,12 @@ def build_sparse_topk_package(
         "rejections": "rejections.jsonl",
     }
     if ready:
-        write_jsonl(output_dir / "datums.jsonl", datums)
+        # Two artifact names are useful for diagnostics, not two physical copies.
+        import os
+        try:
+            os.link(output_dir / "candidate_datums.jsonl", output_dir / "datums.jsonl")
+        except OSError:
+            write_jsonl(output_dir / "datums.jsonl", datums)
         artifacts["datums"] = "datums.jsonl"
 
     effective_mass = Counter()
@@ -277,6 +314,7 @@ def build_sparse_topk_package(
         "topk": topk,
         "max_sequence_length": max_sequence_length,
         "weighting_policy": PSD_WEIGHTING_POLICY,
+        "target_layout": "completion_positions_only",
         "aggregate_source_rebalancing": False,
         "require_both_kinds": require_both_kinds,
         "missing_source_kinds": missing_kinds,
