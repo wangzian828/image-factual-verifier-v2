@@ -42,7 +42,9 @@ explanation, especially when rejecting a nominally correct final answer.
 Return JSON only, with the four checks, earliest_error_step (integer or -1 if
 not established), and a concise evidence-based explanation in Chinese.
 The selected step must equal the earliest established recoverable error to
-pass. Include evidence: literal quotes from the source/repaired steps, with
+pass. selected_step_index is the source decision; repaired_step_index is its
+token-bound replacement after any explicitly recorded format-error retries.
+Include evidence: literal quotes from the source/repaired steps, with
 their trace name and original step_index. Positive decisions require evidence
 from BOTH source and repaired trajectories. Images are attached with SHA-256
 identifiers; inspect them when the claim depends on visual content. You may
@@ -312,13 +314,29 @@ async def judge_attempt(client, *, source, source_trace_sha256, episode, attempt
     hint = attempt["hint_record"]
     if hint["audit"]["hint_sha256"] != hashlib.sha256(hint["text"].strip().encode()).hexdigest():
         raise ValueError("PSD hint hash mismatch")
-    capture = repaired_rows[selected].get("metadata", {}).get("policy_token_capture", {})
-    for source_key, attempt_key in (("prompt_token_ids", "teacher_prompt_ids"), ("completion_token_ids", "completion_ids")):
-        if not attempt[attempt_key] or capture.get(source_key) != attempt[attempt_key]:
-            raise ValueError("PSD selected repair token binding mismatch")
+    matching = []
+    for index, row in enumerate(repaired_rows[selected:], start=selected):
+        capture = row.get("metadata", {}).get("policy_token_capture", {})
+        if (attempt["teacher_prompt_ids"]
+                and attempt["completion_ids"]
+                and capture.get("prompt_token_ids") == attempt["teacher_prompt_ids"]
+                and capture.get("completion_token_ids") == attempt["completion_ids"]):
+            matching.append(index)
+    if len(matching) != 1:
+        raise ValueError("PSD selected repair token binding mismatch")
+    repaired_index = matching[0]
+    # A parser retry is not another environment decision. It may shift the
+    # bound replacement's list index, but no valid action may be skipped.
+    for row in repaired_rows[selected:repaired_index]:
+        metadata = row.get("metadata", {})
+        if (row.get("stage") != "unified_react"
+                or row.get("action_type") != "format_error"
+                or metadata.get("psd_suffix_step") is not True):
+            raise ValueError("PSD repair binding skips a policy decision")
     images, media = review_images({"source": source, "repaired": episode}, image_path=image_path)
     packet = {"source_steps": trace_steps(source), "repaired_steps": trace_steps(episode),
-              "selected_step_index": selected, "hint": hint["text"], "private_reference": gold,
+              "selected_step_index": selected, "repaired_step_index": repaired_index,
+              "hint": hint["text"], "private_reference": gold,
               "episode_complete": episode.get("termination") == "success" and
                   repaired_rows[-1].get("stage") == "unified_judgment" and
                   repaired_rows[-1].get("action_type") == "output", "media": media}

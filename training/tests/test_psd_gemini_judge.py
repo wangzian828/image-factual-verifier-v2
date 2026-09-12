@@ -213,6 +213,60 @@ def test_judge_artifact_binds_actual_tokens_episode_and_gold(monkeypatch, tmp_pa
     assert "teacher_prompt_ids" not in json.dumps(data["review"])
 
 
+def test_judge_binds_repair_after_format_error_retry(monkeypatch, tmp_path):
+    source = {"state": {"all_steps": [
+        {"tool_result": "record says 2019"},
+        {"stage": "unified_react", "action_type": "tool_call", "tool_name": "old"},
+    ]}}
+    episode = copy.deepcopy(source)
+    episode["termination"] = "success"
+    episode["state"]["all_steps"][1:] = [
+        {"stage": "unified_react", "action_type": "format_error",
+         "metadata": {"psd_suffix_step": True, "policy_token_capture": {
+             "prompt_token_ids": [8], "completion_token_ids": [9]}}},
+        {"stage": "unified_react", "action_type": "tool_call", "tool_name": "fixed",
+         "tool_result": "compared 2018 against 2019",
+         "metadata": {"psd_suffix_step": True, "policy_token_capture": {
+             "prompt_token_ids": [1, 2], "completion_token_ids": [3, 4]}}},
+        {"stage": "unified_judgment", "action_type": "output"},
+    ]
+    hint = "Compare fields"
+    attempt = {"repair_site": {"source_step_index": 1}, "repair_step_id": "case-a:react:1",
+        "source_trace_sha256": "a" * 64, "teacher_prompt_ids": [1, 2], "completion_ids": [3, 4],
+        "hint_record": {"text": hint, "audit": {
+            "hint_sha256": hashlib.sha256(hint.encode()).hexdigest()}}}
+    response = {**{key: True for key in judge.CHECKS}, "earliest_error_step": 1,
+        "explanation": "The token-bound replacement used the observed record.",
+        "evidence": [
+            {"trace": "source", "step_index": 1, "quote": '"tool_name": "old"'},
+            {"trace": "repaired", "step_index": 2,
+             "quote": "compared 2018 against 2019"},
+        ]}
+    monkeypatch.setattr(judge, "review_images", lambda *a, **kw: ([], {}))
+    client = Client(response)
+    data = asyncio.run(judge.judge_attempt(client, source=source,
+        source_trace_sha256="a" * 64, episode=episode, attempt=attempt, gold={},
+        image_path=tmp_path / "unused", model="test-model", cache_dir=tmp_path))
+    assert data["passed"]
+    assert len(client.calls) == 1
+    material = client.calls[0]["input"][0]["text"]
+    assert '"selected_step_index": 1' in material
+    assert '"repaired_step_index": 2' in material
+
+
+def test_judge_never_skips_a_valid_policy_decision(monkeypatch, tmp_path):
+    source, episode, attempt = attempt_fixture()
+    episode["state"]["all_steps"].insert(1, {"stage": "unified_react",
+        "action_type": "tool_call", "metadata": {"psd_suffix_step": True}})
+    monkeypatch.setattr(judge, "review_images", lambda *a, **kw: ([], {}))
+    client = Client(review())
+    with pytest.raises(ValueError, match="skips a policy decision"):
+        asyncio.run(judge.judge_attempt(client, source=source,
+            source_trace_sha256="a" * 64, episode=episode, attempt=attempt, gold={},
+            image_path=tmp_path / "unused", model="test-model", cache_dir=tmp_path))
+    assert not client.calls
+
+
 @pytest.mark.parametrize("tamper", ["prefix", "tokens", "hint", "source"])
 def test_judge_refuses_changed_prefix_tokens_hint_source(tamper, tmp_path):
     source, episode, attempt = attempt_fixture()
