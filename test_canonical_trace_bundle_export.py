@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from scripts.trajectory.export_canonical_trace_bundle import (
     _verify_delivery_file,
     bind_reference_media,
 )
+from scripts.trajectory.export_attested_request_image_bundle import _distribution
 from src.trajectory.exporter import _trajectory_candidate_steps
 from src.trajectory.media_projection import project_attested_request_media
 
@@ -280,6 +282,39 @@ def test_attested_request_media_rejects_non_cumulative_requests(
             sidecar_root=tmp_path,
             expected_trace_id="episode-1",
         )
+
+
+def test_published_request_image_distribution_manifest_is_bound(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "sidecar.tar.gz"
+    archive.write_bytes(b"published-sidecar")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    manifest = tmp_path / "sidecar.tar.manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "file": archive.name,
+                "bytes": archive.stat().st_size,
+                "sha256": digest,
+                "independent_extracted_audit_passed": True,
+                "sha256sum_check_passed": True,
+                "audit": {
+                    "passed": True,
+                    "trace_count": 2,
+                    "request_count": 3,
+                    "errors_total": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _distribution(manifest, archive, digest)
+
+    assert result["archive_sha256"] == digest
+    assert result["archive_bytes"] == archive.stat().st_size
+    assert result["trace_count"] == 2
 
 
 @pytest.mark.parametrize("parent_action_type", ["output_rejected", "format_error"])

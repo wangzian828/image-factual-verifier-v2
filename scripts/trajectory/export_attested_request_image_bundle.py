@@ -107,18 +107,34 @@ def _distribution(
     source_archive_sha256: str,
 ) -> dict[str, Any]:
     value = load_json(distribution_manifest)
-    if value.get("schema_version") != EXPECTED_DISTRIBUTION_SCHEMA:
-        raise ValueError("unsupported request-image distribution manifest")
+    audit = value.get("audit")
+    audit = audit if isinstance(audit, Mapping) else value
+    published_sha = str(
+        value.get("archive_sha256") or value.get("sha256") or ""
+    ).casefold()
+    published_bytes = int(value.get("archive_bytes") or value.get("bytes") or -1)
     expected = source_archive_sha256.casefold()
     if sha256_file(source_archive) != expected:
         raise ValueError("request-image source archive SHA-256 mismatch")
-    if str(value.get("archive_sha256", "")).casefold() != expected:
+    if published_sha != expected:
         raise ValueError("distribution manifest does not bind the source archive")
-    if int(value.get("archive_bytes", -1)) != source_archive.stat().st_size:
+    if published_bytes != source_archive.stat().st_size:
         raise ValueError("distribution manifest archive size mismatch")
-    if value.get("passed") is not True or int(value.get("errors_total", -1)) != 0:
+    if audit.get("passed") is not True or int(audit.get("errors_total", -1)) != 0:
         raise ValueError("request-image distribution audit did not pass")
-    return value
+    if "audit" in value and (
+        value.get("independent_extracted_audit_passed") is not True
+        or value.get("sha256sum_check_passed") is not True
+    ):
+        raise ValueError("published extracted sidecar checks did not pass")
+    return {
+        "schema_version": str(
+            value.get("schema_version") or EXPECTED_DISTRIBUTION_SCHEMA
+        ),
+        "archive_sha256": published_sha,
+        "archive_bytes": published_bytes,
+        **dict(audit),
+    }
 
 
 def _request_bindings(root: Path) -> tuple[dict[str, list[dict[str, Any]]], int]:
