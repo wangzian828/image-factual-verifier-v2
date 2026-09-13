@@ -16,6 +16,7 @@ from src.orchestrator.react_runtime import (
 )
 from src.orchestrator.tool_result import parse_tool_result
 from src.trajectory.media_projection import (
+    TrajectoryMediaProjection,
     image_markers,
     project_trajectory_media,
 )
@@ -291,8 +292,7 @@ def _initial_observation_packet(trace: Mapping[str, Any]) -> str:
         "<image>\n"
         "Image factual verification episode. Use the supplied image, "
         "observations, and subsequent tool responses as context. Generate only "
-        "the next policy message when it is your turn.\n\n"
-        + canonical_json(payload)
+        "the next policy message when it is your turn.\n\n" + canonical_json(payload)
     )
 
 
@@ -381,8 +381,7 @@ def _trajectory_candidate_steps(
             and isinstance(step.get("output"), Mapping)
             and all(
                 key in step["output"]
-                and _mapping(trace.get("judgment")).get(key)
-                == step["output"][key]
+                and _mapping(trace.get("judgment")).get(key) == step["output"][key]
                 for key in (
                     "verdict",
                     "confidence",
@@ -392,9 +391,7 @@ def _trajectory_candidate_steps(
                 )
             )
         ):
-            parent_id = str(
-                metadata.get("parent_context_request_id", "")
-            ).strip()
+            parent_id = str(metadata.get("parent_context_request_id", "")).strip()
             inherited_input = rejected_judgment_inputs.get(parent_id)
             if inherited_input is not None:
                 recovered_step = dict(step)
@@ -462,6 +459,7 @@ def export_trajectory_sft_example(
     tokenizer: TokenizerAdapter | None = None,
     source_metadata: Mapping[str, Any] | None = None,
     require_provider_thought: bool = True,
+    media_projection: TrajectoryMediaProjection | None = None,
 ) -> TrajectorySFTExample | ActionOnlyTrajectoryExample:
     """Export one complete accepted episode as one prefix-preserving SFT row.
 
@@ -473,9 +471,7 @@ def export_trajectory_sft_example(
     """
 
     state = _mapping(trace.get("state"))
-    if str(trace.get("input_mode") or state.get("input_mode") or "") != (
-        "image_only"
-    ):
+    if str(trace.get("input_mode") or state.get("input_mode") or "") != ("image_only"):
         raise ValueError("trajectory SFT exporter accepts image-only traces only")
     policy_version = str(
         trace.get("decision_policy_version")
@@ -483,7 +479,9 @@ def export_trajectory_sft_example(
         or ""
     )
     if policy_version != "unified-react-v1":
-        raise ValueError("trajectory SFT exporter received an unsupported decision policy")
+        raise ValueError(
+            "trajectory SFT exporter received an unsupported decision policy"
+        )
     _unified_react_quality_gate(
         trace,
         state,
@@ -492,9 +490,7 @@ def export_trajectory_sft_example(
 
     tokenizer = tokenizer or Utf8ByteTokenizer()
     source_metadata = source_metadata or {}
-    episode_id = str(
-        trace.get("image_id") or state.get("image_id") or ""
-    ).strip()
+    episode_id = str(trace.get("image_id") or state.get("image_id") or "").strip()
     runtime_case = _mapping(state.get("runtime_case"))
     case_id = str(runtime_case.get("case_id") or episode_id).strip()
     image_path = str(
@@ -504,9 +500,7 @@ def export_trajectory_sft_example(
         or ""
     ).strip()
     if not episode_id or not case_id or not image_path:
-        raise ValueError(
-            "canonical trace requires episode ID, case ID, and image path"
-        )
+        raise ValueError("canonical trace requires episode ID, case ID, and image path")
 
     # This is the provider-neutral form consumed by the Qwen/ms-swift
     # adapter.  It intentionally mirrors the verified external sample:
@@ -527,15 +521,14 @@ def export_trajectory_sft_example(
     tool_schemas: dict[str, dict[str, Any]] = {}
     tool_call_count = 0
     candidates = _trajectory_candidate_steps(trace)
-    media_projection = project_trajectory_media(
-        trace,
-        candidate_steps=[step for _, step, _ in candidates],
-        fallback_image_path=image_path,
-    )
-    if not media_projection.initial_images:
-        raise ValueError(
-            "trajectory SFT export cannot recover the initial image"
+    if media_projection is None:
+        media_projection = project_trajectory_media(
+            trace,
+            candidate_steps=[step for _, step, _ in candidates],
+            fallback_image_path=image_path,
         )
+    if not media_projection.initial_images:
+        raise ValueError("trajectory SFT export cannot recover the initial image")
     pending_tool_response: str | None = None
     pending_tool_step_index: int | None = None
     previous_example_type = ""
@@ -555,9 +548,7 @@ def export_trajectory_sft_example(
             example_type=example_type,
             policy_input=policy_input,
         )
-        stage_changed = (
-            position > 0 and example_type != previous_example_type
-        )
+        stage_changed = position > 0 and example_type != previous_example_type
         if position == 0:
             messages[1]["content"] += "\n\n" + initial_stage_packet
         if pending_tool_response is not None:
@@ -566,9 +557,7 @@ def export_trajectory_sft_example(
                 [],
             )
             if projected_images:
-                pending_tool_response += (
-                    "\n\n" + image_markers(len(projected_images))
-                )
+                pending_tool_response += "\n\n" + image_markers(len(projected_images))
             messages.append(
                 {
                     "role": "tool_response",
@@ -615,7 +604,9 @@ def export_trajectory_sft_example(
             executed_tool_name = str(step.get("tool_name", "")).strip()
             proposed_tool_name = str(policy_action.get("name", "")).strip()
             if not executed_tool_name:
-                raise ValueError("react trajectory action lacks recorded executed tool name")
+                raise ValueError(
+                    "react trajectory action lacks recorded executed tool name"
+                )
             if proposed_tool_name and proposed_tool_name != executed_tool_name:
                 raise ValueError(
                     "react trajectory proposal and executed tool names disagree"
@@ -675,9 +666,8 @@ def export_trajectory_sft_example(
         else:
             answer = canonical_json(policy_action)
             assistant_content = (
-                (_qwen_think_block(thought) + "\n\n" if thought else "")
-                + _qwen_answer_block(answer)
-            )
+                _qwen_think_block(thought) + "\n\n" if thought else ""
+            ) + _qwen_answer_block(answer)
             messages.append(
                 {
                     "role": "assistant",
@@ -687,15 +677,13 @@ def export_trajectory_sft_example(
         previous_example_type = example_type
 
     if pending_tool_response is not None:
-        raise ValueError("trajectory ended after a tool call without a next policy turn")
+        raise ValueError(
+            "trajectory ended after a tool call without a next policy turn"
+        )
 
     if len(messages) <= 2:
         raise ValueError("trajectory SFT export found no supervised policy turns")
-    tools = (
-        canonical_json(list(tool_schemas.values()))
-        if tool_schemas
-        else ""
-    )
+    tools = canonical_json(list(tool_schemas.values())) if tool_schemas else ""
     token_payload = {"messages": messages}
     if tools:
         token_payload["tools"] = tools
@@ -703,8 +691,7 @@ def export_trajectory_sft_example(
     example_payload = {
         "trajectory_version": (
             "ifv-trajectory-action-only-v1"
-            if policy_version == "unified-react-v1"
-            and not require_provider_thought
+            if policy_version == "unified-react-v1" and not require_provider_thought
             else "ifv-trajectory-sft-v3"
         ),
         "episode_id": episode_id,
@@ -725,10 +712,7 @@ def export_trajectory_sft_example(
         "message_count": len(messages),
         "tool_call_count": tool_call_count,
     }
-    if (
-        policy_version == "unified-react-v1"
-        and not require_provider_thought
-    ):
+    if policy_version == "unified-react-v1" and not require_provider_thought:
         return ActionOnlyTrajectoryExample(**example_payload)
     return TrajectorySFTExample(**example_payload)
 
@@ -738,6 +722,7 @@ def export_trajectory_action_only_example(
     *,
     tokenizer: TokenizerAdapter | None = None,
     source_metadata: Mapping[str, Any] | None = None,
+    media_projection: TrajectoryMediaProjection | None = None,
 ) -> ActionOnlyTrajectoryExample:
     """Export a unified trace with executable actions but no thought targets."""
 
@@ -746,11 +731,10 @@ def export_trajectory_action_only_example(
         tokenizer=tokenizer,
         source_metadata=source_metadata,
         require_provider_thought=False,
+        media_projection=media_projection,
     )
     if not isinstance(exported, ActionOnlyTrajectoryExample):
-        raise ValueError(
-            "action-only export is reserved for unified-react-v1 traces"
-        )
+        raise ValueError("action-only export is reserved for unified-react-v1 traces")
     return exported
 
 
@@ -791,9 +775,7 @@ def _unified_react_quality_gate(
         and is_unified_react_runtime_budget_action(step)
     ]
     if len(actions) < 1:
-        raise ValueError(
-            "unified-react trace requires at least one ReAct action"
-        )
+        raise ValueError("unified-react trace requires at least one ReAct action")
     if any(not isinstance(step.get("tool_args"), Mapping) for step in actions):
         raise ValueError(
             "unified-react trace requires recorded executed tool arguments per action"
@@ -840,9 +822,7 @@ def unified_react_training_buckets(
         or ""
     )
     if policy_version != "unified-react-v1":
-        raise ValueError(
-            "unified training buckets accept unified-react-v1 traces only"
-        )
+        raise ValueError("unified training buckets accept unified-react-v1 traces only")
     _unified_react_quality_gate(
         trace,
         state,
@@ -872,9 +852,7 @@ def export_policy_examples(
     """Export actual model-visible requests/actions from one canonical trace."""
 
     state = _mapping(trace.get("state"))
-    if str(trace.get("input_mode") or state.get("input_mode") or "") != (
-        "image_only"
-    ):
+    if str(trace.get("input_mode") or state.get("input_mode") or "") != ("image_only"):
         raise ValueError("policy exporter accepts image-only traces only")
     policy_version = str(
         trace.get("decision_policy_version")
@@ -887,9 +865,7 @@ def export_policy_examples(
 
     tokenizer = tokenizer or Utf8ByteTokenizer()
     source_metadata = source_metadata or {}
-    episode_id = str(
-        trace.get("image_id") or state.get("image_id") or ""
-    ).strip()
+    episode_id = str(trace.get("image_id") or state.get("image_id") or "").strip()
     if not episode_id:
         raise ValueError("canonical trace requires image_id")
 
@@ -942,9 +918,7 @@ def export_policy_examples(
         )
         examples.append(
             PolicyExample(
-                trajectory_version=(
-                    "ifv-policy-v3"
-                ),
+                trajectory_version=("ifv-policy-v3"),
                 tokenizer_id=tokenizer.tokenizer_id,
                 episode_id=episode_id,
                 step_id=step_id,
@@ -966,9 +940,7 @@ def export_policy_examples(
                 policy_action=policy_action,
                 policy_input_token_ids=input_ids,
                 policy_action_token_ids=action_ids,
-                policy_action_loss_mask=[
-                    1 if trainable else 0 for _ in action_ids
-                ],
+                policy_action_loss_mask=[1 if trainable else 0 for _ in action_ids],
                 action_valid=action_valid,
                 terminated=terminated,
                 fatal_boundary=fatal_boundary,
@@ -978,8 +950,5 @@ def export_policy_examples(
 
 
 def examples_as_jsonl(examples: Iterable[PolicyExample]) -> str:
-    lines = [
-        item.model_dump_json(exclude_none=False)
-        for item in examples
-    ]
+    lines = [item.model_dump_json(exclude_none=False) for item in examples]
     return "\n".join(lines) + ("\n" if lines else "")

@@ -53,14 +53,11 @@ def project_trajectory_media(
         media, missing = _request_media(runtime_root, request_id)
         request_media.append(media)
         projection.missing.extend(
-            f"step[{step_index}] request {request_id}: {item}"
-            for item in missing
+            f"step[{step_index}] request {request_id}: {item}" for item in missing
         )
 
     if request_media:
-        projection.initial_images.extend(
-            _new_data_urls(request_media[0], seen_hashes)
-        )
+        projection.initial_images.extend(_new_data_urls(request_media[0], seen_hashes))
 
     if not projection.initial_images:
         fallback = _fallback_data_url(fallback_image_path)
@@ -87,6 +84,147 @@ def project_trajectory_media(
             projection.images_after_step[previous_step_index] = newly_visible
 
     return projection
+
+
+def project_attested_request_media(
+    *,
+    candidate_steps: Sequence[tuple[int, Mapping[str, Any], str]],
+    request_bindings: Sequence[Mapping[str, Any]],
+    sidecar_root: Path,
+    expected_trace_id: str,
+    digest_cache: dict[Path, str] | None = None,
+) -> TrajectoryMediaProjection:
+    """Project a frozen request-image sidecar into one canonical episode.
+
+    Each sidecar row describes the complete ordered image sequence supplied to
+    one provider request.  Requests in these Agent traces are cumulative, so a
+    later request must begin with the exact sequence from the preceding
+    trainable request.  Only the newly appended suffix is attached after the
+    preceding tool response.  Comparing ordered prefixes, rather than globally
+    deduplicating hashes, preserves intentional repeated image slots.
+    """
+
+    root = sidecar_root.expanduser().resolve()
+    media_root = (root / "media").resolve()
+    if not media_root.is_dir():
+        raise ValueError(f"attested media directory is missing: {media_root}")
+    cache = digest_cache if digest_cache is not None else {}
+    by_request: dict[str, Mapping[str, Any]] = {}
+    for row in request_bindings:
+        trace_id = str(row.get("trace_id", "")).strip()
+        request_id = str(row.get("context_request_id", "")).strip()
+        if trace_id != expected_trace_id or not request_id:
+            raise ValueError("request-image binding identity mismatch")
+        if request_id in by_request:
+            raise ValueError(f"duplicate request-image binding: {request_id}")
+        by_request[request_id] = row
+
+    request_sequences: list[list[str]] = []
+    request_digests: list[list[str]] = []
+    for raw_step_index, step, _ in candidate_steps:
+        metadata = step.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        request_id = str(metadata.get("context_request_id", "")).strip()
+        recovered_parent = (
+            str(metadata.get("sft_policy_input_provenance", ""))
+            == "rejected_parent_request"
+        )
+        if not request_id and recovered_parent:
+            request_id = str(metadata.get("parent_context_request_id", "")).strip()
+        binding = by_request.get(request_id)
+        if binding is None:
+            raise ValueError(
+                "trainable policy request lacks an attested image binding: "
+                f"step={raw_step_index} request={request_id!r}"
+            )
+        if not recovered_parent:
+            bound_steps = [
+                int(value) for value in binding.get("trace_step_indices", [])
+            ]
+            if raw_step_index not in bound_steps:
+                raise ValueError(
+                    "request-image binding points at a different trace step: "
+                    f"step={raw_step_index} request={request_id}"
+                )
+        paths, digests = _attested_request_images(
+            binding,
+            root=root,
+            media_root=media_root,
+            digest_cache=cache,
+        )
+        request_sequences.append(paths)
+        request_digests.append(digests)
+
+    if not request_sequences or not request_sequences[0]:
+        raise ValueError("first trainable request has no attested image")
+    projection = TrajectoryMediaProjection(initial_images=list(request_sequences[0]))
+    previous_paths = request_sequences[0]
+    previous_digests = request_digests[0]
+    for candidate_index in range(1, len(request_sequences)):
+        current_paths = request_sequences[candidate_index]
+        current_digests = request_digests[candidate_index]
+        if current_digests[: len(previous_digests)] != previous_digests:
+            raise ValueError(
+                "attested request images are not a cumulative ordered prefix: "
+                f"candidate={candidate_index}"
+            )
+        preceding_step = candidate_steps[candidate_index - 1][1]
+        if len(current_paths) > len(previous_paths):
+            if str(preceding_step.get("action_type", "")) != "tool_call":
+                raise ValueError(
+                    "new request images do not follow a tool-call observation"
+                )
+            projection.images_after_step[candidate_index - 1] = current_paths[
+                len(previous_paths) :
+            ]
+        previous_paths = current_paths
+        previous_digests = current_digests
+    return projection
+
+
+def _attested_request_images(
+    binding: Mapping[str, Any],
+    *,
+    root: Path,
+    media_root: Path,
+    digest_cache: dict[Path, str],
+) -> tuple[list[str], list[str]]:
+    raw_images = binding.get("images")
+    if not isinstance(raw_images, list) or not raw_images:
+        raise ValueError("request-image binding has no ordered images")
+    images = sorted(
+        (item for item in raw_images if isinstance(item, Mapping)),
+        key=lambda item: int(item.get("image_slot_index", -1)),
+    )
+    slots = [int(item.get("image_slot_index", -1)) for item in images]
+    if slots != list(range(len(images))):
+        raise ValueError("request-image slots must be contiguous and zero-based")
+    paths: list[str] = []
+    digests: list[str] = []
+    for image in images:
+        expected = str(image.get("sha256", "")).strip().casefold()
+        relative = Path(str(image.get("file", "")))
+        path = (root / relative).resolve()
+        if (
+            len(expected) != 64
+            or any(value not in "0123456789abcdef" for value in expected)
+            or relative.is_absolute()
+            or path == media_root
+            or media_root not in path.parents
+            or not path.is_file()
+        ):
+            raise ValueError(
+                "attested request image escapes, is missing, or lacks a hash"
+            )
+        actual = digest_cache.get(path)
+        if actual is None:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            digest_cache[path] = actual
+        if actual != expected or path.stem.casefold() != expected:
+            raise ValueError(f"attested request image hash mismatch: {relative}")
+        paths.append(str(path))
+        digests.append(expected)
+    return paths, digests
 
 
 def image_markers(count: int) -> str:
@@ -156,9 +294,7 @@ def _descriptor_data_url(
 ) -> tuple[tuple[str, str] | None, str]:
     relative = str(descriptor.get("artifact_path", "")).strip()
     expected_hash = str(descriptor.get("sha256", "")).strip().lower()
-    media_type = str(
-        descriptor.get("media_type", "application/octet-stream")
-    ).strip()
+    media_type = str(descriptor.get("media_type", "application/octet-stream")).strip()
     if not relative:
         return None, "media descriptor has no artifact_path"
     path = (artifact_root / relative).resolve()
@@ -176,8 +312,7 @@ def _descriptor_data_url(
         )
     return (
         actual_hash,
-        f"data:{media_type};base64,"
-        + base64.b64encode(content).decode("ascii"),
+        f"data:{media_type};base64," + base64.b64encode(content).decode("ascii"),
     ), ""
 
 
@@ -199,8 +334,7 @@ def _fallback_data_url(image_path: str) -> tuple[str, str] | None:
     digest = hashlib.sha256(content).hexdigest()
     return (
         digest,
-        f"data:{media_type};base64,"
-        + base64.b64encode(content).decode("ascii"),
+        f"data:{media_type};base64," + base64.b64encode(content).decode("ascii"),
     )
 
 

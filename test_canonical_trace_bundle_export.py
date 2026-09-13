@@ -11,6 +11,7 @@ from scripts.trajectory.export_canonical_trace_bundle import (
     bind_reference_media,
 )
 from src.trajectory.exporter import _trajectory_candidate_steps
+from src.trajectory.media_projection import project_attested_request_media
 
 
 def _media(root: Path, content: bytes) -> str:
@@ -139,6 +140,148 @@ def test_delivery_level_checksum_rejects_modified_bytes(tmp_path: Path) -> None:
         )
 
 
+def _request_binding(
+    root: Path,
+    *,
+    request_id: str,
+    step_index: int,
+    contents: list[bytes],
+) -> dict:
+    images = []
+    for index, content in enumerate(contents):
+        digest = hashlib.sha256(content).hexdigest()
+        path = root / "media" / f"{digest}.jpg"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        images.append(
+            {
+                "image_slot_index": index,
+                "sha256": digest,
+                "file": f"media/{path.name}",
+            }
+        )
+    return {
+        "trace_id": "episode-1",
+        "context_request_id": request_id,
+        "trace_step_indices": [step_index],
+        "images": images,
+    }
+
+
+def test_attested_request_media_preserves_ordered_repeated_slots(
+    tmp_path: Path,
+) -> None:
+    steps = [
+        (
+            0,
+            {
+                "action_type": "tool_call",
+                "metadata": {"context_request_id": "req-1"},
+            },
+            "react",
+        ),
+        (
+            2,
+            {
+                "action_type": "tool_call",
+                "metadata": {"context_request_id": "req-2"},
+            },
+            "react",
+        ),
+        (
+            4,
+            {
+                "action_type": "output",
+                "metadata": {"context_request_id": "req-3"},
+            },
+            "judgment",
+        ),
+    ]
+    bindings = [
+        _request_binding(
+            tmp_path,
+            request_id="req-1",
+            step_index=0,
+            contents=[b"initial"],
+        ),
+        _request_binding(
+            tmp_path,
+            request_id="req-2",
+            step_index=2,
+            contents=[b"initial", b"candidate", b"candidate"],
+        ),
+        _request_binding(
+            tmp_path,
+            request_id="req-3",
+            step_index=4,
+            contents=[b"initial", b"candidate", b"candidate", b"crop"],
+        ),
+    ]
+
+    projection = project_attested_request_media(
+        candidate_steps=steps,
+        request_bindings=bindings,
+        sidecar_root=tmp_path,
+        expected_trace_id="episode-1",
+    )
+
+    assert [Path(value).read_bytes() for value in projection.initial_images] == [
+        b"initial"
+    ]
+    assert [Path(value).read_bytes() for value in projection.images_after_step[0]] == [
+        b"candidate",
+        b"candidate",
+    ]
+    assert [Path(value).read_bytes() for value in projection.images_after_step[1]] == [
+        b"crop"
+    ]
+
+
+def test_attested_request_media_rejects_non_cumulative_requests(
+    tmp_path: Path,
+) -> None:
+    steps = [
+        (
+            0,
+            {
+                "action_type": "tool_call",
+                "metadata": {"context_request_id": "req-1"},
+            },
+            "react",
+        ),
+        (
+            2,
+            {
+                "action_type": "output",
+                "metadata": {"context_request_id": "req-2"},
+            },
+            "judgment",
+        ),
+    ]
+    bindings = [
+        _request_binding(
+            tmp_path,
+            request_id="req-1",
+            step_index=0,
+            contents=[b"initial", b"first"],
+        ),
+        _request_binding(
+            tmp_path,
+            request_id="req-2",
+            step_index=2,
+            contents=[b"initial", b"different"],
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="cumulative ordered prefix"):
+        project_attested_request_media(
+            candidate_steps=steps,
+            request_bindings=bindings,
+            sidecar_root=tmp_path,
+            expected_trace_id="episode-1",
+        )
+
+
 @pytest.mark.parametrize("parent_action_type", ["output_rejected", "format_error"])
 def test_forced_judgment_correction_recovers_parent_policy_input(
     parent_action_type: str,
@@ -190,10 +333,7 @@ def test_forced_judgment_correction_recovers_parent_policy_input(
     assert example_type == "judgment"
     assert step["metadata"]["policy_input"] == rejected_input
     assert step["metadata"]["policy_action"] == corrected
-    assert (
-        step["metadata"]["sft_policy_input_provenance"]
-        == "rejected_parent_request"
-    )
+    assert step["metadata"]["sft_policy_input_provenance"] == "rejected_parent_request"
     assert "policy_input" not in trace["state"]["all_steps"][1]["metadata"]
 
 
