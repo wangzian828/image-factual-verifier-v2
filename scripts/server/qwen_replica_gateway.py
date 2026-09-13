@@ -1,9 +1,15 @@
-"""Round-robin gateway for independent OpenAI-compatible Qwen replicas.
+"""Load-aware gateway for independent OpenAI-compatible Qwen replicas.
 
 This process is intentionally small: it exposes one local OpenAI-compatible
 endpoint and forwards each non-streaming request to one healthy single-GPU
 replica.  It is useful on hosts where a model fits on one GPU but the available
 serving backend cannot continuously batch that model across several GPUs.
+
+Agent requests have a heavy-tailed duration distribution. Blind round-robin
+therefore accumulates a queue behind a replica that happened to receive several
+long generations while other replicas drain. The gateway tracks requests that
+have not yet returned and always selects a least-loaded replica, using a rotating
+cursor only to break ties.
 """
 
 from __future__ import annotations
@@ -37,6 +43,43 @@ REQUEST_TIMEOUT_SECONDS = max(
     float(os.environ.get("QWEN_REPLICA_GATEWAY_TIMEOUT_SECONDS", "900")),
 )
 _counter = itertools.count()
+_inflight = [0 for _ in REPLICA_URLS]
+
+
+def _acquire_replica(excluded: set[int] | None = None) -> tuple[int, str]:
+    """Reserve a least-loaded replica without yielding the event loop.
+
+    Uvicorn runs this gateway in one event loop. Selection and increment contain
+    no ``await``, so another request cannot observe a selected replica before its
+    reservation is recorded.
+    """
+
+    excluded = excluded or set()
+    candidates = [
+        index for index in range(len(REPLICA_URLS)) if index not in excluded
+    ]
+    if not candidates:
+        raise RuntimeError("no Qwen replica remains available for this request")
+    minimum = min(_inflight[index] for index in candidates)
+    start = next(_counter) % len(REPLICA_URLS)
+    selected = next(
+        index
+        for offset in range(len(REPLICA_URLS))
+        if (index := (start + offset) % len(REPLICA_URLS)) in candidates
+        and _inflight[index] == minimum
+    )
+    _inflight[selected] += 1
+    return selected, REPLICA_URLS[selected]
+
+
+def _release_replica(index: int) -> None:
+    if _inflight[index] <= 0:
+        raise RuntimeError(f"Qwen replica {index} has no in-flight reservation")
+    _inflight[index] -= 1
+
+
+def _replica_loads() -> list[int]:
+    return list(_inflight)
 
 
 @asynccontextmanager
@@ -125,12 +168,12 @@ async def _request_replica(
 ) -> httpx.Response:
     payload = _normalize_request_body(request, await request.body())
     headers = _forward_headers(request)
-    start = next(_counter) % len(REPLICA_URLS)
     attempts = len(REPLICA_URLS) if retry_transport_once else 1
     failures: list[str] = []
+    excluded: set[int] = set()
 
-    for offset in range(attempts):
-        replica = REPLICA_URLS[(start + offset) % len(REPLICA_URLS)]
+    for _ in range(attempts):
+        index, replica = _acquire_replica(excluded)
         try:
             response = await request.app.state.http.request(
                 request.method,
@@ -140,7 +183,10 @@ async def _request_replica(
             )
         except httpx.TransportError as exc:
             failures.append(f"{replica}: {type(exc).__name__}")
+            excluded.add(index)
             continue
+        finally:
+            _release_replica(index)
         response.headers["x-ifv-qwen-replica"] = replica
         return response
 
@@ -168,8 +214,12 @@ async def health(request: Request) -> dict[str, object]:
     return {
         "status": "ok",
         "replicas": [
-            {"url": replica, "healthy": healthy}
-            for replica, healthy in zip(REPLICA_URLS, status)
+            {"url": replica, "healthy": healthy, "inflight": inflight}
+            for replica, healthy, inflight in zip(
+                REPLICA_URLS,
+                status,
+                _replica_loads(),
+            )
         ],
     }
 
