@@ -47,7 +47,7 @@ def command_from_benchmark(
         raise ValueError('duplicate benchmark options')
     required = {'--model_type':'qwen3_5', '--tuner_type':'full', '--fsdp':'fsdp2', '--sequence_parallel_size':'4',
         '--max_length':'131072', '--packing':'true', '--packing_length':'120000',
-        '--padding_free':'true', '--attn_impl':'flash_attn', '--strict':'true',
+        '--padding_free':'true', '--attn_impl':'flash_attn',
         '--freeze_llm':'false', '--freeze_vit':'false', '--freeze_aligner':'false',
         '--per_device_train_batch_size':'1', '--gradient_accumulation_steps':'1',
         '--truncation_strategy':'delete', '--loss_scale':'ignore_empty_think',
@@ -56,7 +56,7 @@ def command_from_benchmark(
         '--torch_dtype':'bfloat16', '--bf16':'true', '--use_logits_to_keep':'false',
         '--lazy_tokenize':'false', '--learning_rate':'1e-5'}
     if any(options.get(k) != v for k, v in required.items()):
-        raise ValueError('benchmark is not the accepted H20 SP4/64K full-parameter configuration')
+        raise ValueError('benchmark is not the accepted H20 SP4/120K full-parameter configuration')
     if any(k in options for k in ('--resume_from_checkpoint', '--adapters', '--val_dataset')):
         raise ValueError('unexpected adapter/resume/validation option')
     if save_only_model:
@@ -81,6 +81,7 @@ def command_from_benchmark(
     if not SFT_AGENT_PLUGIN.is_file():
         raise ValueError('missing IFV Agent SFT loss-scale plugin')
     options.update({'--dataset':str(train), '--output_dir':str(output),
+        '--strict':'true',
         '--max_steps':'-1', '--num_train_epochs':'1',
         '--load_best_model_at_end':'false',
         '--loss_scale':'ifv_agent+ignore_empty_think',

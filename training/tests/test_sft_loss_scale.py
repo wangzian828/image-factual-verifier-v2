@@ -80,7 +80,6 @@ def test_formal_h20_command_replaces_historical_loss_with_verified_plugin(
         "--packing_length": "120000",
         "--padding_free": "true",
         "--attn_impl": "flash_attn",
-        "--strict": "true",
         "--freeze_llm": "false",
         "--freeze_vit": "false",
         "--freeze_aligner": "false",
@@ -114,6 +113,7 @@ def test_formal_h20_command_replaces_historical_loss_with_verified_plugin(
     options = dict(zip(command[2::2], command[3::2]))
 
     assert options["--loss_scale"] == "ifv_agent+ignore_empty_think"
+    assert options["--strict"] == "true"
     assert options["--external_plugins"] == str(planner.SFT_AGENT_PLUGIN)
     assert options["--save_only_model"] == "true"
     assert options["--save_steps"] == "400"
