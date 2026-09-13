@@ -47,6 +47,7 @@ def test_sft_launcher_loads_the_loss_scale_plugin_and_h20_profile() -> None:
     ).read_text(encoding="utf-8")
 
     assert "--external_plugins" in launcher
+    assert '--model_type "$IFV_MODEL_FAMILY"' in launcher
     assert "IFV_PACKING_LENGTH requires IFV_PACKING=true" in launcher
     assert "trainer_truncation_strategy=delete" in launcher
     assert "--save_only_model" in launcher

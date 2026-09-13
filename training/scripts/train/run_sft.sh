@@ -233,6 +233,7 @@ fi
 args=(
   swift sft
   --model "$IFV_MODEL_ID"
+  --model_type "$IFV_MODEL_FAMILY"
   "${dataset_args[@]}"
   --split_dataset_ratio 0
   --strict true
