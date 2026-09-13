@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 load_dotenv()
 
 from src.eval.agent_private_gold import (
+    AGENT_PRIVATE_GOLD_PROJECTION_SCHEMA_VERSION,
     agent_candidate_answer,
     build_agent_private_gold_candidate,
 )
@@ -403,7 +404,20 @@ async def _run(args: argparse.Namespace) -> int:
                 "image",
                 "private_construction_gold",
                 "candidate_answer",
-                "supporting_trace_material",
+                "complete_semantic_agent_output",
+                "complete_tool_action_history",
+                "complete_tool_observations",
+                "structured_trace_material_when_present",
+            ],
+            "agent_projection_schema_version": (
+                AGENT_PRIVATE_GOLD_PROJECTION_SCHEMA_VERSION
+            ),
+            "agent_projection_exclusions": [
+                "embedded_image_or_binary_payloads",
+                "raw_html",
+                "repeated_policy_inputs",
+                "hidden_native_reasoning_artifacts",
+                "transport_metadata",
             ],
         },
     )

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from src.eval.agent_private_gold import (
+    AGENT_PRIVATE_GOLD_PROJECTION_SCHEMA_VERSION,
     agent_candidate_answer,
     build_agent_private_gold_candidate,
 )
@@ -150,6 +152,74 @@ def test_agent_private_gold_projection_keeps_raw_history_runtime() -> None:
     assert candidate["verdict_basis"]["unresolved_gaps"] == [
         "The venue was not independently checked."
     ]
+    assert candidate["projection_schema_version"] == (
+        AGENT_PRIVATE_GOLD_PROJECTION_SCHEMA_VERSION
+    )
+    assert candidate["complete_verdict_basis"]["observation_ids"] == [
+        "observation-1"
+    ]
+    assert candidate["terminal_judgment"]["verdict"] == "fake"
+
+
+def test_agent_private_gold_projection_does_not_clip_semantic_tool_results() -> None:
+    trace = _trace()
+    long_evidence = "decisive evidence " + "x" * 9000
+    trace["state"]["all_steps"][0]["tool_result"] = json.dumps(
+        {"status": "success", "evidence": long_evidence}
+    )
+    trace["state"]["all_steps"].append(
+        {
+            "stage": "unified_react",
+            "action_type": "tool_call",
+            "tool_name": "finish_investigation",
+            "tool_args": {"rationale": "Evidence collection is complete."},
+            "tool_result": '{"status":"success"}',
+            "metadata": {"function_call_id": "finish-1"},
+        }
+    )
+
+    candidate = build_agent_private_gold_candidate(trace)
+
+    assert candidate["raw_observations"][0]["observation"]["evidence"] == (
+        long_evidence
+    )
+    assert candidate["raw_observations"][-1]["is_terminal_action"] is True
+
+
+def test_agent_private_gold_projection_restores_legacy_structured_material() -> None:
+    trace = _trace()
+    trace["verdict_basis"].update(
+        {
+            "claim_ids": ["claim-1"],
+            "finding_ids": ["finding-1"],
+            "evidence_ids": ["evidence-1"],
+        }
+    )
+    trace["state"]["investigation_state"].update(
+        {
+            "target_facts": [
+                {"claim_id": "claim-1", "statement": "A won the final."}
+            ],
+            "findings": [
+                {"finding_id": "finding-1", "summary": "B actually won."}
+            ],
+            "evidence": [
+                {
+                    "evidence_id": "evidence-1",
+                    "successful_call": True,
+                    "exact_text": "B won the final.",
+                }
+            ],
+        }
+    )
+
+    candidate = build_agent_private_gold_candidate(trace)
+
+    assert candidate["selected_evidence"][0]["exact_text"] == "B won the final."
+    assert candidate["selected_findings"][0]["summary"] == "B actually won."
+    assert candidate["selected_target_facts"][0]["statement"] == (
+        "A won the final."
+    )
 
 
 def test_agent_candidate_answer_uses_terminal_assessment_before_internal_target() -> None:
