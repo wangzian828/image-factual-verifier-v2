@@ -146,7 +146,7 @@ def run(args):
                     "--run-dir", str(args.run_dir), "--results-path", str(selection),
                     "--manifest", str(args.manifest), "--private-gold-sidecar", str(args.gold),
                     "--output-dir", str(directory), "--judge-model", args.judge_model,
-                    "--thinking-level", args.thinking_level, "--max-output-tokens", "8192",
+                    "--thinking-level", args.thinking_level, "--max-output-tokens", "32768",
                     "--timeout", "240", "--max-retries", "2", "--concurrency", str(concurrency)]
                 with (output / f"judge-{batch}.log").open("ab") as log:
                     subprocess.run(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)

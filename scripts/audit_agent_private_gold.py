@@ -567,7 +567,7 @@ def main() -> int:
         choices=("low", "medium", "high"),
         default="high",
     )
-    parser.add_argument("--max-output-tokens", type=int, default=8192)
+    parser.add_argument("--max-output-tokens", type=int, default=32768)
     parser.add_argument("--timeout", type=float, default=240.0)
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--concurrency", type=int, default=4)
