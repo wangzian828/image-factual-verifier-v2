@@ -317,6 +317,7 @@ def test_published_request_image_distribution_manifest_is_bound(
 
     assert result["archive_sha256"] == digest
     assert result["archive_bytes"] == archive.stat().st_size
+    assert result["trace_count"] == 2
 
 
 def test_long_case_id_uses_stable_bounded_split_group() -> None:
@@ -327,7 +328,6 @@ def test_long_case_id_uses_stable_bounded_split_group() -> None:
     assert first == _split_group_id(case_id)
     assert len(first) <= 100
     assert first.startswith("case-sha256:")
-    assert result["trace_count"] == 2
 
 
 @pytest.mark.parametrize("parent_action_type", ["output_rejected", "format_error"])
