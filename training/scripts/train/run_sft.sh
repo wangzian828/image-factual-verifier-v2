@@ -297,7 +297,15 @@ if [[ -n "${IFV_MAX_PIXELS:-}" ]]; then
   args+=(--max_pixels "$IFV_MAX_PIXELS")
 fi
 if [[ -n "${IFV_TRUNCATION_STRATEGY:-}" ]]; then
-  args+=(--truncation_strategy "$IFV_TRUNCATION_STRATEGY")
+  trainer_truncation_strategy="$IFV_TRUNCATION_STRATEGY"
+  # ms-swift 4.4.2 exposes the fail-closed template behavior as `delete` at
+  # the CLI boundary, then maps it to template truncation_strategy=`raise`.
+  # Keep the processor/data gate expressed as `raise`, but pass the spelling
+  # accepted by the pinned trainer CLI.
+  if [[ "$trainer_truncation_strategy" == "raise" ]]; then
+    trainer_truncation_strategy=delete
+  fi
+  args+=(--truncation_strategy "$trainer_truncation_strategy")
 fi
 if [[ -n "${IFV_DATALOADER_PERSISTENT_WORKERS:-}" ]]; then
   args+=(--dataloader_persistent_workers "$IFV_DATALOADER_PERSISTENT_WORKERS")
