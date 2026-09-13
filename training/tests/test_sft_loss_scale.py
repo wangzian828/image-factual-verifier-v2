@@ -45,6 +45,10 @@ def test_sft_launcher_loads_the_loss_scale_plugin_and_h20_profile() -> None:
         training
         / "configs/sft/qwen3.5-full-1step-4gpu-h20-fsdp2-sp4-flash-128k-agent-v2-canary.env"
     ).read_text(encoding="utf-8")
+    checkpoint_canary = (
+        training
+        / "configs/sft/qwen3.5-full-1step-save-4gpu-h20-fsdp2-sp4-flash-128k-agent-v2-canary.env"
+    ).read_text(encoding="utf-8")
 
     assert "--external_plugins" in launcher
     assert '--model_type "$IFV_MODEL_FAMILY"' in launcher
@@ -53,6 +57,7 @@ def test_sft_launcher_loads_the_loss_scale_plugin_and_h20_profile() -> None:
     assert "--save_only_model" in launcher
     assert "IFV_LOSS_SCALE=ifv_agent+ignore_empty_think" in profile
     assert "ifv_sft_agent_plugin.py" in profile
+    assert "fsdp2-full-model-only-no-activation-checkpoint.json" in profile
     assert "IFV_SEQUENCE_PARALLEL_SIZE=4" in profile
     assert "IFV_PACKING_LENGTH=120000" in profile
     assert "IFV_GRADIENT_CHECKPOINTING=false" in profile
@@ -62,6 +67,10 @@ def test_sft_launcher_loads_the_loss_scale_plugin_and_h20_profile() -> None:
     assert "qwen3.5-full-4gpu-h20-fsdp2-sp4-flash-128k-agent-v2.env" in canary
     assert "IFV_MAX_STEPS=1" in canary
     assert "IFV_SAVE_STRATEGY=no" in canary
+    assert "IFV_MAX_STEPS=1" in checkpoint_canary
+    assert "IFV_SAVE_STRATEGY=steps" in checkpoint_canary
+    assert "IFV_SAVE_STEPS=1" in checkpoint_canary
+    assert "IFV_SAVE_ONLY_MODEL=true" in checkpoint_canary
 
 
 def test_formal_h20_command_replaces_historical_loss_with_verified_plugin(
