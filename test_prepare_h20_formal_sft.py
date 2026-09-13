@@ -9,7 +9,7 @@ spec.loader.exec_module(module)
 
 def template():
     d = {'--model_type':'qwen3_5','--tuner_type':'full','--fsdp':'fsdp2','--sequence_parallel_size':'4',
-         '--max_length':'131072','--packing':'true','--packing_length':'65536',
+         '--max_length':'131072','--packing':'true','--packing_length':'120000',
          '--padding_free':'true','--attn_impl':'flash_attn','--strict':'true',
          '--freeze_llm':'false','--freeze_vit':'false','--freeze_aligner':'false',
          '--per_device_train_batch_size':'1','--gradient_accumulation_steps':'1',

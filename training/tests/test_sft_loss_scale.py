@@ -52,7 +52,7 @@ def test_sft_launcher_loads_the_loss_scale_plugin_and_h20_profile() -> None:
     assert "IFV_LOSS_SCALE=ifv_agent+ignore_empty_think" in profile
     assert "ifv_sft_agent_plugin.py" in profile
     assert "IFV_SEQUENCE_PARALLEL_SIZE=4" in profile
-    assert "IFV_PACKING_LENGTH=65536" in profile
+    assert "IFV_PACKING_LENGTH=120000" in profile
     assert "IFV_SAVE_ONLY_MODEL=true" in profile
     assert "qwen3.5-full-4gpu-h20-fsdp2-sp4-flash-128k-agent-v2.env" in canary
     assert "IFV_MAX_STEPS=1" in canary
@@ -77,7 +77,7 @@ def test_formal_h20_command_replaces_historical_loss_with_verified_plugin(
         "--sequence_parallel_size": "4",
         "--max_length": "131072",
         "--packing": "true",
-        "--packing_length": "65536",
+        "--packing_length": "120000",
         "--padding_free": "true",
         "--attn_impl": "flash_attn",
         "--strict": "true",

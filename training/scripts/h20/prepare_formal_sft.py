@@ -46,7 +46,7 @@ def command_from_benchmark(
     if len(options) * 2 != len(command) - 2:
         raise ValueError('duplicate benchmark options')
     required = {'--model_type':'qwen3_5', '--tuner_type':'full', '--fsdp':'fsdp2', '--sequence_parallel_size':'4',
-        '--max_length':'131072', '--packing':'true', '--packing_length':'65536',
+        '--max_length':'131072', '--packing':'true', '--packing_length':'120000',
         '--padding_free':'true', '--attn_impl':'flash_attn', '--strict':'true',
         '--freeze_llm':'false', '--freeze_vit':'false', '--freeze_aligner':'false',
         '--per_device_train_batch_size':'1', '--gradient_accumulation_steps':'1',
@@ -116,7 +116,7 @@ def prepare(
     train_stats = processor.get('input_tokens_by_dataset', {}).get(train_path)
     if not train_stats or train_stats.get('count') != expected_train_rows:
         raise ValueError('processor report does not bind all formal training rows')
-    if train_stats['max'] > 65536:
+    if train_stats['max'] > 120000:
         raise ValueError('long episode needs a separately validated packing route')
     if gate['template_contract'] != processor['template_contract']:
         raise ValueError('template binding mismatch')

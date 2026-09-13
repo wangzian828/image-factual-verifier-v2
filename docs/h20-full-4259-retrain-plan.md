@@ -91,7 +91,7 @@ real token-level weights rather than trusting the CLI string.
 6. Normalize recoverable executed tool arguments and mask only irreparable or
    runtime-rejected action/thought targets; never drop the containing episode.
 7. Run the independent rebuild audit and the real Qwen processor-v4 over every
-   row with max length 131,072, packing length 65,536, SP4 and
+   row with max length 131,072, packing length 120,000, SP4 and
    truncation-by-error. Require unit-weight complete thoughts, 2x tool/answer
    blocks, zero-weight tool responses/masked actions, and zero processor errors.
 8. Bind the final dataset, processor report, independent audit and policy audit
@@ -100,7 +100,9 @@ real token-level weights rather than trusting the CLI string.
 ## Training and checkpoint policy
 
 - Clean Qwen3.5-9B base; full-parameter BF16; four H20 GPUs; FSDP2 + SP4.
-- One epoch, 131,072 model ceiling and 65,536 packing length.
+- One epoch, 131,072 model ceiling and 120,000 packing length. This uses the
+  measured H20 SP4 route and covers the observed 72,428-token longest row
+  without truncation or row loss.
 - Use the H20 Agent-v2 profile and run a one-step weighted-loss SP4 canary before
   the epoch. The prior throughput benchmark used binary `ignore_empty_think`,
   so it does not establish the memory cost of per-token non-binary weights.
