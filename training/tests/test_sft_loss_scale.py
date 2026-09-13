@@ -57,9 +57,9 @@ def test_sft_launcher_loads_the_loss_scale_plugin_and_h20_profile() -> None:
     assert "--save_only_model" in launcher
     assert "IFV_LOSS_SCALE=ifv_agent+ignore_empty_think" in profile
     assert "ifv_sft_agent_plugin.py" in profile
-    assert "fsdp2-full-model-only-no-activation-checkpoint.json" in profile
+    assert "IFV_FSDP=$REPO_ROOT/training/configs/fsdp2-full-model-only.json" in profile
     assert "IFV_SEQUENCE_PARALLEL_SIZE=4" in profile
-    assert "IFV_PACKING_LENGTH=96000" in profile
+    assert "IFV_PACKING_LENGTH=120000" in profile
     assert "IFV_GRADIENT_CHECKPOINTING=false" in profile
     assert "IFV_VIT_GRADIENT_CHECKPOINTING=false" in profile
     assert "IFV_USE_LIGER_KERNEL=true" in profile
