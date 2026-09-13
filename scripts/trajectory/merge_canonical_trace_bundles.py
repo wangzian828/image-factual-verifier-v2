@@ -7,7 +7,6 @@ import argparse
 import copy
 import json
 import os
-import shutil
 import sys
 from collections import Counter
 from pathlib import Path
@@ -103,8 +102,6 @@ def _forbidden_cases(paths: Iterable[Path]) -> set[str]:
 def _link_media(
     image: str,
     *,
-    staging_media: Path,
-    final_media: Path,
     digest_cache: dict[Path, str],
 ) -> tuple[str, str]:
     source = Path(image).expanduser().resolve()
@@ -116,19 +113,7 @@ def _link_media(
         digest_cache[source] = digest
     if source.stem.casefold() != digest:
         raise ValueError(f"source media filename/hash mismatch: {source}")
-    suffix = source.suffix.casefold() or ".bin"
-    staged = staging_media / f"{digest}{suffix}"
-    final = final_media / staged.name
-    if staged.exists():
-        if sha256_file(staged) != digest:
-            raise ValueError(f"merged media collision: {staged}")
-    else:
-        staged.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.link(source, staged)
-        except OSError:
-            shutil.copy2(source, staged)
-    return str(final), digest
+    return str(source), digest
 
 
 def merge_bundles(
@@ -254,10 +239,8 @@ def merge_bundles(
 
     staging.mkdir(parents=True)
     provider_root = staging / "canonical-dataset"
-    staging_media = staging / "media"
-    final_media = output_dir / "media"
     digest_cache: dict[Path, str] = {}
-    merged_media: dict[str, dict[str, str]] = {}
+    merged_media: dict[tuple[str, str], dict[str, str]] = {}
 
     def rebind(row: dict[str, Any]) -> dict[str, Any]:
         copied = copy.deepcopy(row)
@@ -265,12 +248,10 @@ def merge_bundles(
         for image in copied.get("images", []):
             path, digest = _link_media(
                 str(image),
-                staging_media=staging_media,
-                final_media=final_media,
                 digest_cache=digest_cache,
             )
             paths.append(path)
-            merged_media.setdefault(digest, {"sha256": digest, "path": path})
+            merged_media.setdefault((digest, path), {"sha256": digest, "path": path})
         copied["images"] = paths
         marker_count = sum(
             str(message.get("content", "")).count("<image>")
@@ -356,6 +337,7 @@ def merge_bundles(
         "stats": {
             **dict(sorted(stats.items())),
             "unique_media_files": len(merged_media),
+            "unique_media_hashes": len({key[0] for key in merged_media}),
             "image_references": sum(
                 len(row.get("images", []))
                 for split in SPLITS
