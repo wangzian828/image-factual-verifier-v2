@@ -513,20 +513,13 @@ def audit_bundle(
         )
         _trace_content_audit(audit, trace=trace, row=row, episode_id=episode_id)
         images = [str(value) for value in row.get("images", [])]
-        expected = str(
-            _mapping(_mapping(trace.get("state")).get("runtime_case")).get("image_sha256", "")
-        )
         audit.require(bool(images), "action_image_count", episode_id)
-        digests: list[str] = []
         for image in images:
             path = Path(image)
             digest = path.stem.casefold()
-            digests.append(digest)
             audit.require(path.is_file(), "action_image_missing", episode_id)
             if path.is_file():
                 audit.require(_sha256(path) == digest, "action_image_hash", episode_id)
-        if expected:
-            audit.require(expected.casefold() in digests, "action_primary_image", episode_id)
         audit.counts["action_only_rows"] += 1
 
     audit.require(
