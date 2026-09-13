@@ -244,6 +244,17 @@ def _reference_rows(delivery_root: Path) -> dict[str, dict[str, Any]]:
     return _rows_by_episode(policy_root)[0]
 
 
+def _normalize_raw_index_entry(item: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize legacy and attested-distribution raw index spellings."""
+
+    return {
+        **dict(item),
+        "episode_id": item.get("episode_id") or item.get("trace_id"),
+        "path": item.get("path") or item.get("trace_path"),
+        "sha256": item.get("sha256") or item.get("trace_sha256"),
+    }
+
+
 def _trace_content_audit(
     audit: Audit,
     *,
@@ -375,7 +386,10 @@ def audit_bundle(
                     name,
                 )
 
-    raw_index_rows = _jsonl(raw_root / "index.jsonl")
+    raw_index_rows = [
+        _normalize_raw_index_entry(item)
+        for item in _jsonl(raw_root / "index.jsonl")
+    ]
     raw_by_episode: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     for item in raw_index_rows:
         episode_id = str(item.get("episode_id", ""))

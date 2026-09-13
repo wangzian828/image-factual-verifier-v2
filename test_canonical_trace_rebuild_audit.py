@@ -8,6 +8,7 @@ from scripts.trajectory.audit_canonical_trace_rebuild import (
     _answer,
     _candidate_steps,
     _canonical_result,
+    _normalize_raw_index_entry,
     _raw_json_prefix,
     _thought,
     _tool_call,
@@ -130,3 +131,19 @@ def test_audit_reconstructs_bound_forced_judgment_correction() -> None:
 def test_audit_rejects_non_object_tool_arguments() -> None:
     with pytest.raises(ValueError, match="arguments"):
         _tool_call(json.dumps({"name": "text_search", "arguments": "[]"}))
+
+
+def test_audit_normalizes_attested_distribution_index_fields() -> None:
+    normalized = _normalize_raw_index_entry(
+        {
+            "trace_id": "trace-1",
+            "trace_path": "traces/0001.json",
+            "trace_sha256": "a" * 64,
+            "request_count": 3,
+        }
+    )
+
+    assert normalized["episode_id"] == "trace-1"
+    assert normalized["path"] == "traces/0001.json"
+    assert normalized["sha256"] == "a" * 64
+    assert normalized["request_count"] == 3
