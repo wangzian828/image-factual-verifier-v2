@@ -117,6 +117,18 @@ perception 不伪造 `<think>`，也不混入 policy 的工具调用。它是独
 - reasoning SFT 保持 `IFV_ADD_NON_THINKING_PREFIX` 关闭；
 - action-only 不进入 reasoning SFT。
 
+下一轮正式 Agent SFT 的 loss 契约为：provider 原生 `<think>` 全量保留、逐 token
+权重 1.0，不按 8,192 token 或任何其他长度截断/降权；完整 `<tool_call>` 与最终
+`<answer>` 各为 2.0；tool response 和 `loss=false` 历史坏动作均为 0。这里使用仓库
+注册的 `ifv_agent+ignore_empty_think`，不使用 ms-swift 4.4.2 的内置 `qwen` 名称：
+该版本的 `qwen` 配置匹配旧 `✿FUNCTION✿` 语法，并不会命中 Qwen3.5 实际渲染的
+`<tool_call><function=...>`。
+
+这项相对加权只强化稀疏的动作/答案结构，不删除教师推理。processor-v4 会报告每轮
+thought 的真实 tokenizer 长度、2K/4K/8K 边界计数、可训练 token 权重直方图和平均
+权重，并逐块验证工具调用、最终答案、工具响应和掩码动作。训练前仍须用真实全量数据
+跑完该验证；仅检查配置字符串不算通过。
+
 训练前必须运行真实 processor 验证脚本，不能仅依据 JSON 校验通过就开训。
 
 ## 7. 检查命令
@@ -128,6 +140,7 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
   --model <Qwen checkpoint> `
   --policy-dir <ms-swift-policy> `
   --perception-dir <ms-swift-perception> `
+  --loss-scale ifv_agent+ignore_empty_think `
   --output <processor-verification.json>
 ```
 

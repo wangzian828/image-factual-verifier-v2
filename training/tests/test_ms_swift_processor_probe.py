@@ -71,7 +71,7 @@ def test_template_contract_matches_training_controls() -> None:
         max_pixels=262144,
         padding_free=True,
         sequence_parallel_size=8,
-        loss_scale="ignore_empty_think",
+        loss_scale="ifv_agent+ignore_empty_think",
         enable_thinking=False,
         add_non_thinking_prefix=False,
     )
@@ -82,7 +82,7 @@ def test_template_contract_matches_training_controls() -> None:
         "max_pixels": 262144,
         "padding_free": True,
         "sequence_parallel_size": 8,
-        "loss_scale": "ignore_empty_think",
+        "loss_scale": "ifv_agent+ignore_empty_think",
         "enable_thinking": False,
         "add_non_thinking_prefix": False,
     }
@@ -159,5 +159,50 @@ def test_thought_loss_contract_counts_distinct_markers() -> None:
         messages,
         [7, 7],
         [7, -100],
+        [1.0, 0.0],
         Tokenizer(),
+        supervised_weight=1.0,
+    ) == (1, 1)
+
+
+def test_tag_block_contract_rejects_silent_unweighted_tool_calls() -> None:
+    class Tokenizer:
+        TOKENS = {"<tool_call>": [1], "</tool_call>": [4]}
+
+        @classmethod
+        def encode(cls, text: str, add_special_tokens: bool = False) -> list[int]:
+            return cls.TOKENS[text]
+
+    with pytest.raises(ValueError, match="uniformly weighted 2.0"):
+        MODULE._verify_tag_block_loss_contract(
+            [1, 2, 3, 4],
+            [1, 2, 3, 4],
+            [1.0, 1.0, 1.0, 1.0],
+            Tokenizer(),
+            start_tag="<tool_call>",
+            end_tag="</tool_call>",
+            expected_supervised=1,
+            expected_masked_minimum=0,
+            supervised_weight=2.0,
+        )
+
+
+def test_tag_block_contract_accepts_weighted_and_masked_blocks() -> None:
+    class Tokenizer:
+        TOKENS = {"<answer>": [1], "</answer>": [4]}
+
+        @classmethod
+        def encode(cls, text: str, add_special_tokens: bool = False) -> list[int]:
+            return cls.TOKENS[text]
+
+    assert MODULE._verify_tag_block_loss_contract(
+        [1, 2, 4, 1, 3, 4],
+        [1, 2, 4, -100, -100, -100],
+        [2.0, 2.0, 2.0, 0.0, 0.0, 0.0],
+        Tokenizer(),
+        start_tag="<answer>",
+        end_tag="</answer>",
+        expected_supervised=1,
+        expected_masked_minimum=1,
+        supervised_weight=2.0,
     ) == (1, 1)

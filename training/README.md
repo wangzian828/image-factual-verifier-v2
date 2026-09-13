@@ -22,7 +22,7 @@ teacher rollout
   -> accepted-dataset
   -> convert-policy / convert-accepted-perception
   -> live-runtime causal audit
-  -> real ms-swift processor verification v3
+  -> real ms-swift processor verification v4 (token-level loss proof)
   -> raw-data launch gate
   -> swift sft
 ```
@@ -69,7 +69,7 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
   --truncation-strategy raise `
   --padding-free true `
   --sequence-parallel-size 4 `
-  --loss-scale ignore_empty_think `
+  --loss-scale ifv_agent+ignore_empty_think `
   --enable-thinking false `
   --add-non-thinking-prefix false `
   --image-max-token-num 1024 `
@@ -78,7 +78,9 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
 
 验证脚本会实际调用 processor，确认原生 `<think>` 在 labels 中、工具调用和工具
 结果进入输入、图片未丢失，同时逐一确认正常动作被监督、`loss=false` 动作确实被
-掩码，并使用与训练完全相同的 template 参数检查上下文长度。
+掩码，并使用与训练完全相同的 template 参数检查上下文长度。v4 还会逐 token 证明：
+教师思考保持 1.0 权重且没有长度截断/降权，完整工具调用和最终 `<answer>` 各为 2.0，
+工具响应与掩码目标为 0；任何规则没有真正命中都会阻止训练。
 报告记录输入 JSONL 的绝对路径、大小和 SHA-256，供训练启动门禁绑定。
 `--sequence-parallel-size` 必须与随后使用的训练 profile 完全一致；上例是当前
 四卡 H20 的 SP4 配置。八卡 SP8 报告不能作为四卡 SP4 训练的启动依据，反之亦然。
@@ -87,6 +89,8 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
 
 ```text
 IFV_PROCESSOR_VERIFICATION=<processor-verification.json>
+IFV_LOSS_SCALE=ifv_agent+ignore_empty_think
+IFV_EXTERNAL_PLUGINS=$REPO_ROOT/training/plugins/ifv_sft_agent_plugin.py
 ```
 
 启动器会再次执行 dataset `manifest.json` 严格审计，并核对 train/validation
@@ -187,6 +191,10 @@ logits；fp32 cross-entropy 按 active completion position 分块重算。真实
 - reasoning policy SFT 使用
   `training/configs/models/qwen3.5-9b.env`，并保持
   `IFV_ADD_NON_THINKING_PREFIX=false`。
+- 四卡 H20 下一轮合并训练使用
+  `training/configs/sft/qwen3.5-full-4gpu-h20-fsdp2-sp4-flash-128k-agent-v2.env`；
+  必须先跑全量 processor-v4，再跑一步 weighted-loss SP4 canary。旧的
+  `ignore_empty_think` 吞吐结果只能作为硬件基线，不能证明新 loss 的显存与数值稳定性。
 - 当前保留 16K production、portable 8K、smoke-noeval，以及 8 卡 128K 的 memory
   probe、10-step canary、11-step resume 三个验收 profile；历史硬件/并发 sweep 可从
   Git 标签 `pre-deep-cleanup-20260910` 恢复。

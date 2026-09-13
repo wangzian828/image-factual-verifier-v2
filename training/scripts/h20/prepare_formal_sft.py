@@ -1,4 +1,4 @@
-"""Prepare, but never execute, the first full-data H20 SFT command.
+"""Prepare, but never execute, the merged-data H20 Agent SFT command.
 
 Use the measured H20 command as a bound template. No A100 profile or test
 result is used to choose training hyperparameters. Check judge completion and
@@ -10,6 +10,10 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+
+
+TRAINING_ROOT = Path(__file__).resolve().parents[2]
+SFT_AGENT_PLUGIN = TRAINING_ROOT / 'plugins' / 'ifv_sft_agent_plugin.py'
 
 
 def sha(path):
@@ -26,7 +30,7 @@ TEMPLATE_CONTRACT = {
     'max_pixels': 262144,
     'padding_free': True,
     'sequence_parallel_size': 4,
-    'loss_scale': 'ignore_empty_think',
+    'loss_scale': 'ifv_agent+ignore_empty_think',
     'enable_thinking': False,
     'add_non_thinking_prefix': False,
     'image_max_token_num': 1024,
@@ -74,25 +78,29 @@ def command_from_benchmark(
             '--save_total_limit': '1',
             '--save_only_model': 'false',
         }
+    if not SFT_AGENT_PLUGIN.is_file():
+        raise ValueError('missing IFV Agent SFT loss-scale plugin')
     options.update({'--dataset':str(train), '--output_dir':str(output),
         '--max_steps':'-1', '--num_train_epochs':'1',
-        '--load_best_model_at_end':'false', **save_options})
+        '--load_best_model_at_end':'false',
+        '--loss_scale':'ifv_agent+ignore_empty_think',
+        '--external_plugins':str(SFT_AGENT_PLUGIN), **save_options})
     # No best-checkpoint selection from the one-case validation or the test set.
     return ['swift', 'sft', *[x for pair in options.items() for x in pair]]
 
 
 def prepare(
         benchmark, gate_path, processor_path, output, *,
-        expected_train_rows=2578, save_only_model=False, save_steps=None,
+        expected_train_rows=4211, save_only_model=False, save_steps=None,
         save_total_limit=1):
     gate = json.loads(gate_path.read_text())
     processor = json.loads(processor_path.read_text())
     if gate.get('passed') is not True or processor.get('passed') is not True:
         raise ValueError('data and processor gates must pass')
-    if gate.get('schema_version') != 'ifv-sft-raw-data-gate-v2':
-        raise ValueError('formal SFT requires the causal-contract v2 data gate')
-    if processor.get('schema_version') != 'ifv-ms-swift-agent-processor-verification-v3':
-        raise ValueError('formal SFT requires the v3 processor verification')
+    if gate.get('schema_version') != 'ifv-sft-raw-data-gate-v3':
+        raise ValueError('formal SFT requires the weighted causal-contract v3 data gate')
+    if processor.get('schema_version') != 'ifv-ms-swift-agent-processor-verification-v4':
+        raise ValueError('formal SFT requires the weighted v4 processor verification')
     if gate['processor_report']['sha256'] != sha(processor_path):
         raise ValueError('processor report changed')
     for entry in [*gate['datasets'].values(), gate['dataset_manifest']]:
@@ -114,6 +122,30 @@ def prepare(
         raise ValueError('template binding mismatch')
     if gate['template_contract'] != TEMPLATE_CONTRACT:
         raise ValueError('formal SFT template contract changed')
+    checks = processor.get('checks', {})
+    weighted_checks = {
+        'supervised_tool_call_weighted_spans': 'supervised_tool_call_targets',
+        'supervised_answer_weighted_spans': 'supervised_answer_targets',
+        'supervised_thought_unit_weight_spans': 'supervised_thought_targets',
+        'masked_tool_response_spans': 'tool_response_targets',
+    }
+    for weighted, expected in weighted_checks.items():
+        if checks.get(weighted) != checks.get(expected):
+            raise ValueError(f'processor weighted-loss proof failed: {weighted}')
+    if not checks.get('supervised_tool_call_targets'):
+        raise ValueError('formal Agent SFT data contains no supervised tool calls')
+    policy_rows = sum(
+        value for key, value in processor['counts'].items()
+        if key.startswith('policy:')
+    )
+    if checks.get('supervised_answer_targets') != policy_rows:
+        raise ValueError('every formal SFT row must contain one supervised final answer')
+    if processor.get('loss_weight_contract') != {
+            'reasoning': 1.0, 'tool_call': 2.0, 'final_answer': 2.0,
+            'tool_response': 0.0, 'masked_target': 0.0,
+            'thinking_policy': ('preserve every native teacher think token at unit weight; '
+                                'do not truncate or length-downweight teacher reasoning')}:
+        raise ValueError('processor does not prove the formal IFV Agent loss weights')
     causal = gate.get('dataset_audit', {}).get('causal_contract', {})
     blockers = causal.get('production_blockers', {})
     if causal.get('passed') is not True or not blockers or any(blockers.values()):
@@ -173,6 +205,8 @@ def prepare(
              if save_only_model else
              'actual user storage allowance for full-state checkpoint and later inference export'),
             'stop keepers; verify all four GPUs idle; source H20 environment',
+            ('run a one-step SP4 weighted-loss memory/numerics canary because the '
+             'old throughput benchmark used binary ignore_empty_think loss'),
             'capture command/environment, resource samples and training exit status'],
         'limitations':([
             'model-only checkpoints cannot resume optimizer/scheduler/RNG state',
@@ -194,7 +228,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('benchmark-command','data-preflight','processor-report','output'):
         parser.add_argument('--'+name, type=Path, required=True)
-    parser.add_argument('--expected-train-rows', type=int, default=2578)
+    parser.add_argument('--expected-train-rows', type=int, default=4211)
     parser.add_argument('--save-only-model', action='store_true')
     parser.add_argument('--save-steps', type=int)
     parser.add_argument('--save-total-limit', type=int, default=1)

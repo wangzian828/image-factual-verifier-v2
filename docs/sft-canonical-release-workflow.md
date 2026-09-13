@@ -1,6 +1,6 @@
 # SFT Canonical Release 工作流
 
-当前版本（2026-09-08）的唯一训练发布链路：
+当前版本（2026-09-13）的唯一训练发布链路：
 
 ```text
 teacher rollout
@@ -9,7 +9,9 @@ teacher rollout
   -> accepted-teacher-release
   -> accepted-dataset
   -> ms-swift policy/perception conversion
-  -> real Qwen processor verification
+  -> real Qwen processor verification v4
+  -> raw-data gate v3
+  -> one-step weighted-loss canary
   -> swift sft
 ```
 
@@ -102,6 +104,7 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
   --model <目标 Qwen checkpoint> `
   --policy-dir <ms-swift-policy> `
   --perception-dir <ms-swift-perception> `
+  --loss-scale ifv_agent+ignore_empty_think `
   --output <processor-verification.json>
 ```
 
@@ -115,8 +118,24 @@ JSON 审计只检查结构；真实 processor 验证还必须通过：
 - 图片没有被 processor 丢失；
 - 每行存在可训练 assistant token；
 - 编码长度不超过目标上下文上限。
+- provider 原生非空 `<think>` 完整保留并统一使用 1.0 权重，不按长度截断或降权；
+- 完整 `<tool_call>` 与最终 `<answer>` 均使用 2.0 权重；
+- tool response 与 `loss=false` 历史坏动作的 label/loss weight 均为 0；
+- 可训练 token 中只出现上述允许的正权重。
+
+不能用 ms-swift 4.4.2 内置的 `qwen` loss scale 代替：该配置仍匹配旧
+`✿FUNCTION✿` 语法，不会命中 Qwen3.5 实际渲染的
+`<tool_call><function=...>`。正式训练必须加载
+`training/plugins/ifv_sft_agent_plugin.py`，并让 processor-v4 以真实 token 证明规则
+已经生效。历史 processor-v3 报告和 `ignore_empty_think` 吞吐实验不能作为下一轮启动
+依据。
 
 目标模型变化时必须重新跑 processor 验证，不能复用旧模型的通过结果。
+
+全量训练前还必须在完全相同的 H20、FSDP2、SP4、数据模板和相对 loss 权重下运行一步
+canary，检查四卡 loss 有限、无 rank 退出、显存不过界。训练结束后先跑小规模 Agent
+行为 canary：工具调用可解析、报告满足结构契约、没有 `length/abort`；通过后才进入冻结
+1,527 分母的全量推理与 judge。训练 loss 下降本身不构成能力提升证据。
 
 ## 4. 数据边界
 
@@ -126,6 +145,9 @@ JSON 审计只检查结构；真实 processor 验证还必须通过：
 - `action_only` 不进入 reasoning policy SFT；
 - 失败轨迹可保留在 audit/holdout，但不能通过转换器伪装成高质量训练样本；
 - 训练包中的每一行是一条完整 episode，不拆成 step-level policy 样本。
+- 两批轨迹必须在 canonical raw-trace 层合并、重新绑定各自媒体并统一重新审计；不得把两
+  个已经转换的 ms-swift JSONL 直接拼接后声称是正式发布。缺少任一 policy 图片时暂停
+  发布，不删除该轨迹，也不退化为文本训练。
 
 ## 5. 当前暂停点
 

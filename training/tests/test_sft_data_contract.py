@@ -25,7 +25,7 @@ CONTRACT = {
     "max_pixels": 262144,
     "padding_free": True,
     "sequence_parallel_size": 8,
-    "loss_scale": "ignore_empty_think",
+    "loss_scale": "ifv_agent+ignore_empty_think",
     "enable_thinking": False,
     "add_non_thinking_prefix": False,
     "image_max_token_num": 1024,
@@ -100,7 +100,7 @@ def _processor_report(
     path.write_text(
         json.dumps(
             {
-                "schema_version": "ifv-ms-swift-agent-processor-verification-v3",
+                "schema_version": "ifv-ms-swift-agent-processor-verification-v4",
                 "passed": True,
                 "model": str(model.resolve()),
                 "model_type": "qwen3_5",
@@ -110,7 +110,16 @@ def _processor_report(
                     "masked_tool_call_targets": 0,
                     "supervised_thought_targets": 2,
                     "masked_thought_targets": 0,
+                    "supervised_answer_targets": 2,
+                    "masked_answer_targets": 0,
+                    "tool_response_targets": 0,
+                    "supervised_tool_call_weighted_spans": 0,
+                    "supervised_answer_weighted_spans": 2,
+                    "supervised_thought_unit_weight_spans": 2,
+                    "masked_tool_response_spans": 0,
                 },
+                "loss_weight_contract": MODULE.REQUIRED_LOSS_WEIGHT_CONTRACT,
+                "trainable_loss_weight_tokens": {"1.0": 10, "2.0": 20},
                 "dataset_files": [
                     MODULE._file_record(train),
                     MODULE._file_record(validation),

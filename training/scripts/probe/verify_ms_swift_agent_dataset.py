@@ -21,6 +21,10 @@ from typing import Any, Iterable, Mapping
 
 
 LONG_CONTEXT_BOUNDARIES = (32_768, 65_536, 98_304, 120_000, 131_072)
+DEFAULT_LOSS_SCALE = "ifv_agent+ignore_empty_think"
+DEFAULT_REASONING_WEIGHT = 1.0
+DEFAULT_TOOL_CALL_WEIGHT = 2.0
+DEFAULT_FINAL_ANSWER_WEIGHT = 2.0
 
 
 def _boolean(value: str) -> bool:
@@ -76,6 +80,12 @@ def _as_list(value: Any) -> list[int]:
     if hasattr(value, "tolist"):
         value = value.tolist()
     return [int(item) for item in value]
+
+
+def _as_float_list(value: Any) -> list[float]:
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    return [float(item) for item in value]
 
 
 def _encode(tokenizer: Any, text: str) -> list[int]:
@@ -169,6 +179,112 @@ def _count_labeled_subsequences(
     return supervised, masked
 
 
+def _weights_match(
+    values: list[float],
+    expected: float,
+    *,
+    tolerance: float = 1e-6,
+) -> bool:
+    return bool(values) and all(
+        abs(value - expected) <= tolerance for value in values
+    )
+
+
+def _count_supervised_weight_runs(
+    labels: list[int],
+    loss_scale: list[float],
+    expected: float,
+    *,
+    tolerance: float = 1e-6,
+) -> int:
+    """Count contiguous supervised spans carrying one exact loss weight."""
+
+    runs = 0
+    inside = False
+    for label, weight in zip(labels, loss_scale, strict=True):
+        matches = label != -100 and abs(weight - expected) <= tolerance
+        if matches and not inside:
+            runs += 1
+        inside = matches
+    return runs
+
+
+def _tag_block_spans(
+    input_ids: list[int],
+    tokenizer: Any,
+    start_tag: str,
+    end_tag: str,
+) -> list[tuple[int, int]]:
+    """Return non-overlapping token spans for rendered XML-like blocks."""
+
+    starts = list(_subsequence_starts(input_ids, _encode(tokenizer, start_tag)))
+    end_ids = _encode(tokenizer, end_tag)
+    ends = list(_subsequence_starts(input_ids, end_ids))
+    spans: list[tuple[int, int]] = []
+    end_cursor = 0
+    last_end = 0
+    for start in starts:
+        if start < last_end:
+            continue
+        while end_cursor < len(ends) and ends[end_cursor] < start:
+            end_cursor += 1
+        if end_cursor >= len(ends):
+            raise ValueError(f"rendered {start_tag} has no matching {end_tag}")
+        end = ends[end_cursor] + len(end_ids)
+        spans.append((start, end))
+        last_end = end
+        end_cursor += 1
+    return spans
+
+
+def _verify_tag_block_loss_contract(
+    input_ids: list[int],
+    labels: list[int],
+    loss_scale: list[float],
+    tokenizer: Any,
+    *,
+    start_tag: str,
+    end_tag: str,
+    expected_supervised: int,
+    expected_masked_minimum: int,
+    supervised_weight: float,
+) -> tuple[int, int]:
+    supervised = 0
+    masked = 0
+    for start, end in _tag_block_spans(
+        input_ids,
+        tokenizer,
+        start_tag,
+        end_tag,
+    ):
+        span_labels = labels[start:end]
+        span_weights = loss_scale[start:end]
+        if all(label != -100 for label in span_labels):
+            supervised += 1
+            if not _weights_match(span_weights, supervised_weight):
+                raise ValueError(
+                    f"supervised {start_tag} block is not uniformly weighted "
+                    f"{supervised_weight}"
+                )
+        elif all(label == -100 for label in span_labels):
+            masked += 1
+            if any(abs(weight) > 1e-6 for weight in span_weights):
+                raise ValueError(f"masked {start_tag} block has non-zero loss weight")
+        else:
+            raise ValueError(f"{start_tag} block is only partially supervised")
+    if supervised != expected_supervised:
+        raise ValueError(
+            f"rendered {start_tag} has {supervised}/{expected_supervised} "
+            "fully supervised blocks"
+        )
+    if masked < expected_masked_minimum:
+        raise ValueError(
+            f"rendered {start_tag} has only {masked}/{expected_masked_minimum} "
+            "required masked blocks"
+        )
+    return supervised, masked
+
+
 def _text_for_presence_check(content: str) -> str:
     # In multimodal rows ms-swift consumes each <image> marker and replaces it
     # with image tokens. Check the surrounding public text separately.
@@ -253,7 +369,10 @@ def _verify_tool_call_loss_contract(
     messages: list[Mapping[str, Any]],
     input_ids: list[int],
     labels: list[int],
+    loss_scale: list[float],
     tokenizer: Any,
+    *,
+    supervised_weight: float,
 ) -> tuple[int, int]:
     expected_supervised: Counter[str] = Counter()
     expected_masked: Counter[str] = Counter()
@@ -283,6 +402,21 @@ def _verify_tool_call_loss_contract(
                 f"only {masked}/{expected_masked[name]} {name} call markers "
                 "are fully masked"
             )
+        for index in _subsequence_starts(input_ids, marker_ids):
+            marker_labels = labels[index : index + len(marker_ids)]
+            marker_weights = loss_scale[index : index + len(marker_ids)]
+            if all(value != -100 for value in marker_labels) and not _weights_match(
+                marker_weights,
+                supervised_weight,
+            ):
+                raise ValueError(
+                    f"supervised {name} call marker is not weighted "
+                    f"{supervised_weight}"
+                )
+            if all(value == -100 for value in marker_labels) and any(
+                abs(weight) > 1e-6 for weight in marker_weights
+            ):
+                raise ValueError(f"masked {name} call marker has non-zero loss weight")
     return sum(expected_supervised.values()), sum(expected_masked.values())
 
 
@@ -290,7 +424,10 @@ def _verify_thought_loss_contract(
     messages: list[Mapping[str, Any]],
     input_ids: list[int],
     labels: list[int],
+    loss_scale: list[float],
     tokenizer: Any,
+    *,
+    supervised_weight: float,
 ) -> tuple[int, int]:
     expected_supervised = 0
     expected_masked = 0
@@ -303,10 +440,11 @@ def _verify_thought_loss_contract(
             expected_masked += 1
         else:
             expected_supervised += 1
+    marker_ids = _encode(tokenizer, "<think>")
     supervised, masked = _count_labeled_subsequences(
         input_ids,
         labels,
-        _encode(tokenizer, "<think>"),
+        marker_ids,
     )
     if supervised < expected_supervised:
         raise ValueError(
@@ -317,7 +455,61 @@ def _verify_thought_loss_contract(
         raise ValueError(
             f"only {masked}/{expected_masked} <think> markers are fully masked"
         )
+    for index in _subsequence_starts(input_ids, marker_ids):
+        marker_labels = labels[index : index + len(marker_ids)]
+        marker_weights = loss_scale[index : index + len(marker_ids)]
+        if all(value != -100 for value in marker_labels) and not _weights_match(
+            marker_weights,
+            supervised_weight,
+        ):
+            raise ValueError(
+                f"supervised <think> marker is not weighted {supervised_weight}"
+            )
+        if all(value == -100 for value in marker_labels) and any(
+            abs(weight) > 1e-6 for weight in marker_weights
+        ):
+            raise ValueError("masked <think> marker has non-zero loss weight")
     return expected_supervised, expected_masked
+
+
+def _message_block_counts(
+    messages: list[Mapping[str, Any]],
+    *,
+    role: str,
+    start_tag: str,
+    end_tag: str,
+) -> tuple[int, int]:
+    supervised = 0
+    masked = 0
+    pattern = re.compile(
+        re.escape(start_tag) + r".+?" + re.escape(end_tag),
+        flags=re.DOTALL,
+    )
+    for message in messages:
+        if str(message.get("role", "")) != role:
+            continue
+        count = len(pattern.findall(str(message.get("content", ""))))
+        if message.get("loss") is False:
+            masked += count
+        else:
+            supervised += count
+    return supervised, masked
+
+
+def _thought_token_lengths(
+    messages: list[Mapping[str, Any]],
+    tokenizer: Any,
+) -> tuple[list[int], list[int]]:
+    supervised: list[int] = []
+    masked: list[int] = []
+    pattern = re.compile(r"<think>\s*(.*?)\s*</think>", flags=re.DOTALL)
+    for message in messages:
+        if str(message.get("role", "")) != "assistant":
+            continue
+        target = masked if message.get("loss") is False else supervised
+        for match in pattern.finditer(str(message.get("content", ""))):
+            target.append(len(_encode(tokenizer, match.group(1))))
+    return supervised, masked
 
 
 def _validate_roles(messages: Any, *, kind: str) -> list[str]:
@@ -430,7 +622,22 @@ def main() -> None:
     )
     parser.add_argument("--padding-free", type=_boolean, default=False)
     parser.add_argument("--sequence-parallel-size", type=int, default=1)
-    parser.add_argument("--loss-scale", default="ignore_empty_think")
+    parser.add_argument("--loss-scale", default=DEFAULT_LOSS_SCALE)
+    parser.add_argument(
+        "--reasoning-weight",
+        type=float,
+        default=DEFAULT_REASONING_WEIGHT,
+    )
+    parser.add_argument(
+        "--tool-call-weight",
+        type=float,
+        default=DEFAULT_TOOL_CALL_WEIGHT,
+    )
+    parser.add_argument(
+        "--final-answer-weight",
+        type=float,
+        default=DEFAULT_FINAL_ANSWER_WEIGHT,
+    )
     parser.add_argument("--enable-thinking", type=_boolean, default=False)
     parser.add_argument(
         "--add-non-thinking-prefix",
@@ -447,8 +654,40 @@ def main() -> None:
         parser.error("--sequence-parallel-size must be positive")
     if args.image_max_token_num < 1:
         parser.error("--image-max-token-num must be positive")
+    for name in ("reasoning_weight", "tool_call_weight", "final_answer_weight"):
+        if getattr(args, name) <= 0:
+            parser.error(f"--{name.replace('_', '-')} must be positive")
 
     os.environ["IMAGE_MAX_TOKEN_NUM"] = str(args.image_max_token_num)
+
+    if "ifv_agent" in args.loss_scale.split("+"):
+        from ifv_training.sft_loss_scale import (
+            IFV_AGENT_LOSS_SCALE_SPEC,
+            IFV_FINAL_ANSWER_WEIGHT,
+            IFV_REASONING_WEIGHT,
+            IFV_TOOL_CALL_WEIGHT,
+            install_ms_swift_sft_loss_scale,
+        )
+
+        expected = (
+            IFV_AGENT_LOSS_SCALE_SPEC,
+            IFV_REASONING_WEIGHT,
+            IFV_TOOL_CALL_WEIGHT,
+            IFV_FINAL_ANSWER_WEIGHT,
+        )
+        actual = (
+            args.loss_scale,
+            args.reasoning_weight,
+            args.tool_call_weight,
+            args.final_answer_weight,
+        )
+        if actual != expected:
+            parser.error(
+                "the registered ifv_agent contract requires "
+                f"loss_scale={expected[0]!r}, reasoning={expected[1]}, "
+                f"tool_call={expected[2]}, final_answer={expected[3]}"
+            )
+        install_ms_swift_sft_loss_scale()
 
     from swift import get_processor, get_template
 
@@ -478,8 +717,11 @@ def main() -> None:
     by_dataset: dict[str, list[int]] = {}
     rows_by_dataset: dict[str, list[dict[str, Any]]] = {}
     checks = Counter()
+    loss_scale_token_counts: Counter[float] = Counter()
     longest: list[dict[str, Any]] = []
     dataset_files: list[dict[str, Any]] = []
+    supervised_thought_lengths: list[int] = []
+    masked_thought_lengths: list[int] = []
 
     for kind, path in datasets:
         dataset_files.append({"kind": kind, **_file_record(path)})
@@ -493,12 +735,17 @@ def main() -> None:
                 encoded = template.encode(row, return_template_inputs=True)
                 input_ids = _as_list(encoded["input_ids"])
                 labels = _as_list(encoded["labels"])
+                if "loss_scale" not in encoded:
+                    raise ValueError("processor did not return per-token loss_scale")
+                loss_scale = _as_float_list(encoded["loss_scale"])
                 decoded_text = tokenizer.decode(
                     input_ids,
                     skip_special_tokens=False,
                 )
                 if len(input_ids) != len(labels):
                     raise ValueError("input_ids and labels have different lengths")
+                if len(input_ids) != len(loss_scale):
+                    raise ValueError("input_ids and loss_scale have different lengths")
                 if not input_ids:
                     raise ValueError("processor returned empty input_ids")
                 if len(input_ids) > args.max_context:
@@ -508,6 +755,11 @@ def main() -> None:
                 loss_positions = [index for index, value in enumerate(labels) if value != -100]
                 if not loss_positions:
                     raise ValueError("row has no trainable assistant tokens")
+                if any(loss_scale[index] <= 0 for index in loss_positions):
+                    raise ValueError("trainable label has a non-positive loss weight")
+                for index, weight in enumerate(loss_scale):
+                    if labels[index] != -100:
+                        loss_scale_token_counts[weight] += 1
 
                 template_inputs = encoded.get("template_inputs")
                 encoded_images = list(getattr(template_inputs, "images", []) or [])
@@ -526,19 +778,95 @@ def main() -> None:
                         messages,
                         input_ids,
                         labels,
+                        loss_scale,
                         tokenizer,
+                        supervised_weight=args.tool_call_weight,
                     )
                     checks["supervised_tool_call_targets"] += supervised_calls
                     checks["masked_tool_call_targets"] += masked_calls
+                    weighted_calls, _ = _verify_tag_block_loss_contract(
+                        input_ids,
+                        labels,
+                        loss_scale,
+                        tokenizer,
+                        start_tag="<tool_call>",
+                        end_tag="</tool_call>",
+                        expected_supervised=supervised_calls,
+                        expected_masked_minimum=masked_calls,
+                        supervised_weight=args.tool_call_weight,
+                    )
+                    checks["supervised_tool_call_weighted_spans"] += weighted_calls
+
+                    answer_targets, masked_answers = _message_block_counts(
+                        messages,
+                        role="assistant",
+                        start_tag="<answer>",
+                        end_tag="</answer>",
+                    )
+                    weighted_runs = _count_supervised_weight_runs(
+                        labels,
+                        loss_scale,
+                        args.final_answer_weight,
+                    )
+                    expected_weighted_runs = supervised_calls + answer_targets
+                    if weighted_runs != expected_weighted_runs:
+                        raise ValueError(
+                            "weighted action/answer span count does not match "
+                            f"targets: expected={expected_weighted_runs}, "
+                            f"observed={weighted_runs}"
+                        )
+                    checks["supervised_answer_targets"] += answer_targets
+                    checks["masked_answer_targets"] += masked_answers
+                    checks["supervised_answer_weighted_spans"] += answer_targets
+
+                    expected_responses = roles.count("tool_response")
+                    checks["tool_response_targets"] += expected_responses
+                    _, masked_responses = _verify_tag_block_loss_contract(
+                        input_ids,
+                        labels,
+                        loss_scale,
+                        tokenizer,
+                        start_tag="<tool_response>",
+                        end_tag="</tool_response>",
+                        expected_supervised=0,
+                        expected_masked_minimum=expected_responses,
+                        supervised_weight=args.reasoning_weight,
+                    )
+                    checks["masked_tool_response_spans"] += min(
+                        masked_responses,
+                        expected_responses,
+                    )
 
                 supervised_thoughts, masked_thoughts = _verify_thought_loss_contract(
                     messages,
                     input_ids,
                     labels,
+                    loss_scale,
                     tokenizer,
+                    supervised_weight=args.reasoning_weight,
                 )
                 checks["supervised_thought_targets"] += supervised_thoughts
                 checks["masked_thought_targets"] += masked_thoughts
+                unit_weight_thoughts, _ = _verify_tag_block_loss_contract(
+                    input_ids,
+                    labels,
+                    loss_scale,
+                    tokenizer,
+                    start_tag="<think>",
+                    end_tag="</think>",
+                    expected_supervised=supervised_thoughts,
+                    expected_masked_minimum=masked_thoughts,
+                    supervised_weight=args.reasoning_weight,
+                )
+                checks["supervised_thought_unit_weight_spans"] += (
+                    unit_weight_thoughts
+                )
+                thought_lengths, masked_lengths = _thought_token_lengths(
+                    messages,
+                    tokenizer,
+                )
+                supervised_thought_lengths.extend(thought_lengths)
+                masked_thought_lengths.extend(masked_lengths)
 
                 for message in messages:
                     if not isinstance(message, Mapping):
@@ -586,7 +914,7 @@ def main() -> None:
                 )
 
     report = {
-        "schema_version": "ifv-ms-swift-agent-processor-verification-v3",
+        "schema_version": "ifv-ms-swift-agent-processor-verification-v4",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model": str(Path(args.model).expanduser().resolve()),
         "model_type": args.model_type,
@@ -603,6 +931,37 @@ def main() -> None:
         "errors": errors,
         "counts": dict(sorted(counts.items())),
         "checks": dict(sorted(checks.items())),
+        "loss_weight_contract": {
+            "reasoning": args.reasoning_weight,
+            "tool_call": args.tool_call_weight,
+            "final_answer": args.final_answer_weight,
+            "tool_response": 0.0,
+            "masked_target": 0.0,
+            "thinking_policy": (
+                "preserve every native teacher think token at unit weight; "
+                "do not truncate or length-downweight teacher reasoning"
+            ),
+        },
+        "trainable_loss_weight_tokens": {
+            str(weight): count
+            for weight, count in sorted(loss_scale_token_counts.items())
+        },
+        "mean_trainable_loss_weight": (
+            sum(weight * count for weight, count in loss_scale_token_counts.items())
+            / sum(loss_scale_token_counts.values())
+            if loss_scale_token_counts
+            else 0.0
+        ),
+        "supervised_thought_tokens_per_turn": _distribution(
+            supervised_thought_lengths
+        ),
+        "masked_thought_tokens_per_turn": _distribution(masked_thought_lengths),
+        "supervised_thought_token_boundaries": {
+            str(boundary): sum(
+                value >= boundary for value in supervised_thought_lengths
+            )
+            for boundary in (2048, 4096, 8192)
+        },
         "input_tokens": _distribution(lengths),
         "trainable_tokens": _distribution(trainable_lengths),
         "input_tokens_by_kind": {

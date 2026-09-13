@@ -55,6 +55,29 @@ for the accepted final Judgment. The exporter recovers those 17 only when the
 accepted output equals the frozen top-level Judgment and the correction points
 to a preceding rejected Judgment request; it never recovers unbound output.
 
+After that recovery the intended complete-reasoning pool is 4,212 episodes:
+2,579 from the initial package and 1,633 from package 02. With one frozen
+validation episode, the expected formal split is 4,211 train + 1 validation.
+These counts remain provisional until the missing package-02 policy media pass
+the canonical rebuild and no-overlap gates.
+
+## Reasoning and loss contract for the replacement run
+
+Do not truncate or length-downweight native teacher reasoning. An audit of the
+provider-visible teacher turns found no evidence for an 8,192-token teacher
+budget: the observed maxima were 8,577 and 11,544 characters in the two source
+packages, and the four character outliers had only 2,382--3,413 recorded
+completion tokens. The raw traces do not preserve the teacher request's hard
+budget, so no hard teacher limit may be claimed.
+
+Use `ifv_agent+ignore_empty_think`: native non-empty `<think>` tokens retain
+weight 1.0, complete `<tool_call>` and final `<answer>` blocks receive weight
+2.0, and tool responses plus `loss=false` historical bad actions receive zero.
+The repository plugin is required because ms-swift 4.4.2's built-in `qwen`
+loss rule targets legacy `✿FUNCTION✿` syntax and silently leaves Qwen3.5 native
+`<tool_call><function=...>` calls at weight 1. The processor-v4 gate checks the
+real token-level weights rather than trusting the CLI string.
+
 ## Mandatory release gates
 
 1. Verify both archive hashes and every indexed trace hash.
@@ -67,8 +90,10 @@ to a preceding rejected Judgment request; it never recovers unbound output.
    positively supervised observation.
 6. Normalize recoverable executed tool arguments and mask only irreparable or
    runtime-rejected action/thought targets; never drop the containing episode.
-7. Run the independent rebuild audit and the real Qwen processor over every row
-   with max length 131,072, packing length 65,536, SP4 and truncation-by-error.
+7. Run the independent rebuild audit and the real Qwen processor-v4 over every
+   row with max length 131,072, packing length 65,536, SP4 and
+   truncation-by-error. Require unit-weight complete thoughts, 2x tool/answer
+   blocks, zero-weight tool responses/masked actions, and zero processor errors.
 8. Bind the final dataset, processor report, independent audit and policy audit
    hashes into a new training plan and a new output directory.
 
@@ -76,6 +101,9 @@ to a preceding rejected Judgment request; it never recovers unbound output.
 
 - Clean Qwen3.5-9B base; full-parameter BF16; four H20 GPUs; FSDP2 + SP4.
 - One epoch, 131,072 model ceiling and 65,536 packing length.
+- Use the H20 Agent-v2 profile and run a one-step weighted-loss SP4 canary before
+  the epoch. The prior throughput benchmark used binary `ignore_empty_think`,
+  so it does not establish the memory cost of per-token non-binary weights.
 - Save model-only checkpoints every 400 optimizer steps and retain the latest
   three. Optimizer, scheduler and RNG state are intentionally not saved.
 - Model-only checkpoints can seed a new training stage but cannot exactly resume

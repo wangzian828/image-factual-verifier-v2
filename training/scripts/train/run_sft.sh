@@ -29,6 +29,21 @@ require_model_path
 prepare_deepspeed_cpu_adam
 require_value EXPERIMENT_ID
 
+external_plugins=()
+if [[ -n "${IFV_EXTERNAL_PLUGINS:-}" ]]; then
+  read -r -a external_plugins <<<"$IFV_EXTERNAL_PLUGINS"
+  for external_plugin in "${external_plugins[@]}"; do
+    if [[ ! -f "$external_plugin" ]]; then
+      echo "ms-swift external plugin does not exist: $external_plugin" >&2
+      exit 2
+    fi
+  done
+fi
+if [[ "+${IFV_LOSS_SCALE}+" == *"+ifv_agent+"* ]] && [[ "${#external_plugins[@]}" -eq 0 ]]; then
+  echo "IFV loss_scale ifv_agent requires IFV_EXTERNAL_PLUGINS" >&2
+  exit 2
+fi
+
 case "${IFV_PADDING_FREE:-false}:${IFV_ATTN_IMPL,,}" in
   true:flash_attn|true:flash_attention_2|true:flash_attention_3|true:flash_attention_4|false:*) ;;
   true:*)
@@ -247,9 +262,16 @@ args=(
   --report_to tensorboard
 )
 
+if [[ "${#external_plugins[@]}" -gt 0 ]]; then
+  args+=(--external_plugins "${external_plugins[@]}")
+fi
+
 if [[ "$SAVE_STRATEGY" != "no" ]]; then
   args+=(--save_steps "$IFV_SAVE_STEPS")
   args+=(--save_total_limit "$IFV_SAVE_TOTAL_LIMIT")
+  if [[ -n "${IFV_SAVE_ONLY_MODEL:-}" ]]; then
+    args+=(--save_only_model "$IFV_SAVE_ONLY_MODEL")
+  fi
 fi
 
 if [[ "${IFV_EVAL_STRATEGY:-steps}" != "no" ]]; then
@@ -282,6 +304,19 @@ if [[ -n "${IFV_DATALOADER_PERSISTENT_WORKERS:-}" ]]; then
 fi
 if [[ -n "${IFV_PADDING_FREE:-}" ]]; then
   args+=(--padding_free "$IFV_PADDING_FREE")
+fi
+if [[ -n "${IFV_PACKING:-}" ]]; then
+  args+=(--packing "$IFV_PACKING")
+fi
+if [[ -n "${IFV_PACKING_LENGTH:-}" ]]; then
+  if [[ "${IFV_PACKING:-false}" != "true" ]]; then
+    echo "IFV_PACKING_LENGTH requires IFV_PACKING=true" >&2
+    exit 2
+  fi
+  args+=(--packing_length "$IFV_PACKING_LENGTH")
+fi
+if [[ -n "${IFV_LAZY_TOKENIZE:-}" ]]; then
+  args+=(--lazy_tokenize "$IFV_LAZY_TOKENIZE")
 fi
 if [[ -n "${IFV_SEQUENCE_PARALLEL_SIZE:-}" ]]; then
   args+=(--sequence_parallel_size "$IFV_SEQUENCE_PARALLEL_SIZE")

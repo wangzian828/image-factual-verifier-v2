@@ -95,3 +95,8 @@ prefix。结果 2,579/2,579 通过、0 错误、0 截断：
 [SFT canonical release 工作流](sft-canonical-release-workflow.md)。正式训练启动器必须
 绑定本目录的 `processor-verification.json` 与 `sft-data-gate.json`，并拒绝任何 SHA
 变化。
+
+> 后续变更（2026-09-13）：本报告与上述哈希只证明当时
+> `ignore_empty_think` 的历史训练输入，不证明新的 Agent 相对 loss 权重。下一轮两包
+> 合并训练必须重新生成 processor-v4 和 raw-data-gate-v3；不得复用本报告作为启动
+> 依据。数据内容与历史审计仍有效，不需要丢弃这 2,579 条完整轨迹。

@@ -268,10 +268,17 @@ def build_long_context_plan(
     )
     current_sha = sha256_file(train_resolved)
     data_checks = {
-        "processor_report_schema": _check(
-            report.get("schema_version"),
-            "ifv-ms-swift-agent-processor-verification-v3",
-        ),
+        "processor_report_schema": {
+            "passed": report.get("schema_version") in {
+                "ifv-ms-swift-agent-processor-verification-v3",
+                "ifv-ms-swift-agent-processor-verification-v4",
+            },
+            "actual": report.get("schema_version"),
+            "expected": [
+                "ifv-ms-swift-agent-processor-verification-v3",
+                "ifv-ms-swift-agent-processor-verification-v4",
+            ],
+        },
         "processor_report_passed": _check(report.get("passed"), True),
         "train_file_covered": {"passed": train_record is not None},
         "train_file_unchanged": {

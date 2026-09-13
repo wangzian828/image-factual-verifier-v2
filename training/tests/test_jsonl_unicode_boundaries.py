@@ -43,6 +43,9 @@ def test_sft_gate_preserves_unicode_line_separators(tmp_path):
         'masked_tool_call_targets': 1,
         'supervised_thought_targets': 1,
         'masked_thought_targets': 0,
+        'supervised_answer_targets': 0,
+        'masked_answer_targets': 0,
+        'tool_response_targets': 0,
     }
 
 

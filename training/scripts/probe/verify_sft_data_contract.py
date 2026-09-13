@@ -6,11 +6,30 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
 from ifv_training.audit import audit_derived_dataset
+from ifv_training.sft_loss_scale import (
+    IFV_FINAL_ANSWER_WEIGHT,
+    IFV_REASONING_WEIGHT,
+    IFV_TOOL_CALL_WEIGHT,
+)
+
+
+REQUIRED_LOSS_WEIGHT_CONTRACT = {
+    "reasoning": IFV_REASONING_WEIGHT,
+    "tool_call": IFV_TOOL_CALL_WEIGHT,
+    "final_answer": IFV_FINAL_ANSWER_WEIGHT,
+    "tool_response": 0.0,
+    "masked_target": 0.0,
+    "thinking_policy": (
+        "preserve every native teacher think token at unit weight; "
+        "do not truncate or length-downweight teacher reasoning"
+    ),
+}
 
 
 def _boolean(value: str) -> bool:
@@ -52,6 +71,9 @@ def _expected_loss_targets(paths: list[Path]) -> dict[str, int]:
         "masked_tool_call_targets": 0,
         "supervised_thought_targets": 0,
         "masked_thought_targets": 0,
+        "supervised_answer_targets": 0,
+        "masked_answer_targets": 0,
+        "tool_response_targets": 0,
     }
     for path in paths:
         if not path.is_file():
@@ -83,6 +105,22 @@ def _expected_loss_targets(paths: list[Path]) -> dict[str, int]:
                             else "supervised_thought_targets"
                         )
                         counts[key] += 1
+                    if role == "assistant":
+                        answer_count = len(
+                            re.findall(
+                                r"<answer>.+?</answer>",
+                                content,
+                                flags=re.DOTALL,
+                            )
+                        )
+                        key = (
+                            "masked_answer_targets"
+                            if masked
+                            else "supervised_answer_targets"
+                        )
+                        counts[key] += answer_count
+                    if role == "tool_response":
+                        counts["tool_response_targets"] += 1
     return counts
 
 
@@ -120,9 +158,9 @@ def verify_sft_data_contract(
 
     if (
         processor_report.get("schema_version")
-        != "ifv-ms-swift-agent-processor-verification-v3"
+        != "ifv-ms-swift-agent-processor-verification-v4"
     ):
-        errors.append("processor report does not use the required v3 schema")
+        errors.append("processor report does not use the required v4 schema")
     if processor_report.get("passed") is not True:
         errors.append("processor report did not pass")
 
@@ -135,6 +173,30 @@ def verify_sft_data_contract(
         expected_template_contract
     ):
         errors.append("processor template contract does not match the training profile")
+    if processor_report.get("loss_weight_contract") != REQUIRED_LOSS_WEIGHT_CONTRACT:
+        errors.append("processor report does not prove the required IFV loss weights")
+
+    reported_weight_tokens = processor_report.get("trainable_loss_weight_tokens")
+    reported_weight_tokens = (
+        reported_weight_tokens
+        if isinstance(reported_weight_tokens, Mapping)
+        else {}
+    )
+    allowed_weights = {
+        str(float(IFV_REASONING_WEIGHT)),
+        str(float(IFV_TOOL_CALL_WEIGHT)),
+        str(float(IFV_FINAL_ANSWER_WEIGHT)),
+    }
+    unexpected_weights = {
+        str(key) for key in reported_weight_tokens if str(key) not in allowed_weights
+    }
+    if unexpected_weights:
+        errors.append(
+            "processor report contains unexpected trainable loss weights: "
+            f"{sorted(unexpected_weights)}"
+        )
+    if not reported_weight_tokens:
+        errors.append("processor report has no trainable loss-weight histogram")
 
     train_input_tokens_max: int | None = None
     train_rows_at_or_above: int | None = None
@@ -268,9 +330,29 @@ def verify_sft_data_contract(
                     f"processor loss-mask check {key} does not match data: "
                     f"expected={expected}, observed={processor_checks.get(key)!r}"
                 )
+        weighted_checks = {
+            "supervised_tool_call_weighted_spans": expected_targets[
+                "supervised_tool_call_targets"
+            ],
+            "supervised_answer_weighted_spans": expected_targets[
+                "supervised_answer_targets"
+            ],
+            "supervised_thought_unit_weight_spans": expected_targets[
+                "supervised_thought_targets"
+            ],
+            "masked_tool_response_spans": expected_targets[
+                "tool_response_targets"
+            ],
+        }
+        for key, expected in weighted_checks.items():
+            if processor_checks.get(key) != expected:
+                errors.append(
+                    f"processor weighted-loss check {key} does not match data: "
+                    f"expected={expected}, observed={processor_checks.get(key)!r}"
+                )
 
     return {
-        "schema_version": "ifv-sft-raw-data-gate-v2",
+        "schema_version": "ifv-sft-raw-data-gate-v3",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "passed": not errors,
         "error_count": len(errors),
