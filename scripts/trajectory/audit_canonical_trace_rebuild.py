@@ -108,14 +108,61 @@ def _canonical_result(raw: Any) -> Any:
 def _candidate_steps(trace: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     state = _mapping(trace.get("state"))
     result: list[Mapping[str, Any]] = []
+    rejected_judgment_inputs: dict[str, Mapping[str, Any]] = {}
     for step in state.get("all_steps", []) or []:
         if not isinstance(step, Mapping):
             continue
-        if str(step.get("action_type", "")) in REJECTED_ACTION_TYPES:
-            continue
-        if str(step.get("stage", "")) not in POLICY_STAGES:
-            continue
+        stage = str(step.get("stage", ""))
+        action_type = str(step.get("action_type", ""))
         metadata = _mapping(step.get("metadata"))
+        if stage == "unified_judgment" and action_type in {
+            "format_error",
+            "output_rejected",
+        }:
+            request_id = str(metadata.get("context_request_id", "")).strip()
+            policy_input = metadata.get("policy_input")
+            if request_id and isinstance(policy_input, Mapping):
+                rejected_judgment_inputs[request_id] = policy_input
+            continue
+        if (
+            stage == "unified_judgment"
+            and action_type == "output"
+            and metadata.get("forced_output") is True
+            and str(metadata.get("interaction_lifecycle_kind", ""))
+            == "protocol_correction"
+            and isinstance(step.get("output"), Mapping)
+            and all(
+                key in step["output"]
+                and _mapping(trace.get("judgment")).get(key)
+                == step["output"][key]
+                for key in (
+                    "verdict",
+                    "confidence",
+                    "verdict_observation_ids",
+                    "overall_assessment",
+                    "fact_check_report",
+                )
+            )
+        ):
+            parent_id = str(
+                metadata.get("parent_context_request_id", "")
+            ).strip()
+            inherited_input = rejected_judgment_inputs.get(parent_id)
+            if inherited_input is not None:
+                recovered_step = dict(step)
+                recovered_metadata = dict(metadata)
+                recovered_metadata["policy_input"] = dict(inherited_input)
+                recovered_metadata["policy_action"] = dict(step["output"])
+                recovered_metadata[
+                    "sft_policy_input_provenance"
+                ] = "rejected_parent_request"
+                recovered_step["metadata"] = recovered_metadata
+                result.append(recovered_step)
+                continue
+        if action_type in REJECTED_ACTION_TYPES:
+            continue
+        if stage not in POLICY_STAGES:
+            continue
         if not isinstance(metadata.get("policy_input"), Mapping):
             continue
         if not isinstance(metadata.get("policy_action"), Mapping):

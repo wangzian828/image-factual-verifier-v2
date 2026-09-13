@@ -3953,6 +3953,16 @@ class StageRunner:
         metadata = {
             "forced_output": True,
             **call_metadata,
+            "policy_input": self._policy_input_snapshot(
+                system_instruction=system_msg["content"],
+                input_payload=messages[1:],
+                tools=[],
+                response_format=(
+                    self._openai_response_format()
+                    if self._uses_native_chat_completions()
+                    else None
+                ),
+            ),
         }
         if response.text:
             output_json = self._extract_output(response.text)
@@ -3968,6 +3978,7 @@ class StageRunner:
                     output_json
                 )
                 if parsed is not None:
+                    metadata["policy_action"] = parsed.model_dump()
                     return parsed, metadata
                 metadata["policy_action"] = deepcopy(output_json)
                 metadata["rejection_reason"] = (

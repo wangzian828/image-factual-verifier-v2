@@ -10,6 +10,7 @@ from scripts.trajectory.export_canonical_trace_bundle import (
     _verify_delivery_file,
     bind_reference_media,
 )
+from src.trajectory.exporter import _trajectory_candidate_steps
 
 
 def _media(root: Path, content: bytes) -> str:
@@ -136,3 +137,90 @@ def test_delivery_level_checksum_rejects_modified_bytes(tmp_path: Path) -> None:
             "SOURCE_MANIFEST.json",
             _delivery_checksums(tmp_path),
         )
+
+
+@pytest.mark.parametrize("parent_action_type", ["output_rejected", "format_error"])
+def test_forced_judgment_correction_recovers_parent_policy_input(
+    parent_action_type: str,
+) -> None:
+    rejected_input = {
+        "system_instruction": "Return the final judgment.",
+        "input_payload": [{"role": "user", "content": "history"}],
+        "response_format": {"type": "json_schema"},
+    }
+    corrected = {
+        "verdict": "real",
+        "confidence": 0.8,
+        "verdict_observation_ids": ["call-1"],
+        "overall_assessment": "The evidence supports the claim.",
+        "fact_check_report": {"headline": "Supported"},
+    }
+    trace = {
+        "judgment": {**corrected, "policy_rule_id": "unified-react-v1"},
+        "state": {
+            "all_steps": [
+                {
+                    "stage": "unified_judgment",
+                    "action_type": parent_action_type,
+                    "output": {"verdict": "maybe"},
+                    "metadata": {
+                        "context_request_id": "req-final-1",
+                        "policy_input": rejected_input,
+                        "policy_action": {"verdict": "maybe"},
+                    },
+                },
+                {
+                    "stage": "unified_judgment",
+                    "action_type": "output",
+                    "output": corrected,
+                    "metadata": {
+                        "forced_output": True,
+                        "interaction_lifecycle_kind": "protocol_correction",
+                        "parent_context_request_id": "req-final-1",
+                    },
+                },
+            ]
+        },
+    }
+
+    candidates = _trajectory_candidate_steps(trace)
+
+    assert len(candidates) == 1
+    _, step, example_type = candidates[0]
+    assert example_type == "judgment"
+    assert step["metadata"]["policy_input"] == rejected_input
+    assert step["metadata"]["policy_action"] == corrected
+    assert (
+        step["metadata"]["sft_policy_input_provenance"]
+        == "rejected_parent_request"
+    )
+    assert "policy_input" not in trace["state"]["all_steps"][1]["metadata"]
+
+
+def test_forced_judgment_correction_rejects_unbound_output() -> None:
+    corrected = {
+        "verdict": "real",
+        "confidence": 0.8,
+        "verdict_observation_ids": ["call-1"],
+        "overall_assessment": "The evidence supports the claim.",
+        "fact_check_report": {"headline": "Supported"},
+    }
+    trace = {
+        "judgment": {**corrected, "verdict": "fake"},
+        "state": {
+            "all_steps": [
+                {
+                    "stage": "unified_judgment",
+                    "action_type": "output",
+                    "output": corrected,
+                    "metadata": {
+                        "forced_output": True,
+                        "interaction_lifecycle_kind": "protocol_correction",
+                        "parent_context_request_id": "missing-parent",
+                    },
+                }
+            ]
+        },
+    }
+
+    assert _trajectory_candidate_steps(trace) == []

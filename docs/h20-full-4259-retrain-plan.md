@@ -14,6 +14,10 @@ source, not resume the interrupted weights.
   `6460fe4f55f5ace2eb4ad43d811531fa1d5405a663ff8f0fa59e4b8823ff18d2`.
 - Quality-reroll package 02: 1,652 raw traces, archive SHA-256
   `153dac2e15efcc46385f35af158213f6d5720363a6475641ad4ed54f18729119`.
+- The 2026-09-12 image-supplemented package has archive SHA-256
+  `e8f4f56d73c7e286a8ef90369642ecc740bdbe25b480e3c7d4fe23095171cf00`.
+  It contains the same 1,652 trace hashes plus 1,649 deduplicated primary
+  input images. All 3,301 internal checksums and all image decodes pass.
 - Case-ID overlap: 0. Episode-ID overlap: 0. Combined raw inventory: 4,259.
 - Package 02 canonical trace audit: 1,652/1,652 passed, with 759 retained
   protocol-correction warnings and no scheduler/protocol/route rejection
@@ -25,12 +29,13 @@ silently converted into reasoning supervision.
 
 ## Blocking media gate
 
-Package 02 intentionally omits external media and runtime stores. On the H20
-host, the existing initial delivery resolves only 7/1,652 initial image hashes.
-The other 1,645 initial images are unavailable. In addition, 1,373 traces expose
-more than one image to the policy; their archived requests contain at least
-6,191 image slots beyond the initial image. None of the package-02 runtime-store
-paths is accessible on H20.
+The image-supplemented package resolves every primary image, but it is still not
+a complete policy-media projection. Its map has exactly one reference per trace
+(1,652 references, 1,649 unique files). In contrast, the archived provider
+requests require 7,843 ordered image slots: 1,373 traces expose more than one
+image and contain 6,191 slots beyond the initial image. Those extra request
+blocks contain only `runtime_image=true`, not reconstructible paths or bytes,
+and none of the package-02 runtime-store paths is accessible on H20.
 
 Do not export package 02 as text-only or initial-image-only data. Before merged
 training, obtain an attested package-02 media projection containing either:
@@ -39,6 +44,16 @@ training, obtain an attested package-02 media projection containing either:
    plus the initial images; or
 2. a frozen policy-media sidecar with ordered image hashes, message marker
    positions, image files and checksums for every episode.
+
+The raw target audit itself passes: all 1,652 traces terminate successfully,
+18,404/18,404 final observation IDs are grounded in preceding successful tool
+observations, and there is no case, episode, or trace-hash overlap with the
+initial canonical package. Of these traces, 1,616 are immediately reasoning-SFT
+exportable, 19 contain at least one ReAct action without provider-visible
+thought and remain action-only, and 17 use a runtime protocol-correction request
+for the accepted final Judgment. The exporter recovers those 17 only when the
+accepted output equals the frozen top-level Judgment and the correction points
+to a preceding rejected Judgment request; it never recovers unbound output.
 
 ## Mandatory release gates
 

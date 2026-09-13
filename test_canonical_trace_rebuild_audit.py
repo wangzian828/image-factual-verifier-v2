@@ -82,6 +82,51 @@ def test_audit_reconstructs_only_accepted_policy_steps() -> None:
     ]
 
 
+def test_audit_reconstructs_bound_forced_judgment_correction() -> None:
+    corrected = {
+        "verdict": "real",
+        "confidence": 0.7,
+        "verdict_observation_ids": ["call-1"],
+        "overall_assessment": "The evidence supports the claim.",
+        "fact_check_report": {"headline": "Supported"},
+    }
+    trace = {
+        "judgment": {**corrected, "policy_rule_id": "unified-react-v1"},
+        "state": {
+            "all_steps": [
+                {
+                    "stage": "unified_judgment",
+                    "action_type": "output_rejected",
+                    "output": {"verdict": "unknown"},
+                    "metadata": {
+                        "context_request_id": "req-1",
+                        "policy_input": {"input_payload": ["history"]},
+                        "policy_action": {"verdict": "unknown"},
+                    },
+                },
+                {
+                    "stage": "unified_judgment",
+                    "action_type": "output",
+                    "output": corrected,
+                    "metadata": {
+                        "forced_output": True,
+                        "interaction_lifecycle_kind": "protocol_correction",
+                        "parent_context_request_id": "req-1",
+                    },
+                },
+            ]
+        },
+    }
+
+    candidates = _candidate_steps(trace)
+
+    assert len(candidates) == 1
+    assert candidates[0]["metadata"]["policy_action"] == corrected
+    assert candidates[0]["metadata"]["policy_input"] == {
+        "input_payload": ["history"]
+    }
+
+
 def test_audit_rejects_non_object_tool_arguments() -> None:
     with pytest.raises(ValueError, match="arguments"):
         _tool_call(json.dumps({"name": "text_search", "arguments": "[]"}))

@@ -358,16 +358,62 @@ def _trajectory_candidate_steps(
 ) -> list[tuple[int, Mapping[str, Any], str]]:
     state = _mapping(trace.get("state"))
     candidates: list[tuple[int, Mapping[str, Any], str]] = []
+    rejected_judgment_inputs: dict[str, Mapping[str, Any]] = {}
     for index, step in enumerate(_rows(state.get("all_steps"))):
-        if str(step.get("action_type", "")) in {
+        stage = str(step.get("stage", "")).strip()
+        action_type = str(step.get("action_type", "")).strip()
+        metadata = _mapping(step.get("metadata"))
+        if stage == "unified_judgment" and action_type in {
+            "format_error",
+            "output_rejected",
+        }:
+            request_id = str(metadata.get("context_request_id", "")).strip()
+            policy_input = metadata.get("policy_input")
+            if request_id and isinstance(policy_input, Mapping):
+                rejected_judgment_inputs[request_id] = policy_input
+            continue
+        if (
+            stage == "unified_judgment"
+            and action_type == "output"
+            and metadata.get("forced_output") is True
+            and str(metadata.get("interaction_lifecycle_kind", ""))
+            == "protocol_correction"
+            and isinstance(step.get("output"), Mapping)
+            and all(
+                key in step["output"]
+                and _mapping(trace.get("judgment")).get(key)
+                == step["output"][key]
+                for key in (
+                    "verdict",
+                    "confidence",
+                    "verdict_observation_ids",
+                    "overall_assessment",
+                    "fact_check_report",
+                )
+            )
+        ):
+            parent_id = str(
+                metadata.get("parent_context_request_id", "")
+            ).strip()
+            inherited_input = rejected_judgment_inputs.get(parent_id)
+            if inherited_input is not None:
+                recovered_step = dict(step)
+                recovered_metadata = dict(metadata)
+                recovered_metadata["policy_input"] = dict(inherited_input)
+                recovered_metadata["policy_action"] = dict(step["output"])
+                recovered_metadata[
+                    "sft_policy_input_provenance"
+                ] = "rejected_parent_request"
+                recovered_step["metadata"] = recovered_metadata
+                candidates.append((index, recovered_step, "judgment"))
+                continue
+        if action_type in {
             "format_error",
             "output_rejected",
             "policy_replan",
         }:
             continue
-        stage = str(step.get("stage", "")).strip()
         example_type = _example_type(stage)
-        metadata = _mapping(step.get("metadata"))
         if example_type is None:
             continue
         if not isinstance(metadata.get("policy_input"), Mapping):

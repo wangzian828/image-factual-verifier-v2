@@ -908,6 +908,10 @@ def test_qwen_forced_output_preserves_final_budget_and_thinking_policy() -> None
     }
     assert backend.requests[1]["response_format"]["type"] == "json_schema"
     assert steps[-1].metadata["forced_output"] is True
+    assert steps[-1].metadata["policy_action"] == {
+        "answer": "ceremonial coach"
+    }
+    assert steps[-1].metadata["policy_input"]["input_payload"]
 
 
 def test_local_qwen_forwards_stage_thinking_switch_to_lmdeploy() -> None:
