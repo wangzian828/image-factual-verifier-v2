@@ -90,6 +90,27 @@ def _thought(content: str) -> str:
     return match.group(1).strip()
 
 
+def _project_final_answer_ids(
+    answer: Mapping[str, Any], successful_unmasked: set[str]
+) -> dict[str, Any]:
+    """Apply the documented causal projection to final observation IDs."""
+
+    projected = dict(answer)
+    retained: list[str] = []
+    seen: set[str] = set()
+    for value in answer.get("verdict_observation_ids", []) or []:
+        observation_id = str(value).strip()
+        if (
+            observation_id
+            and observation_id in successful_unmasked
+            and observation_id not in seen
+        ):
+            retained.append(observation_id)
+            seen.add(observation_id)
+    projected["verdict_observation_ids"] = retained
+    return projected
+
+
 def _canonical_result(raw: Any) -> Any:
     value = raw
     if isinstance(value, str):
@@ -495,12 +516,17 @@ def audit_bundle(
         expected = str(
             _mapping(_mapping(trace.get("state")).get("runtime_case")).get("image_sha256", "")
         )
-        audit.require(len(images) == 1, "action_image_count", episode_id)
-        if images:
-            path = Path(images[0])
+        audit.require(bool(images), "action_image_count", episode_id)
+        digests: list[str] = []
+        for image in images:
+            path = Path(image)
+            digest = path.stem.casefold()
+            digests.append(digest)
             audit.require(path.is_file(), "action_image_missing", episode_id)
             if path.is_file():
-                audit.require(_sha256(path) == expected, "action_image_hash", episode_id)
+                audit.require(_sha256(path) == digest, "action_image_hash", episode_id)
+        if expected:
+            audit.require(expected.casefold() in digests, "action_primary_image", episode_id)
         audit.counts["action_only_rows"] += 1
 
     audit.require(
@@ -544,6 +570,11 @@ def audit_bundle(
                     if locator.get("tool_success") is True:
                         successful_unmasked.add(str(locator.get("observation_id", "")))
                 continue
+            if role == "assistant" and index == len(messages) - 1:
+                # The live-contract projection may remove only duplicate or
+                # non-causal final observation IDs.  It is checked exactly
+                # below after the successful unmasked ID set is complete.
+                continue
             audit.require(
                 str(source.get("content", "")) == str(message.get("content", "")),
                 "policy_non_call_content_drift",
@@ -551,7 +582,15 @@ def audit_bundle(
             )
         source_answer = _answer(str(source_messages[-1].get("content", "")))
         policy_answer = _answer(str(messages[-1].get("content", "")))
-        audit.require(source_answer == policy_answer, "policy_final_target_drift", episode_id)
+        audit.require(
+            _project_final_answer_ids(source_answer, successful_unmasked)
+            == policy_answer,
+            "policy_final_target_drift",
+            episode_id,
+        )
+        audit.counts["provider_final_ids"] += len(
+            source_answer.get("verdict_observation_ids", []) or []
+        )
         final_ids = [
             str(value).strip()
             for value in policy_answer.get("verdict_observation_ids", []) or []
@@ -581,8 +620,12 @@ def audit_bundle(
     audit.require(int(provider_counts.get("dropped_rows", -1)) == 0, "manifest_dropped_rows", "manifest")
     audit.require(
         int(final_projection.get("original", -1))
-        == int(final_projection.get("retained", -2))
-        == audit.counts["policy_final_ids"],
+        == audit.counts["provider_final_ids"]
+        and int(final_projection.get("retained", -1))
+        == audit.counts["policy_final_ids"]
+        and int(final_projection.get("dropped_not_explicitly_visible", -1))
+        + int(final_projection.get("duplicate_ids_removed", -1))
+        == audit.counts["provider_final_ids"] - audit.counts["policy_final_ids"],
         "manifest_final_id_retention",
         "manifest",
     )

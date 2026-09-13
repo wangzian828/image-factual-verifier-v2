@@ -9,6 +9,7 @@ from scripts.trajectory.audit_canonical_trace_rebuild import (
     _candidate_steps,
     _canonical_result,
     _normalize_raw_index_entry,
+    _project_final_answer_ids,
     _raw_json_prefix,
     _thought,
     _tool_call,
@@ -147,3 +148,23 @@ def test_audit_normalizes_attested_distribution_index_fields() -> None:
     assert normalized["path"] == "traces/0001.json"
     assert normalized["sha256"] == "a" * 64
     assert normalized["request_count"] == 3
+
+
+def test_audit_projects_only_visible_unique_final_observation_ids() -> None:
+    source = {
+        "verdict": "fake",
+        "verdict_observation_ids": ["call-1", "missing", "call-1", "call-2"],
+        "fact_check_report": {"headline": "Mismatch"},
+    }
+
+    assert _project_final_answer_ids(source, {"call-1", "call-2"}) == {
+        "verdict": "fake",
+        "verdict_observation_ids": ["call-1", "call-2"],
+        "fact_check_report": {"headline": "Mismatch"},
+    }
+    assert source["verdict_observation_ids"] == [
+        "call-1",
+        "missing",
+        "call-1",
+        "call-2",
+    ]
