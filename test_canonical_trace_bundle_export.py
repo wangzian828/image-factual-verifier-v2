@@ -11,7 +11,10 @@ from scripts.trajectory.export_canonical_trace_bundle import (
     _verify_delivery_file,
     bind_reference_media,
 )
-from scripts.trajectory.export_attested_request_image_bundle import _distribution
+from scripts.trajectory.export_attested_request_image_bundle import (
+    _distribution,
+    _split_group_id,
+)
 from src.trajectory.exporter import _trajectory_candidate_steps
 from src.trajectory.media_projection import project_attested_request_media
 
@@ -314,6 +317,16 @@ def test_published_request_image_distribution_manifest_is_bound(
 
     assert result["archive_sha256"] == digest
     assert result["archive_bytes"] == archive.stat().st_size
+
+
+def test_long_case_id_uses_stable_bounded_split_group() -> None:
+    case_id = "route-aware:" + "x" * 200
+
+    first = _split_group_id(case_id)
+
+    assert first == _split_group_id(case_id)
+    assert len(first) <= 100
+    assert first.startswith("case-sha256:")
     assert result["trace_count"] == 2
 
 

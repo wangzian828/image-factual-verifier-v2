@@ -173,6 +173,12 @@ def _rebind_trace_image(
     return rebound
 
 
+def _split_group_id(case_id: str) -> str:
+    if len(case_id) <= 100:
+        return case_id
+    return "case-sha256:" + hashlib.sha256(case_id.encode("utf-8")).hexdigest()
+
+
 def export_bundle(
     sidecar_root: Path,
     output_dir: Path,
@@ -297,7 +303,7 @@ def export_bundle(
             exported_action.update(
                 {
                     "split": split,
-                    "split_group_id": case_id,
+                    "split_group_id": _split_group_id(case_id),
                     "source_trace_sha256": expected_trace_sha,
                     "media_binding_schema": EXPECTED_DISTRIBUTION_SCHEMA,
                 }
@@ -320,7 +326,7 @@ def export_bundle(
         dataset_row = DatasetTrajectorySFTExample(
             **exported,
             split=split,
-            split_group_id=case_id,
+            split_group_id=_split_group_id(case_id),
             source_family_keys=_cross_case_source_families(trace),
             teacher_score=0.0,
         ).model_dump(mode="json")
@@ -338,7 +344,7 @@ def export_bundle(
                 "episode_id": episode_id,
                 "case_id": case_id,
                 "split": split,
-                "split_group_id": case_id,
+                "split_group_id": _split_group_id(case_id),
                 "source_trace": str(trace_path),
                 "source_trace_sha256": expected_trace_sha,
                 "tool_call_count": int(exported["tool_call_count"]),
