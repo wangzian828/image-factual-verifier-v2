@@ -55,6 +55,9 @@ def test_sft_launcher_loads_the_loss_scale_plugin_and_h20_profile() -> None:
     assert "ifv_sft_agent_plugin.py" in profile
     assert "IFV_SEQUENCE_PARALLEL_SIZE=4" in profile
     assert "IFV_PACKING_LENGTH=120000" in profile
+    assert "IFV_GRADIENT_CHECKPOINTING=false" in profile
+    assert "IFV_VIT_GRADIENT_CHECKPOINTING=false" in profile
+    assert "IFV_USE_LIGER_KERNEL=true" in profile
     assert "IFV_SAVE_ONLY_MODEL=true" in profile
     assert "qwen3.5-full-4gpu-h20-fsdp2-sp4-flash-128k-agent-v2.env" in canary
     assert "IFV_MAX_STEPS=1" in canary
