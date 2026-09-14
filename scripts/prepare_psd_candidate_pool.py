@@ -8,7 +8,7 @@ pixels. Gold and selection metadata never enter public model inputs.
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
@@ -260,7 +260,7 @@ def official_range(start, end):
         raise RuntimeError(f"official range {start}:{end} failed: {type(exc).__name__}") from None
 
 
-def stream_images(args, selected, official):
+def stream_images(args, selected, official, *, persist=True):
     """One pass, no compressed archive copy; retain selected original pixels."""
     from PIL import Image
     output = args.output_dir
@@ -269,6 +269,13 @@ def stream_images(args, selected, official):
     desired = {r["official_image_member"] for r in selected}
     known = {r["unified_image_path"] for r in official}
     inventory, seen = {}, set()
+    from src.tools.vision_utils import bounded_pil_image_to_jpeg_bytes
+    def normalize(data):
+        with Image.open(io.BytesIO(data)) as im:
+            normalized, _ = bounded_pil_image_to_jpeg_bytes(im, max_long_edge=1024, jpeg_quality=95)
+        return hashlib.sha256(normalized).hexdigest()
+    encoders = ThreadPoolExecutor(max_workers=4)
+    pending = deque()
     transport = OrderedRangeReader(SIZE, official_range)
     try:
         reader = HashingReader(transport)
@@ -280,27 +287,47 @@ def stream_images(args, selected, official):
                 name = rel.as_posix()
                 if name not in known:
                     continue
-                if name in seen or not member.isfile() or member.size > 128 * 1024**2:
-                    raise ValueError("duplicate/nonregular/oversized official image")
+                if name in seen:
+                    raise ValueError(f"duplicate official image member: {name}")
                 seen.add(name)
+                if member.islnk():
+                    target = PurePosixPath(member.linkname)
+                    if target.is_absolute() or ".." in target.parts or target.as_posix() not in inventory:
+                        raise ValueError(f"unsafe or forward official hardlink: {name}")
+                    inventory[name] = dict(inventory[target.as_posix()], archive_member=name,
+                                           hardlink_target=target.as_posix())
+                    continue
+                if not member.isfile() or member.size > 128 * 1024**2:
+                    raise ValueError(f"nonregular/oversized official image: {name}, type={member.type!r}, bytes={member.size}")
                 with archive.extractfile(member) as handle:
                     data = handle.read()
                 sha = hashlib.sha256(data).hexdigest()
                 record = {"archive_member": name, "sha256": sha, "bytes": len(data)}
+                record["_normalization_future"] = encoders.submit(normalize, data)
+                pending.append(record["_normalization_future"])
+                if len(pending) >= 8:
+                    pending.popleft().result()
                 if name in desired:
                     with Image.open(io.BytesIO(data)) as im:
                         record.update(width=im.width, height=im.height, format=im.format)
-                        extension = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif"}.get(im.format)
+                        extension = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif",
+                                     "BMP": ".bmp", "TIFF": ".tiff", "MPO": ".mpo", "AVIF": ".avif"}.get(im.format)
                         if not extension:
-                            raise ValueError("unsupported original image format")
+                            # The runtime detects raster bytes with PIL and
+                            # always sends bounded JPEG. Preserve other PIL-
+                            # decodable originals instead of discarding them.
+                            extension = next((ext for ext, fmt in Image.registered_extensions().items()
+                                              if fmt == im.format), ".img")
                         im.verify()
                     path = media / (sha + extension)
                     if path.exists():
                         if sha256_file(path) != sha:
                             raise ValueError("existing selected image bytes changed")
                     else:
-                        with path.open("xb") as handle:
+                        partial = path.with_suffix(path.suffix + ".partial")
+                        with partial.open("wb") as handle:
                             handle.write(data)
+                        os.replace(partial, path)
                     record["path"] = str(path)
                 inventory[name] = record
         while reader.read(1024**2):
@@ -309,11 +336,37 @@ def stream_images(args, selected, official):
             raise ValueError("official archive did not match pinned SHA256/size")
     finally:
         transport.close()
+        encoders.shutdown(wait=True, cancel_futures=True)
+    for record in inventory.values():
+        record["normalized_image_sha256"] = record.pop("_normalization_future").result()
     if set(inventory) != known or not desired.issubset(inventory):
         raise ValueError("official archive image membership mismatch")
-    write_json(output / "archive-verification.json", {"passed": True, "sha256": SHA256,
-        "bytes": SIZE, "compressed_archive_stored": False, "official_images_hashed": len(inventory)})
-    write_jsonl(output / "official-image-inventory.jsonl", sorted(inventory.values(), key=lambda r: r["archive_member"]))
+    # Tar stores duplicate originals as backward hardlinks. Reuse a selected
+    # byte-identical asset regardless of which archive member supplied it.
+    saved = {r["sha256"]: r for r in inventory.values() if r.get("path")}
+    for name, record in inventory.items():
+        if name in desired and not record.get("path") and record["sha256"] in saved:
+            record.update({k: saved[record["sha256"]][k] for k in ("path", "width", "height", "format")})
+    missing = [name for name in desired if not inventory[name].get("path")]
+    if missing:
+        # A selected hardlink may refer to an unselected original. A second
+        # bounded pass retains only those targets, never the entire archive.
+        needed = set()
+        for name in missing:
+            while inventory[name].get("hardlink_target"):
+                name = inventory[name]["hardlink_target"]
+            needed.add(name)
+        extra = stream_images(args, [{"official_image_member": n} for n in needed], official, persist=False)
+        saved = {r["sha256"]: r for r in extra.values() if r.get("path")}
+        for name in missing:
+            record = inventory[name]
+            record.update({k: saved[record["sha256"]][k] for k in ("path", "width", "height", "format")})
+    if persist:
+        write_jsonl(output / "official-image-inventory.jsonl", sorted(inventory.values(), key=lambda r: r["archive_member"]))
+        write_json(output / "archive-verification.json", {"passed": True, "sha256": SHA256,
+            "bytes": SIZE, "compressed_archive_stored": False, "official_images_hashed": len(inventory),
+            "hardlink_members": sum(bool(r.get("hardlink_target")) for r in inventory.values()),
+            "normalized_image_recipe": {"max_long_edge": 1024, "jpeg_quality": 95}})
     return inventory
 
 
@@ -353,6 +406,19 @@ def release(output, name, records, image_inventory, gold_map, policy):
     return {"cases": len(public), "benchmark": str(benchmark), "sha256": sha256_file(benchmark)}
 
 
+def image_conflict_groups(selection, images):
+    """Identical image-only inputs cannot have opposing private labels."""
+    labels = defaultdict(set)
+    for row in selection["inventory"]:
+        image = images[row["official_image_member"]]
+        for key in ("sha256", "normalized_image_sha256"):
+            labels[(key, image[key])].add(row["label"])
+    conflicts = {key for key, values in labels.items() if len(values) > 1}
+    return {row["selection_group_id"] for row in selection["inventory"]
+            if any((key, images[row["official_image_member"]][key]) in conflicts
+                   for key in ("sha256", "normalized_image_sha256"))}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("storage-root", "metadata-root", "sft-root", "case-split", "test-manifest", "test-runtime", "output-dir"):
@@ -361,6 +427,7 @@ def main():
     parser.add_argument("--sft-size", type=int, default=1000)
     parser.add_argument("--seed", default="psd-pool-20260914-v1")
     parser.add_argument("--materialize", action="store_true")
+    parser.add_argument("--test-image-audit", type=Path)
     args = parser.parse_args()
     for name, value in vars(args).items():
         if isinstance(value, Path):
@@ -410,6 +477,19 @@ def main():
         images = {r["archive_member"]: r for r in load_jsonl(args.output_dir / "official-image-inventory.jsonl")}
     else:
         images = stream_images(args, selected, inputs["official"])
+    if not args.test_image_audit:
+        raise ValueError("normalized formal-test image audit is required before release")
+    audit = load_json(args.test_image_audit)
+    if audit.get("test_runtime_sha256") != sha256_file(args.test_runtime):
+        raise ValueError("test image audit is bound to a different formal release")
+    if audit.get("normalization") != {"max_long_edge": 1024, "jpeg_quality": 95}:
+        raise ValueError("test image normalization recipe mismatch")
+    expected_test = {r["case_id"]: r["image_sha256"] for r in inputs["test_runtime"]}
+    audited_test = {r["case_id"]: r["raw_image_sha256"] for r in audit["test_images"]}
+    if audited_test != expected_test or len(audit["test_images"]) != len(expected_test):
+        raise ValueError("incomplete or inconsistent formal-test image audit")
+    if not all(r.get("normalized_image_sha256") for r in images.values()):
+        raise ValueError("incomplete normalized official image inventory")
     test_hashes = {r["image_sha256"] for r in inputs["test_runtime"]}
     dev_hashes = {images[r["official_image_member"]]["sha256"] for r in selection["development"]}
     train_hashes = {images[r["official_image_member"]]["sha256"] for r in selection["hard_train"] + selection["sft_revisit"]}
@@ -418,6 +498,23 @@ def main():
     bad_hashes = test_hashes | (dev_hashes & (train_hashes | historical_hashes))
     bad_groups = {r["selection_group_id"] for r in selected if images[r["official_image_member"]]["sha256"] in bad_hashes}
     report["raw_image_quarantine"] = [r["case_id"] for r in selected if r["selection_group_id"] in bad_groups]
+    normalized_test = {r["normalized_image_sha256"] for r in audit["test_images"]}
+    def norm(row):
+        return images[row["official_image_member"]]["normalized_image_sha256"]
+    normalized_dev = {norm(r) for r in selection["development"]}
+    normalized_train = {norm(r) for r in selection["hard_train"] + selection["sft_revisit"]}
+    normalized_historical = {norm(r) for r in selection["inventory"]
+                            if r["teacher_delivery"] != "not_in_success_delivery" or r["exclusion_reasons"]}
+    normalized_bad = normalized_test | (normalized_dev & (normalized_train | normalized_historical))
+    normalized_bad_groups = {r["selection_group_id"] for r in selected if norm(r) in normalized_bad}
+    report["normalized_image_quarantine"] = [r["case_id"] for r in selected if r["selection_group_id"] in normalized_bad_groups]
+    bad_groups |= normalized_bad_groups
+    conflicting_groups = image_conflict_groups(selection, images)
+    report["conflicting_image_label_quarantine"] = [r["case_id"] for r in selected
+                                                  if r["selection_group_id"] in conflicting_groups]
+    bad_groups |= conflicting_groups
+    report["test_image_audit_sha256"] = sha256_file(args.test_image_audit)
+    report["image_quarantine"] = [r["case_id"] for r in selected if r["selection_group_id"] in bad_groups]
     final = {name: [r for r in selection[name] if r["selection_group_id"] not in bad_groups]
              for name in ("hard_train", "sft_revisit", "development")}
     final["train"] = sorted(final["hard_train"] + final["sft_revisit"], key=lambda r: r["case_id"])
@@ -433,6 +530,7 @@ def main():
     for name, rows in final.items():
         write_jsonl(args.output_dir / "selection" / (name + "-final.jsonl"), rows)
     report.update(status="ready_for_fresh_policy_rollouts", raw_image_test_overlap=0,
+        normalized_image_test_overlap=0, normalized_image_train_development_overlap=0,
         raw_image_train_development_overlap=0, development_historical_sft_image_overlap=0,
         stored_original_image_bytes=sum(r["bytes"] for r in {r["sha256"]: r for r in images.values() if r.get("path")}.values()),
         final_pools={name: describe(rows) for name, rows in final.items()})

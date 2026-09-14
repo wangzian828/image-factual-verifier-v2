@@ -87,3 +87,102 @@ def test_parallel_byte_stream_rejects_truncated_range():
             reader.read(10)
     finally:
         reader.close()
+
+
+@pytest.mark.parametrize("image_format", ["JPEG", "BMP", "TIFF"])
+def test_stream_resolves_selected_hardlink_without_storing_full_archive(tmp_path, monkeypatch, image_format):
+    import hashlib
+    import io
+    import tarfile
+    from types import SimpleNamespace
+    from PIL import Image
+    from scripts import prepare_psd_candidate_pool as module
+
+    pixels = io.BytesIO()
+    Image.new("RGB", (20, 12), "red").save(pixels, format=image_format)
+    data = pixels.getvalue()
+    compressed = io.BytesIO()
+    with tarfile.open(fileobj=compressed, mode="w:gz") as archive:
+        regular = tarfile.TarInfo("images/a.jpg")
+        regular.size = len(data)
+        archive.addfile(regular, io.BytesIO(data))
+        linked = tarfile.TarInfo("images/b.jpg")
+        linked.type, linked.linkname = tarfile.LNKTYPE, "images/a.jpg"
+        archive.addfile(linked)
+    source = compressed.getvalue()
+    monkeypatch.setattr(module, "SIZE", len(source))
+    monkeypatch.setattr(module, "SHA256", hashlib.sha256(source).hexdigest())
+    monkeypatch.setattr(module, "official_range", lambda a, b: source[a:b])
+    result = module.stream_images(SimpleNamespace(output_dir=tmp_path),
+        [{"official_image_member": "images/b.jpg"}],
+        [{"unified_image_path": f"images/{name}.jpg"} for name in ("a", "b")])
+    assert result["images/a.jpg"]["sha256"] == result["images/b.jpg"]["sha256"]
+    assert result["images/b.jpg"]["normalized_image_sha256"]
+    assert module.sha256_file(module.Path(result["images/b.jpg"]["path"])) == hashlib.sha256(data).hexdigest()
+    assert len(list((tmp_path / "media").iterdir())) == 1
+    assert module.load_json(tmp_path / "archive-verification.json")["hardlink_members"] == 1
+
+
+@pytest.mark.parametrize("linkname", ["../../outside.jpg", "/outside.jpg", "images/forward.jpg"])
+def test_stream_rejects_unsafe_or_forward_hardlinks(tmp_path, monkeypatch, linkname):
+    import hashlib
+    import io
+    import tarfile
+    from types import SimpleNamespace
+    from scripts import prepare_psd_candidate_pool as module
+
+    compressed = io.BytesIO()
+    with tarfile.open(fileobj=compressed, mode="w:gz") as archive:
+        linked = tarfile.TarInfo("images/b.jpg")
+        linked.type, linked.linkname = tarfile.LNKTYPE, linkname
+        archive.addfile(linked)
+    source = compressed.getvalue()
+    monkeypatch.setattr(module, "SIZE", len(source))
+    monkeypatch.setattr(module, "SHA256", hashlib.sha256(source).hexdigest())
+    monkeypatch.setattr(module, "official_range", lambda a, b: source[a:b])
+    with pytest.raises(ValueError, match="unsafe or forward"):
+        module.stream_images(SimpleNamespace(output_dir=tmp_path), [], [{"unified_image_path": "images/b.jpg"}])
+
+
+def test_conflicting_image_labels_quarantine_both_groups_even_when_bytes_differ():
+    from scripts.prepare_psd_candidate_pool import image_conflict_groups
+    rows = [{"official_image_member": str(i), "label": label, "selection_group_id": str(i)}
+            for i, label in enumerate(("real", "fake", "real"))]
+    images = {str(i): {"sha256": str(i), "normalized_image_sha256": "same" if i < 2 else "other"}
+              for i in range(3)}
+    assert image_conflict_groups({"inventory": rows}, images) == {"0", "1"}
+
+
+def test_final_public_releases_verify_and_development_guard_is_enforced(tmp_path):
+    from PIL import Image
+    from scripts import prepare_psd_candidate_pool as selector
+    from scripts.verify_psd_candidate_pool import verify
+    from src.orchestrator.source_access import benchmark_source_access_policy
+
+    images, gold, selections = {}, {}, {}
+    for name, color in zip(("hard_train", "sft_revisit", "development"), ("red", "green", "blue")):
+        path = tmp_path / (name + ".jpg")
+        Image.new("RGB", (12, 8), color).save(path)
+        sha = selector.sha256_file(path)
+        images[name] = {"archive_member": name, "sha256": sha, "normalized_image_sha256": sha, "path": str(path)}
+        selections[name] = [{"case_id": name, "official_image_member": name, "selection_group_id": name,
+                             "label": "real", "prior_sft_exposure": name == "sft_revisit"}]
+        gold[name] = {"case_id": name, "factual_status": "supported", "private_evidence": "not public"}
+    selections["train"] = selections["hard_train"] + selections["sft_revisit"]
+    releases = {}
+    for name, rows in selections.items():
+        releases[name] = selector.release(tmp_path, name, rows, images, gold, benchmark_source_access_policy([]))
+        selector.write_jsonl(tmp_path / "selection" / (name + "-final.jsonl"), rows)
+    selector.write_jsonl(tmp_path / "official-image-inventory.jsonl", list(images.values()))
+    selector.write_json(tmp_path / "archive-verification.json", {"passed": True, "official_images_hashed": 3})
+    selector.write_json(tmp_path / "selection-report.json", {"status": "ready_for_fresh_policy_rollouts",
+                        "source_identity": {"files": {}}, "releases": releases})
+    result = verify(tmp_path, tmp_path)
+    assert result["public_images_independently_hashed"] == 3
+    assert result["pools"]["train"] == 2
+    dev_manifest = tmp_path / "development/runtime-release/manifest.json"
+    manifest = selector.load_json(dev_manifest)
+    manifest["training_prohibited"] = False
+    selector.write_json(dev_manifest, manifest)
+    with pytest.raises(ValueError, match="development training guard"):
+        verify(tmp_path, tmp_path)

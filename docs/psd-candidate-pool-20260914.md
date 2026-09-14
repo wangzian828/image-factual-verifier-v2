@@ -13,10 +13,9 @@ training. Current SFT and Gemini evaluation remain running independently.
   `2fda3ca7144d899e355fcbbaa4e6b93350878dbf5225ab423402123d5e37a448`.
 - Actual SFT index: `/volume/ybo/wza/data/ifv-merged-4929-canonical-20260913/canonical-dataset/index.jsonl`,
   4,872 train and one validation row, plus 56 separately delivered action-only rows.
-- Frozen historical split: 8,482 train and eight validation cases. Three of
-  those historical validation IDs appear in the later SFT train index; all
-  eight are excluded from this PSD selection. They are not independent SFT
-  validation evidence. Existing training artifacts are unchanged.
+- Frozen historical split: 8,482 train and eight validation cases; all eight
+  validation cases are excluded from this PSD selection. Existing training
+  artifacts are unchanged.
 - Official unified IDs reconcile one-to-one with all 4,873 reasoning-index
   IDs, including the shorter `main-*`/other delivery IDs.
 - Test exclusions cover all 1,527 formal manifest IDs and all 1,526 available
@@ -62,13 +61,20 @@ Server output:
 
 The selector streams the official archive with four bounded byte-range
 downloads. The compressed archive is never saved. All 8,490 original images
-are hashed; only images selected for training/development are stored, with
+are hashed, including a bounded 1024/JPEG95 fingerprint using the runtime's
+encoder. Only images selected for training/development are stored, with
 content-addressed deduplication. Public release views use hard links.
+Backward tar hardlinks are resolved without interpreting filesystem links;
+a target-only second pass is allowed if a selected link references an
+unselected original. Other PIL-decodable formats retain their original bytes;
+the runtime still sends bounded JPEG, as before. Unsafe/forward links fail
+closed. Image writes use a temporary file followed by atomic replacement.
 
 Before release, the complete compressed SHA-256 and size must match, every
-selected image must decode and retain its hash, and original-pixel overlap
-with test/PSD development/historical SFT is rechecked. Newly detected overlaps
-are quarantined by group and final counts are reported separately.
+selected image must decode and retain its hash, and raw/normalized-image
+overlap with test/PSD development/historical SFT is rechecked. Image-only
+inputs with conflicting private labels are also quarantined. Newly detected
+overlaps are quarantined by group and final counts are reported separately.
 
 `selection-report.json` is authoritative. Until it says
 `ready_for_fresh_policy_rollouts`, image preparation is incomplete and no
@@ -85,8 +91,8 @@ separate evaluator/selection artifacts. The development manifest is marked
 Run-specific source copy:
 `/volume/ybo/wza/training-artifacts/psd-candidate-pool-20260914/prepare_psd_candidate_pool.py`
 
-The current download log is `materialize-r2.log` in the same control directory;
-the earlier single-stream log remains as provenance. Source changes were
+The current download log is `materialize-r5.log` in the same control directory;
+the earlier logs remain as preparation diagnostics. Source changes were
 committed and pushed from the local Windows checkout, not the server. Reusing
 the output requires identical source hashes, seed and requested pool sizes.
 Verified images can be reused after interruption; no live provider calls or
@@ -98,7 +104,15 @@ preservation/source-failure gates so evidence-insufficient correct labels are
 not automatically preserved or excluded from semantic repair. Then construct
 verified repair and preservation distributions from the same frozen model.
 
-Local checks: seven targeted tests cover alias ambiguity, deterministic
+`scripts/prepare_psd_image_fingerprints.py` creates the bound formal-test
+fingerprint input accepted by `--test-image-audit`. It does not evaluate a
+model. `scripts/verify_psd_candidate_pool.py` independently checks finalized
+source/public-image hashes, public/private membership, split guards, and
+case/group/raw/normalized-image isolation between train and development.
+Its successful report is `release-verification.json`.
+
+Local checks: 15 targeted tests cover alias ambiguity, deterministic
 selection, whole-group isolation, old validation, label mismatches, ordered
-parallel transport and truncated-range rejection; compileall and diff-check
-pass. These checks do not replace the full archive/image/release verification.
+parallel transport, truncated ranges, safe/unsafe hardlinks, JPEG/BMP/TIFF,
+conflicting image labels, and public-release/development guards; compileall
+and diff-check pass. These checks do not replace full archive verification.
