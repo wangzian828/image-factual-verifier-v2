@@ -30,6 +30,40 @@ def test_aliases_reconcile_and_outcomes_are_not_invented():
         assert result[name] == repeated[name]
 
 
+def test_zero_development_returns_all_hard_cases_without_changing_sft_sample():
+    data = fixture_rows()
+    held_out = build_selection(*data, [], dev_size=2, sft_size=2, seed="frozen")
+    merged = build_selection(*data, [], dev_size=0, sft_size=2, seed="frozen")
+    assert merged["development"] == []
+    assert merged["sft_revisit"] == held_out["sft_revisit"]
+    assert {r["case_id"] for r in merged["hard_train"]} == {
+        r["case_id"] for r in held_out["hard_train"] + held_out["development"]}
+
+
+def test_verified_image_reuse_preserves_bytes_and_rejects_changed_inventory(tmp_path):
+    from scripts import prepare_psd_candidate_pool as module
+    source, output = tmp_path / "accepted", tmp_path / "revised"
+    source.mkdir()
+    output.mkdir()
+    pixels = source / "image.jpg"
+    pixels.write_bytes(b"verified-in-test")
+    module.write_json(source / "selection-report.json", {"status": "ready_for_fresh_policy_rollouts"})
+    module.write_jsonl(source / "official-image-inventory.jsonl", [{"archive_member": "image.jpg",
+        "sha256": module.sha256_file(pixels), "normalized_image_sha256": "normalized", "path": str(pixels)}])
+    module.write_json(source / "archive-verification.json", {"passed": True, "sha256": module.SHA256,
+        "bytes": module.SIZE, "official_images_hashed": 1})
+    module.write_json(source / "release-verification.json", {"passed": True,
+        "selection_report_sha256": module.sha256_file(source / "selection-report.json"),
+        "official_image_inventory_sha256": module.sha256_file(source / "official-image-inventory.jsonl")})
+    selected = [{"official_image_member": "image.jpg"}]
+    reused = module.reuse_verified_images(source, output, selected, tmp_path)
+    assert reused["image.jpg"]["path"] == str(pixels)
+    assert not (output / "image.jpg").exists()
+    module.write_jsonl(source / "official-image-inventory.jsonl", [])
+    with pytest.raises(ValueError, match="missing or changed"):
+        module.reuse_verified_images(source, output, selected, tmp_path)
+
+
 def test_whole_related_groups_and_old_validation_stay_excluded():
     official, gold, splits, sft, actions = fixture_rows()
     official[10]["event_identity"] = official[11]["event_identity"] = "the same public event"

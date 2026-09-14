@@ -1,5 +1,42 @@
 # PSD candidate selection — 2026-09-14
 
+## Current: v2, no training-data holdout
+
+The user chose to observe PSD development on a fixed subset of the existing
+formal test set, without putting its cases/labels into gradient training or
+repair targets. The complete 1,527-case reporting denominator is unchanged.
+The subset list is not created by this data-preparation step. If its scores
+are used for checkpoint/parameter selection, that evaluation use should be
+disclosed; it is not gradient training.
+
+The previously reserved 400 training-source cases have all been returned to
+the hard training pool. The accepted **v2** release contains:
+
+| Pool | Cases | Real | Fake |
+|---|---:|---:|---:|
+| Hard training candidates | 3,481 | 1,119 | 2,362 |
+| Previously SFT-trained cases to revisit | 1,000 | 302 | 698 |
+| Combined training candidates | **4,481** | **1,421** | **3,060** |
+| Training-source development holdout | **0** | 0 | 0 |
+
+Current collection input:
+`/volume/ybo/wza/data/psd-candidate-pool-20260914-v2/train/runtime-release/runtime_input/cases.jsonl`
+
+Private references and train allowlist are under the v2 `train/evaluator_private/`.
+An exact set check verified v2 train = v1 train union v1 development, and the
+1,000-case SFT revisit membership is unchanged. v2 uses the same 4,463 verified
+original images via hardlinks: no redownload or large image copy. The original
+v1 release remains immutable, but it is superseded for future PSD collection.
+The empty v2 `development` release is structural only and is not an eval input.
+
+The selector now defaults to `--dev-size 0`; `--reuse-verified-images-from`
+binds reuse to accepted manifest/inventory hashes. v2 was generated using
+`prepare_psd_candidate_pool_v2.py`, with `materialize-v2.log`, under
+`/volume/ybo/wza/training-artifacts/psd-candidate-pool-20260914`.
+31 targeted/regression tests pass. PSD training has not started.
+
+## Original v1 preparation details (superseded split only)
+
 This is a case pool for fresh, training-only Qwen rollouts. It is not a PSD
 target bank, a repair-success claim, or permission to use evaluation data for
 training. Current SFT and Gemini evaluation remain running independently.

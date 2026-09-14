@@ -419,15 +419,45 @@ def image_conflict_groups(selection, images):
                    for key in ("sha256", "normalized_image_sha256"))}
 
 
+def reuse_verified_images(source, output, selected, storage_root):
+    """Bind to an accepted image cache; never redownload or copy pixel bytes."""
+    source = scoped(source, storage_root)
+    acceptance = load_json(source / "release-verification.json")
+    inventory_path = source / "official-image-inventory.jsonl"
+    if (acceptance.get("passed") is not True
+            or acceptance.get("selection_report_sha256") != sha256_file(source / "selection-report.json")
+            or acceptance.get("official_image_inventory_sha256") != sha256_file(inventory_path)):
+        raise ValueError("image source acceptance is missing or changed")
+    archive = load_json(source / "archive-verification.json")
+    if archive.get("passed") is not True or archive.get("sha256") != SHA256 or archive.get("bytes") != SIZE:
+        raise ValueError("image source does not bind the pinned official archive")
+    inventory = load_jsonl(inventory_path)
+    images = {r["archive_member"]: r for r in inventory}
+    if len(images) != len(inventory) or len(images) != archive["official_images_hashed"]:
+        raise ValueError("cached original image membership mismatch")
+    for row in selected:
+        image = images.get(row["official_image_member"], {})
+        if not image.get("path") or not image.get("normalized_image_sha256"):
+            raise ValueError("selected image is absent from verified source cache")
+        scoped(Path(image["path"]), storage_root)
+    write_jsonl(output / "official-image-inventory.jsonl", inventory)
+    write_json(output / "archive-verification.json", archive)
+    write_json(output / "reused-image-source.json", {"source": str(source),
+        "release_verification_sha256": sha256_file(source / "release-verification.json"),
+        "pixel_bytes_copied": 0})
+    return images
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("storage-root", "metadata-root", "sft-root", "case-split", "test-manifest", "test-runtime", "output-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--dev-size", type=int, default=400)
+    parser.add_argument("--dev-size", type=int, default=0)
     parser.add_argument("--sft-size", type=int, default=1000)
     parser.add_argument("--seed", default="psd-pool-20260914-v1")
     parser.add_argument("--materialize", action="store_true")
     parser.add_argument("--test-image-audit", type=Path)
+    parser.add_argument("--reuse-verified-images-from", type=Path)
     args = parser.parse_args()
     for name, value in vars(args).items():
         if isinstance(value, Path):
@@ -475,6 +505,8 @@ def main():
         if load_json(archive_record).get("sha256") != SHA256:
             raise ValueError("wrong saved archive binding")
         images = {r["archive_member"]: r for r in load_jsonl(args.output_dir / "official-image-inventory.jsonl")}
+    elif args.reuse_verified_images_from:
+        images = reuse_verified_images(args.reuse_verified_images_from, args.output_dir, selected, args.storage_root)
     else:
         images = stream_images(args, selected, inputs["official"])
     if not args.test_image_audit:
