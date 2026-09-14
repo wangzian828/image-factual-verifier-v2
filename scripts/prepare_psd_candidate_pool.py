@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
 import json
@@ -196,9 +197,71 @@ def scoped(path, root):
     return path
 
 
+class OrderedRangeReader:
+    """Bounded parallel transport presented as an ordered byte stream."""
+
+    def __init__(self, size, fetch, *, workers=4, chunk_size=64 * 1024**2):
+        if not 1 <= workers <= 8 or chunk_size < 1:
+            raise ValueError("invalid bounded range transport")
+        self.size, self.fetch, self.chunk_size = size, fetch, chunk_size
+        self.pool = ThreadPoolExecutor(max_workers=workers)
+        self.pending, self.next_start = [], 0
+        self.buffer, self.offset = b"", 0
+        for _ in range(workers):
+            self.submit()
+
+    def submit(self):
+        start = self.next_start
+        if start < self.size:
+            end = min(self.size, start + self.chunk_size)
+            self.pending.append((start, end, self.pool.submit(self.fetch, start, end)))
+            self.next_start = end
+
+    def read(self, size):
+        if size < 0:
+            raise ValueError("unbounded range read is prohibited")
+        pieces = []
+        while size:
+            if self.offset == len(self.buffer):
+                if not self.pending:
+                    break
+                start, end, future = self.pending.pop(0)
+                self.buffer = future.result()
+                if len(self.buffer) != end - start:
+                    raise ValueError("range payload length mismatch")
+                self.offset = 0
+                self.submit()
+            count = min(size, len(self.buffer) - self.offset)
+            pieces.append(self.buffer[self.offset:self.offset + count])
+            self.offset += count
+            size -= count
+        return b"".join(pieces)
+
+    def close(self):
+        self.pool.shutdown(wait=True, cancel_futures=True)
+
+
+def official_range(start, end):
+    from modelscope_hub.api import HubApi
+    try:
+        with HubApi().downloader._client.download_stream(repo_id=REPO, repo_type="dataset",
+                file_path=ARCHIVE, revision="master", headers={"Accept-Encoding": "identity",
+                "Range": f"bytes={start}-{end - 1}"}) as response:
+            if response.status_code != 206 or response.headers.get("Content-Range") != f"bytes {start}-{end - 1}/{SIZE}":
+                raise ValueError("server did not honor the exact pinned byte range")
+            result = bytearray()
+            while len(result) < end - start:
+                chunk = response.raw.read(min(1024**2, end - start - len(result)))
+                if not chunk:
+                    raise ValueError("incomplete official byte range")
+                result.extend(chunk)
+            return bytes(result)
+    except Exception as exc:
+        raise RuntimeError(f"official range {start}:{end} failed: {type(exc).__name__}") from None
+
+
 def stream_images(args, selected, official):
     """One pass, no compressed archive copy; retain selected original pixels."""
-    from modelscope_hub.api import HubApi
     from PIL import Image
     output = args.output_dir
     media = output / "media"
@@ -206,11 +269,9 @@ def stream_images(args, selected, official):
     desired = {r["official_image_member"] for r in selected}
     known = {r["unified_image_path"] for r in official}
     inventory, seen = {}, set()
-    response = HubApi().downloader._client.download_stream(repo_id=REPO, repo_type="dataset",
-        file_path=ARCHIVE, revision="master", headers={"Accept-Encoding": "identity"})
-    with response:
-        response.raise_for_status()
-        reader = HashingReader(response.raw)
+    transport = OrderedRangeReader(SIZE, official_range)
+    try:
+        reader = HashingReader(transport)
         with tarfile.open(fileobj=reader, mode="r|gz", bufsize=1024**2) as archive:
             for member in archive:
                 rel = PurePosixPath(member.name)
@@ -246,6 +307,8 @@ def stream_images(args, selected, official):
             pass
         if reader.count != SIZE or reader.digest.hexdigest() != SHA256:
             raise ValueError("official archive did not match pinned SHA256/size")
+    finally:
+        transport.close()
     if set(inventory) != known or not desired.issubset(inventory):
         raise ValueError("official archive image membership mismatch")
     write_json(output / "archive-verification.json", {"passed": True, "sha256": SHA256,

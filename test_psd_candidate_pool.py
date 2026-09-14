@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.prepare_psd_candidate_pool import alias_index, build_selection, group_cases, resolve, sample_groups
+from scripts.prepare_psd_candidate_pool import OrderedRangeReader, alias_index, build_selection, group_cases, resolve, sample_groups
 
 
 def fixture_rows():
@@ -67,3 +67,23 @@ def test_gold_label_mismatch_is_quarantined():
     result = build_selection(official, gold, splits, sft, actions, [], dev_size=2, sft_size=2, seed="frozen")
     rejected = next(r for r in result["excluded"] if r["case_id"] == "canonical-7")
     assert "private_label_missing_or_mismatched" in rejected["exclusion_reasons"]
+
+
+def test_parallel_byte_stream_preserves_order_boundaries_and_final_short_range():
+    source = bytes(range(251)) * 7
+    reader = OrderedRangeReader(len(source), lambda a, b: source[a:b], workers=3, chunk_size=103)
+    try:
+        chunks = [reader.read(n) for n in (1, 102, 105, 0, 203, 5000)]
+        assert b"".join(chunks) == source
+        assert reader.read(100) == b""
+    finally:
+        reader.close()
+
+
+def test_parallel_byte_stream_rejects_truncated_range():
+    reader = OrderedRangeReader(100, lambda a, b: b"short", workers=1, chunk_size=20)
+    try:
+        with pytest.raises(ValueError, match="length mismatch"):
+            reader.read(10)
+    finally:
+        reader.close()
