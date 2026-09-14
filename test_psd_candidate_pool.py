@@ -64,6 +64,30 @@ def test_verified_image_reuse_preserves_bytes_and_rejects_changed_inventory(tmp_
         module.reuse_verified_images(source, output, selected, tmp_path)
 
 
+def test_balanced_pool_keeps_minority_and_caps_large_routes_deterministically():
+    from collections import Counter
+    from scripts.balance_psd_candidate_pool import balanced_sample
+    rows = [{"case_id": str(i), "selection_group_id": str(i),
+             "label": "real" if i < 3 else "fake", "route": "scarce" if i in (3, 4) else "large"}
+            for i in range(12)]
+    selected = balanced_sample(rows, 10, "fixed")
+    assert Counter(r["label"] for r in selected) == {"real": 3, "fake": 7}
+    assert {"3", "4"} <= {r["case_id"] for r in selected}
+    assert selected == balanced_sample(list(reversed(rows)), 10, "fixed")
+    equal = balanced_sample(rows, 6, "fixed")
+    assert Counter(r["label"] for r in equal) == {"real": 3, "fake": 3}
+
+
+def test_balanced_pool_never_splits_multi_case_groups():
+    from scripts.balance_psd_candidate_pool import balanced_sample
+    rows = [{"case_id": str(i), "selection_group_id": "pair" if i < 2 else str(i),
+             "label": "real" if i < 2 else "fake", "route": "a"} for i in range(7)]
+    selected = balanced_sample(rows, 4, "fixed")
+    assert {"0", "1"} <= {r["case_id"] for r in selected}
+    with pytest.raises(ValueError, match="multi-case groups"):
+        balanced_sample(rows, 2, "fixed")
+
+
 def test_whole_related_groups_and_old_validation_stay_excluded():
     official, gold, splits, sft, actions = fixture_rows()
     official[10]["event_identity"] = official[11]["event_identity"] = "the same public event"

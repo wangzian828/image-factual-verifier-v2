@@ -1,6 +1,51 @@
 # PSD candidate selection — 2026-09-14
 
-## Current: v2, no training-data holdout
+## Current: v3, 4,000 unified PSD training samples
+
+Paper-facing naming is **PSD training samples**, without presenting separate
+hard-case and SFT-revisit populations. Internal source membership remains
+available for provenance and reproducibility, not as separate experimental
+conditions.
+
+The 4,481 accepted candidates were downsampled to **4,000** with all 1,421
+real cases retained and fake cases reduced from 3,060 to 2,579. Class shares
+are **35.525% real / 64.475% fake**; this improves balance but is not 1:1.
+No cases were duplicated or relabeled. All multi-case groups were preserved;
+singleton ordering uses seed `psd-balanced-20260914-v1`. Within each class,
+capped equal allocation across available routes preserves smaller categories
+and reduces the largest ones first. Selection does not use rollout results.
+
+| Category | Selected cases |
+|---|---:|
+| Faithful real event | 1,125 |
+| Web supported | 296 |
+| Source-grounded mutation | 1,028 |
+| No-prototype fabrication | 1,028 |
+| Web refuted | 523 |
+| **Total PSD training samples** | **4,000** |
+
+Current collection input:
+`/volume/ybo/wza/data/psd-candidate-pool-4000-20260914-v3/train/runtime-release/runtime_input/cases.jsonl`
+
+The 481 omitted cases remain in the source release and are listed in v3
+`selection/not-selected.jsonl`; original images and trajectories are not
+deleted. Accepted images are reused with hardlinks. There is no holdout from
+the training-source pool, and no test image is added to training. Existing
+formal test files and the 1,527 reporting denominator are unchanged.
+
+`scripts/balance_psd_candidate_pool.py` implements the deterministic selection.
+The preparation directory contains the same run-specific script. This is a
+pool ready for fresh-policy rollout, not a claim that PSD optimization has
+already run or that all 4,000 cases will yield verified training targets.
+33 targeted/regression tests pass.
+
+Suggested paper wording once used: “We use 4,000 image-based training samples
+for PSD, with 1,421 real and 2,579 fake samples. Sampling preserves coverage
+of five construction/source categories. We collect fresh agent trajectories
+with the SFT-initialized policy to construct PSD supervision.” Actual verified
+target counts must be reported separately after collection/repair.
+
+## Previous v2: no training-data holdout (superseded by v3)
 
 The user chose to observe PSD development on a fixed subset of the existing
 formal test set, without putting its cases/labels into gradient training or
