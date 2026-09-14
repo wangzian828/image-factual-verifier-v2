@@ -18,8 +18,8 @@
 | 排名 | 模型 | BAcc ↑ | Real Recall ↑ | Fake Recall ↑ | SESR ↑ |
 |---:|:---|---:|---:|---:|---:|
 | 1 | **Gemini 3.7 Agent** | **81.57** | 84.35 | 78.78 | 42.89 |
-| 2 | Qwen3.5-9B Agent（第二轮 SFT：4,872 条） | 79.95 | 83.02 | 76.87 | 36.54 |
-| 3 | Qwen3.5-9B Agent（首轮 SFT：2,578 条） | 79.87 | 79.58 | 80.17 | 34.77 |
+| 2 | Qwen3.5-9B Agent（SFT-4872，从 Base 独立训练） | 79.95 | 83.02 | 76.87 | 36.54 |
+| 3 | Qwen3.5-9B Agent（SFT-2578，从 Base 独立训练） | 79.87 | 79.58 | 80.17 | 34.77 |
 | 4 | **GPT-5.5 Agent** | 78.13 | 83.82 | 72.43 | **50.49** |
 | 5 | Qwen3.5-397B-A17B Agent | 71.72 | 50.66 | 92.78 | 43.29 |
 | 6 | Qwen3.5-9B Agent（训练前） | 65.67 | 70.03 | 61.30 | 3.14 |
@@ -41,15 +41,15 @@
 | 9 | Gemini 3.1 Pro | 62.58 | 28.65 | 96.52 | 5.57 |
 | 10 | GLM-4.6V | 59.96 | 95.49 | 24.43 | 3.01 |
 
-### Qwen3.5-9B SFT 演进
+### Qwen3.5-9B 独立 SFT 对照
 
-**表 3　训练阶段变化**
+**表 3　两个从 Base 模型分别启动的独立 SFT 实验**
 
-| 阶段 | 训练数据 | BAcc | 较上一阶段 | SESR | 较上一阶段 |
-|:---|---:|---:|---:|---:|---:|
-| 训练前 | 0 | 65.67 | — | 3.14 | — |
-| 首轮 SFT | 2,578 条 | 79.87 | +14.20 | 34.77 | +31.63 |
-| 第二轮 SFT | 4,872 条 | 79.95 | +0.08 | 36.54 | +1.77 |
+| 实验 | 初始化模型 | 训练数据 | BAcc | 较训练前 | SESR | 较训练前 |
+|:---|:---|---:|---:|---:|---:|---:|
+| 训练前基线 | Qwen3.5-9B Base | 0 | 65.67 | — | 3.14 | — |
+| SFT-2578 | Qwen3.5-9B Base | 2,578 条 | 79.87 | +14.20 | 34.77 | +31.63 |
+| SFT-4872 | Qwen3.5-9B Base | 4,872 条 | 79.95 | +14.28 | 36.54 | +33.40 |
 
 > 注：表中结果均为百分比（%），↑ 表示数值越高越好。严格证据充分率（Strict Evidence Sufficiency Rate, SESR）是指回答被独立评估模型判定为证据充分、来源可靠，且推理能够支撑最终结论的样本比例。
 
@@ -63,9 +63,9 @@ GPT-5.5 与 MiniMax-M3 的原始结果各覆盖 1,526 条样本，未覆盖样�
 
 Qwen3.5-9B Agent（训练前）的二分类结果按冻结 case ID 复用已有的 1,526 条推理。缺失的 1 条 real 按未召回计入 1,527 分母；real 正确 264/377，fake 正确 705/1,150，其 Accuracy 为 63.46%。表中的 SESR 已更新为最终 v3 全材料审核结果 48/1,527（3.14%），替代旧版 44/1,527（2.88%）。二分类记录保存在服务器 `qwen35-base-agent-formal1527-pretrain-from-old1682-20260912/summary.json`；v3 审核保存在 `/volume/ybo/wza/runs/eval/gemini37-qwen35base-agent-batch-judge-v3-low32k-20260913`。旧版 Gemini 3.1 Pro/high 审核不进入本表。
 
-Qwen3.5-9B Agent（首轮 SFT）的冻结结果覆盖 1,526 条可运行样本。原始汇总按 1,526 条可用样本给出的 BAcc 为 79.98%；本表遵守统一定义，把缺失的 1 条 real 计为未召回，因此记录 BAcc 79.87%、Real Recall 79.58%、Fake Recall 80.17%。冻结结果位于服务器 `/volume/ybo/wza/evaluation/qwen35-sft-initial2578-agent-final1526-20260913`。
+Qwen3.5-9B Agent（SFT-2578）的冻结结果覆盖 1,526 条可运行样本。该模型从 Qwen3.5-9B Base 独立启动训练，并非 SFT-4872 的前置阶段。原始汇总按 1,526 条可用样本给出的 BAcc 为 79.98%；本表遵守统一定义，把缺失的 1 条 real 计为未召回，因此记录 BAcc 79.87%、Real Recall 79.58%、Fake Recall 80.17%。冻结结果位于服务器 `/volume/ybo/wza/evaluation/qwen35-sft-initial2578-agent-final1526-20260913`。
 
-Qwen3.5-9B Agent（第二轮 SFT）的冻结结果同样覆盖 1,526 条可运行样本。可用样本口径为 real 313/376、fake 884/1,150，BAcc 80.06%；本表把缺失的 1 条 real 计为未召回，因此记录 Real Recall 83.02%、Fake Recall 76.87%、BAcc 79.95%。冻结结果位于服务器 `/volume/ybo/wza/evaluation/qwen35-sft1028-agent-final1526-20260914`；统一 v3 审核得到 `Strong` 558 条，即 SESR 558/1,527（36.54%）。
+Qwen3.5-9B Agent（SFT-4872）的冻结结果同样覆盖 1,526 条可运行样本。该模型也从同一个 Qwen3.5-9B Base 独立启动训练，不是从 SFT-2578 checkpoint 续训。可用样本口径为 real 313/376、fake 884/1,150，BAcc 80.06%；本表把缺失的 1 条 real 计为未召回，因此记录 Real Recall 83.02%、Fake Recall 76.87%、BAcc 79.95%。冻结结果位于服务器 `/volume/ybo/wza/evaluation/qwen35-sft1028-agent-final1526-20260914`；统一 v3 审核得到 `Strong` 558 条，即 SESR 558/1,527（36.54%）。
 
 Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_level=low` 配置重新审核。最终有 85 条样本被判定为 `Strong`，SESR 为 5.57%；旧的 23.71% 来自 Gemini 3.1 Pro 自审且使用 `thinking_level=high` 的非统一口径，已废弃。
 
@@ -78,8 +78,8 @@ Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_le
 | GPT-5.5 Agent | 1,526/1,526 | 771 | 50.49% | `gpt55-qwen397-agent-batch-judge-v3-low32k-20260913/gpt55-agent` |
 | Qwen3.5-397B-A17B Agent | 1,526/1,526 | 661 | 43.29% | `gpt55-qwen397-agent-batch-judge-v3-low32k-20260913/qwen35-397b-a17b-agent` |
 | Gemini 3.7 Agent | 1,526/1,526 | 655 | 42.89% | `gemini37-qwen35base-agent-batch-judge-v3-low32k-20260913/gemini37-agent` |
-| Qwen3.5-9B Agent（第二轮 SFT） | 1,526/1,526 | 558 | 36.54% | `qwen35-sft1028-agent-batch-judge-v3-low32k-20260914/qwen35-9b-sft1028-agent` |
-| Qwen3.5-9B Agent（首轮 SFT） | 1,526/1,526 | 531 | 34.77% | `qwen35-sft-agent-final1526-batch-judge-v3-low32k-20260913/qwen35-9b-sft-agent` |
+| Qwen3.5-9B Agent（SFT-4872） | 1,526/1,526 | 558 | 36.54% | `qwen35-sft1028-agent-batch-judge-v3-low32k-20260914/qwen35-9b-sft1028-agent` |
+| Qwen3.5-9B Agent（SFT-2578） | 1,526/1,526 | 531 | 34.77% | `qwen35-sft-agent-final1526-batch-judge-v3-low32k-20260913/qwen35-9b-sft-agent` |
 | Qwen3.5-9B Agent（训练前） | 1,526/1,526 | 48 | 3.14% | `gemini37-qwen35base-agent-batch-judge-v3-low32k-20260913/qwen35-base-agent` |
 
 截至 2026-09-14，以上 Batch judge 均已完成且不应重复提交。当前仅有 Gemini 3.1 Pro Preview Agent 尚未进入最终 judge：其首轮全量运行只成功 389/1,526 条，另外 1,137 条全部因当时服务器 `No space left on device` 结束；这不是模型质量结果，也未提交最终 judge。必须仅重跑这 1,137 条并补齐到 1,526 个唯一成功 case 后，才能提交同口径 v3 Batch judge。原始失败记录位于服务器 `/volume/ybo/wza/runs/eval/gemini31pro-agent-formal1527-20260913/full-r2-c4`。
@@ -88,8 +88,8 @@ Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_le
 
 - Gemini 3.7 Agent 获得当前最高 BAcc，为 81.57%，且 real/fake 两类召回较为均衡。
 - GPT-5.5 Agent 获得当前最高 SESR，为 50.49%；Gemini 3.7 Agent 与 Qwen3.5-397B-A17B Agent 分别为 42.89% 和 43.29%。
-- 首轮 SFT 的 Qwen3.5-9B Agent 在严格 1,527 分母下达到 79.87% BAcc 和 34.77% SESR，显著高于训练前的 65.67% 和 3.14%。
-- 第二轮 SFT 的 Qwen3.5-9B Agent 在同口径下达到 79.95% BAcc 和 36.54% SESR；相较首轮 SFT，SESR 提升 1.77 个百分点，Real Recall 上升 3.44 个百分点，但 Fake Recall 下降 3.30 个百分点。
+- 从 Base 独立训练的 SFT-2578 在严格 1,527 分母下达到 79.87% BAcc 和 34.77% SESR，显著高于训练前的 65.67% 和 3.14%。
+- 同样从 Base 独立训练的 SFT-4872 达到 79.95% BAcc 和 36.54% SESR；与 SFT-2578 横向比较，SESR 高 1.77 个百分点，Real Recall 高 3.44 个百分点，但 Fake Recall 低 3.30 个百分点。两者不是前后续训关系。
 - GPT-5.5 与 Gemini 3.7 Flash 的 BAcc 分别为 75.87% 和 75.64%，是表现最好的两组 Direct QA 基线。
 - Gemini 3.1 Pro 虽然原始 Accuracy 较高，但 real 召回仅为 28.65%，BAcc 因此降至 62.58%。
 - Agent 的优势体现在证据搜集与证据支持的推理质量，但训练前 Qwen3.5-9B Agent 的 SESR 仅 3.14%，说明该优势并非仅由 Agent 流程保证。
