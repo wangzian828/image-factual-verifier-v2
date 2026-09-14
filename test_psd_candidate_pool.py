@@ -158,13 +158,15 @@ def test_final_public_releases_verify_and_development_guard_is_enforced(tmp_path
     from scripts import prepare_psd_candidate_pool as selector
     from scripts.verify_psd_candidate_pool import verify
     from src.orchestrator.source_access import benchmark_source_access_policy
+    from src.tools.vision_utils import controlled_image_to_data_url
 
     images, gold, selections = {}, {}, {}
     for name, color in zip(("hard_train", "sft_revisit", "development"), ("red", "green", "blue")):
         path = tmp_path / (name + ".jpg")
         Image.new("RGB", (12, 8), color).save(path)
         sha = selector.sha256_file(path)
-        images[name] = {"archive_member": name, "sha256": sha, "normalized_image_sha256": sha, "path": str(path)}
+        _, metadata = controlled_image_to_data_url(str(path), max_long_edge=1024, jpeg_quality=95)
+        images[name] = {"archive_member": name, "sha256": sha, "normalized_image_sha256": metadata["sha256"], "path": str(path)}
         selections[name] = [{"case_id": name, "official_image_member": name, "selection_group_id": name,
                              "label": "real", "prior_sft_exposure": name == "sft_revisit"}]
         gold[name] = {"case_id": name, "factual_status": "supported", "private_evidence": "not public"}
@@ -177,8 +179,9 @@ def test_final_public_releases_verify_and_development_guard_is_enforced(tmp_path
     selector.write_json(tmp_path / "archive-verification.json", {"passed": True, "official_images_hashed": 3})
     selector.write_json(tmp_path / "selection-report.json", {"status": "ready_for_fresh_policy_rollouts",
                         "source_identity": {"files": {}}, "releases": releases})
-    result = verify(tmp_path, tmp_path)
+    result = verify(tmp_path, tmp_path, wire_images=True)
     assert result["public_images_independently_hashed"] == 3
+    assert result["runtime_wire_images_checked"] == 3
     assert result["pools"]["train"] == 2
     dev_manifest = tmp_path / "development/runtime-release/manifest.json"
     manifest = selector.load_json(dev_manifest)

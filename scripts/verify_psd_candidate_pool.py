@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import sys
@@ -12,7 +13,7 @@ from ifv_training.io import load_json, load_jsonl, sha256_file, write_json
 from src.eval.public_release import load_public_release
 
 
-def verify(root, storage_root):
+def verify(root, storage_root, *, wire_images=False):
     root.resolve().relative_to(storage_root.resolve())
     report = load_json(root / "selection-report.json")
     if report["status"] != "ready_for_fresh_policy_rollouts":
@@ -31,6 +32,7 @@ def verify(root, storage_root):
     selections = {name: load_jsonl(root / "selection" / (name + "-final.jsonl"))
                   for name in ("hard_train", "sft_revisit", "development", "train")}
     final_ids, groups, raw, normalized, checked = {}, {}, {}, {}, set()
+    wire_checks = {}
     for name, rows in selections.items():
         benchmark = root / name / "runtime-release/runtime_input/cases.jsonl"
         load_public_release(benchmark)
@@ -63,6 +65,7 @@ def verify(root, storage_root):
                 if sha256_file(path) != item["image_sha256"]:
                     raise ValueError("public image bytes changed")
                 checked.add(inode)
+                wire_checks[str(path)] = images[source["official_image_member"]]
         final_ids[name] = set(expected_ids)
         groups[name] = {r["selection_group_id"] for r in rows}
         raw[name] = {images[r["official_image_member"]]["sha256"] for r in rows}
@@ -79,9 +82,22 @@ def verify(root, storage_root):
             raise ValueError("PSD train/development overlap")
     if not all(r["prior_sft_exposure"] for r in selections["sft_revisit"]):
         raise ValueError("revisit pool includes unseen cases")
+    if wire_images:
+        from src.tools.vision_utils import controlled_image_to_data_url
+        def check_wire(pair):
+            path, expected = pair
+            data, metadata = controlled_image_to_data_url(path, max_long_edge=1024, jpeg_quality=95)
+            if (not data.startswith("data:image/jpeg;base64,")
+                    or metadata["source_sha256"] != expected["sha256"]
+                    or metadata["sha256"] != expected["normalized_image_sha256"]
+                    or max(metadata["sent_size"]) > 1024):
+                raise ValueError("runtime image wire conversion mismatches verified fingerprint")
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(check_wire, wire_checks.items()))
     result = {"passed": True, "selection_report_sha256": sha256_file(root / "selection-report.json"),
         "official_image_inventory_sha256": sha256_file(root / "official-image-inventory.jsonl"),
         "public_images_independently_hashed": len(checked),
+        "runtime_wire_images_checked": len(wire_checks) if wire_images else 0,
         "pools": {name: len(ids) for name, ids in final_ids.items()},
         "public_keys_checked": True, "private_gold_membership_checked": True,
         "train_development_case_group_raw_and_normalized_image_disjoint": True,
@@ -94,8 +110,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pool-root", required=True, type=Path)
     parser.add_argument("--storage-root", required=True, type=Path)
+    parser.add_argument("--wire-images", action="store_true")
     args = parser.parse_args()
-    print(verify(args.pool_root, args.storage_root), flush=True)
+    print(verify(args.pool_root, args.storage_root, wire_images=args.wire_images), flush=True)
 
 
 if __name__ == "__main__":

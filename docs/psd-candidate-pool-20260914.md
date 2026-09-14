@@ -26,7 +26,7 @@ attempt ledger. Therefore the hard-pool provenance is **not in successful
 teacher delivery**, rather than an invented per-case model/API failure reason.
 Missing reasoning alone does not make the 56 action-only deliveries failures.
 
-## Initial selection
+## Final candidate selection
 
 | Pool | Cases | Real | Fake |
 |---|---:|---:|---:|
@@ -36,6 +36,10 @@ Missing reasoning alone does not make the 56 action-only deliveries failures.
 | Action-only reserve | 54 | 18 | 36 |
 
 The training collection combines the first two pools: **4,081 cases**.
+Training composition is 1,292 real / 2,789 fake; hard candidates contribute
+75.50% and SFT revisit cases 24.50%. These are input cases, not yet successful
+PSD repair/preservation targets. The 54 action-only reserve cases are not
+silently mixed into the collection.
 Development cases are held out from PSD gradients and repair-target creation.
 The remaining SFT cases remain available in the source inventory; no source
 trajectory or image was deleted.
@@ -89,7 +93,7 @@ separate evaluator/selection artifacts. The development manifest is marked
 ## Execution and follow-up
 
 Run-specific source copy:
-`/volume/ybo/wza/training-artifacts/psd-candidate-pool-20260914/prepare_psd_candidate_pool.py`
+`/volume/ybo/wza/training-artifacts/psd-candidate-pool-20260914/prepare_psd_candidate_pool_final.py`
 
 The current download log is `materialize-r5.log` in the same control directory;
 the earlier logs remain as preparation diagnostics. Source changes were
@@ -111,8 +115,36 @@ source/public-image hashes, public/private membership, split guards, and
 case/group/raw/normalized-image isolation between train and development.
 Its successful report is `release-verification.json`.
 
+The server preparation completed successfully at 22:24 CST on 2026-09-14:
+
+- The full 24,127,361,006-byte compressed source matched its pinned SHA-256.
+- All 8,490 official image members were fingerprinted, including one tar
+  hardlink. Final image checks required no additional candidate removals.
+- Selected inputs contain 4,463 distinct originals: 4,227 JPEG, 140 PNG,
+  92 WebP, two AVIF and two MPO. Content-deduplicated original bytes total
+  12,785,588,976 (11.91 GiB); the whole prepared directory reports about 13G.
+- All four public releases and their private-gold/split memberships passed
+  independent verification. All 4,463 unique public images were rehashed.
+- The subsequent `--wire-images` acceptance also passed for all 4,463 images
+  through the actual `controlled_image_to_data_url` runtime entry point:
+  bounded JPEG output, original SHA-256 and normalized SHA-256 all matched.
+  AVIF and MPO originals are therefore covered by the real serialization
+  path, not merely a file-extension check. No external model call was made.
+- The finalized report status is `ready_for_fresh_policy_rollouts`.
+  No PSD model training, repair search or provider rollout was started.
+
+Combined collection input:
+`/volume/ybo/wza/data/psd-candidate-pool-20260914-v1/train/runtime-release/runtime_input/cases.jsonl`
+
+Its sibling `train/evaluator_private/case_split.jsonl` and
+`train/evaluator_private/private_gold.jsonl` remain evaluator-only. Source
+policy is `train/runtime-release/evaluator_private/source_access_policy.json`.
+The corresponding fixed held-out input is
+`development/runtime-release/runtime_input/cases.jsonl` under the pool root.
+
 Local checks: 15 targeted tests cover alias ambiguity, deterministic
 selection, whole-group isolation, old validation, label mismatches, ordered
 parallel transport, truncated ranges, safe/unsafe hardlinks, JPEG/BMP/TIFF,
 conflicting image labels, and public-release/development guards; compileall
-and diff-check pass. These checks do not replace full archive verification.
+and diff-check pass. Together with release-adapter/case-scheduler regression
+checks, 29 tests pass. These checks do not replace full archive verification.
