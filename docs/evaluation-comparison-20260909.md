@@ -41,8 +41,9 @@
 | 6 | Qwen3.5-397B-A17B | 68.68 | 56.23 | 81.13 | 6.68 |
 | 7 | MiniMax-M3 | 66.66 | 84.62 | 48.70 | 3.41 |
 | 8 | GPT-5.2 | 65.84 | 85.94 | 45.74 | 2.95 |
-| 9 | Gemini 3.1 Pro | 62.58 | 28.65 | 96.52 | 5.57 |
-| 10 | GLM-4.6V | 59.96 | 95.49 | 24.43 | 3.01 |
+| 9 | Qwen3.5-9B（训练前） | 65.70 | 79.05 | 52.35 | 1.70 |
+| 10 | Gemini 3.1 Pro | 62.58 | 28.65 | 96.52 | 5.57 |
+| 11 | GLM-4.6V | 59.96 | 95.49 | 24.43 | 3.01 |
 
 ### Qwen3.5-9B 独立 SFT 对照
 
@@ -64,6 +65,8 @@
 严格证据充分率使用同一批 1,527 条样本作为分母，对应 LLM Judge 质量评估中的 `Strong` 类别。该指标强调结论之外的证据覆盖、来源可靠性及推理充分性，不等同于二分类准确率。
 
 GPT-5.5 与 MiniMax-M3 的原始结果各覆盖 1,526 条样本，未覆盖样本仍按错误计入统一分母。GPT-5.5 另有 2 条源答案无有效终态，无法进入证据质量评估；这些样本同样不从分母中剔除。
+
+Qwen3.5-9B（训练前）Direct QA 已完成 1,526 条唯一推理及对应的 1,526 条审核。已逐条核对冻结测试集、私有 gold、源预测与审核记录，real 正确 298/377、fake 正确 602/1,150，缺失的 1 条 real 仍计为未召回，因此 BAcc 为 65.70%、Real Recall 为 79.05%、Fake Recall 为 52.35%。沿用已确认的 Gemini 3.7 Flash、`thinking_level=low`、`max_output_tokens=8192` 直接 QA 审核，严格证据充分数为 26/1,527，SESR 为 1.70%；该结果不是 Agent 基线，也未因补表重新调用 judge。源结果位于服务器 `/volume/ybo/wza/runs/eval/qwen35-base-directqa-formal1527-20260912/results.jsonl`，审核记录位于 `/volume/ybo/wza/runs/eval/qwen35-base-directqa-formal1527-20260912-judged/audit-results.jsonl`。
 
 Qwen3.5-9B Agent（训练前）的二分类结果按冻结 case ID 复用已有的 1,526 条推理。缺失的 1 条 real 按未召回计入 1,527 分母；real 正确 264/377，fake 正确 705/1,150，其 Accuracy 为 63.46%。表中的 SESR 已更新为最终 v3 全材料审核结果 48/1,527（3.14%），替代旧版 44/1,527（2.88%）。二分类记录保存在服务器 `qwen35-base-agent-formal1527-pretrain-from-old1682-20260912/summary.json`；v3 审核保存在 `/volume/ybo/wza/runs/eval/gemini37-qwen35base-agent-batch-judge-v3-low32k-20260913`。旧版 Gemini 3.1 Pro/high 审核不进入本表。
 
