@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 
 MODULE_PATH = (
@@ -71,3 +72,15 @@ def test_all_gpus_free_requires_low_memory_and_utilization() -> None:
     assert not guard.all_gpus_free(
         busy_compute, memory_limit_mib=1024, utilization_threshold_percent=10
     )
+
+
+def test_idle_check_requires_both_counters_and_no_active_request() -> None:
+    response = MagicMock()
+    response.__enter__.return_value = response
+    with patch.object(guard.urllib.request, 'urlopen', return_value=response):
+        response.read.return_value = b'vllm:num_requests_running{engine="0"} 0\nvllm:num_requests_waiting{engine="0"} 0\n'
+        assert guard.idle_vllm_port(8902)
+        response.read.return_value = b'vllm:num_requests_running 1\nvllm:num_requests_waiting 0\n'
+        assert not guard.idle_vllm_port(8902)
+        response.read.return_value = b'vllm:num_requests_running 0\n'
+        assert not guard.idle_vllm_port(8902)

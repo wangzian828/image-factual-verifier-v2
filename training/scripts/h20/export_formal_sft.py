@@ -27,6 +27,17 @@ def _bool_arg(value: Any) -> bool:
     )
 
 
+def _validate_export_state(state: dict, completed_epoch: int | None = None) -> None:
+    step, maximum, epoch = state['global_step'], state['max_steps'], state['epoch']
+    if not (0 < step <= maximum and epoch >= 1):
+        raise ValueError('invalid checkpoint training state')
+    if completed_epoch is None:
+        if step != maximum:
+            raise ValueError('formal training has not completed')
+    elif completed_epoch < 1 or epoch != completed_epoch:
+        raise ValueError('checkpoint is not the explicitly requested completed epoch')
+
+
 def _full_state_weight_files(checkpoint: Path) -> list[Path]:
     index_paths = sorted(checkpoint.glob("*.safetensors.index.json"))
     if index_paths:
@@ -77,11 +88,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("checkpoint", "base-model", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument('--completed-epoch', type=int,
+                        help='Explicitly export this saved epoch boundary; default requires final training step')
     args = parser.parse_args()
     checkpoint, base, output = (p.resolve() for p in (args.checkpoint, args.base_model, args.output))
     state = json.loads((checkpoint / "trainer_state.json").read_text())
-    if state["global_step"] != state["max_steps"] or state["epoch"] < 1:
-        raise ValueError("formal training has not completed")
+    _validate_export_state(state, args.completed_epoch)
     args_path = checkpoint.parent / "args.json"
     training_args = json.loads(args_path.read_text())
     save_only_model = _bool_arg(training_args.get("save_only_model"))
@@ -182,6 +194,7 @@ def main():
     record = {"schema_version": "ifv-h20-formal-sft-export-v2", "passed": True,
         "source_checkpoint": str(checkpoint), "base_model": str(base), "model_path": str(model_dir),
         "global_step": state["global_step"], "epoch": state["epoch"], "dtype": "bfloat16",
+        "requested_completed_epoch": args.completed_epoch,
         "source_checkpoint_format": checkpoint_format,
         "source_dtypes": source_dtypes,
         "weight_storage_modes": storage_modes,

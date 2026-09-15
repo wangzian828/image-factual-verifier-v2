@@ -18,6 +18,8 @@ EXPORT = ROOT / 'exports/h20-sft-merged4872-3epoch-step3084-20260915/export.json
 BENCHMARK = ROOT / 'evaluation/factcheck-formal1527-available1526-20260912/runtime-release/runtime_input/cases.jsonl'
 CANARY = ROOT / 'runs/eval/qwen35-sft1028-agent-canary4-20260914/target-case-list.txt'
 ALIAS = 'ifv-qwen3.5-9b-sft-3084'
+EXPECTED_STEP = 3084
+EXPECTED_EPOCH = 3
 BENCHMARK_SHA = 'c6568c302147893f7a648ea4e5cccd29e4c11dae831e1344399330ef75d7cf32'
 
 
@@ -71,9 +73,9 @@ def main() -> None:
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     (OUTPUT / 'controller.pid').write_text(str(os.getpid()), encoding='utf-8')
     export = json.loads(EXPORT.read_text())
-    if not (export.get('passed') and export.get('global_step') == 3084
-            and export.get('epoch') == 3 and export.get('source_full_state_preserved')):
-        raise ValueError('Wrong or incomplete three-epoch export')
+    if not (export.get('passed') and export.get('global_step') == EXPECTED_STEP
+            and export.get('epoch') == EXPECTED_EPOCH and export.get('source_full_state_preserved')):
+        raise ValueError('Wrong or incomplete checkpoint export')
     if digest(BENCHMARK) != BENCHMARK_SHA:
         raise ValueError('Frozen benchmark changed')
     benchmark = [json.loads(line) for line in BENCHMARK.read_text().splitlines() if line.strip()]

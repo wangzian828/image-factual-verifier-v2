@@ -9,6 +9,7 @@ MODEL="${IFV_QWEN_MODEL:-${ROOT}/models/Qwen3.5-9B-local}"
 LORA_ADAPTER="${IFV_QWEN_LORA_ADAPTER:-}"
 CHECKPOINT_MANIFEST="${IFV_QWEN_CHECKPOINT_MANIFEST:-}"
 RUN_ROOT="${IFV_QWEN_RUN_ROOT:-${ROOT}/inference/qwen35-base-vllm0181}"
+CACHE_ROOT="${IFV_QWEN_CACHE_ROOT:-${RUN_ROOT}/cache}"
 VLLM="${ENV_PREFIX}/bin/vllm"
 PYTHON="${ENV_PREFIX}/bin/python"
 LOG_ROOT="${RUN_ROOT}/logs"
@@ -59,7 +60,7 @@ live_pid() {
 }
 
 launch_replicas() {
-  mkdir -p "$LOG_ROOT" "$PID_ROOT" "${RUN_ROOT}/cache" "${RUN_ROOT}/tmp"
+  mkdir -p "$LOG_ROOT" "$PID_ROOT" "$CACHE_ROOT" "${IFV_QWEN_TMPDIR:-${RUN_ROOT}/tmp}"
   for gpu in "${GPU_IDS[@]}"; do
     if live_pid "$(pid_path "$gpu")" >/dev/null; then
       echo "replica already running for GPU $gpu" >&2
@@ -87,12 +88,15 @@ launch_replicas() {
       # loaded adapter, KV cache, chunked prefill, or async scheduler.
       execution_args+=(--enforce-eager)
     fi
+    if [[ "${IFV_QWEN_ENABLE_PREFIX_CACHING:-false}" == "true" ]]; then
+      execution_args+=(--enable-prefix-caching --mamba-cache-mode align)
+    fi
     setsid env \
       CUDA_VISIBLE_DEVICES="$gpu" \
       HF_HOME="${ROOT}/cache/h20-huggingface" \
-      XDG_CACHE_HOME="${RUN_ROOT}/cache" \
-      FLASHINFER_WORKSPACE_DIR="${RUN_ROOT}/cache/flashinfer" \
-      TMPDIR="${RUN_ROOT}/tmp" \
+      XDG_CACHE_HOME="$CACHE_ROOT" \
+      FLASHINFER_WORKSPACE_DIR="${CACHE_ROOT}/flashinfer" \
+      TMPDIR="${IFV_QWEN_TMPDIR:-${RUN_ROOT}/tmp}" \
       VLLM_USE_FLASHINFER_SAMPLER=0 \
       "$VLLM" serve "$MODEL" \
         --host 127.0.0.1 --port "$port" \
@@ -102,7 +106,7 @@ launch_replicas() {
         --max-model-len 131072 \
         --gpu-memory-utilization 0.94 \
         --max-num-seqs "${IFV_QWEN_MAX_NUM_SEQS:-4}" \
-        --max-num-batched-tokens 32768 \
+        --max-num-batched-tokens "${IFV_QWEN_MAX_NUM_BATCHED_TOKENS:-32768}" \
         --performance-mode throughput \
         --gdn-prefill-backend triton \
         --reasoning-parser qwen3 \
@@ -135,7 +139,7 @@ write_serving_profile() {
     --context-length 131072
     --tool-call-parser qwen3_coder
     --reasoning-parser qwen3
-    --thinking-enabled false
+    --thinking-enabled "${IFV_QWEN_THINKING_ENABLED:-false}"
   )
   if [[ -n "$LORA_ADAPTER" ]]; then
     args+=(--adapter-path "$LORA_ADAPTER")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import importlib.util
 from pathlib import Path
+import pytest
 
 import ifv_training.checkpoints as checkpoints
 
@@ -69,6 +70,21 @@ def test_bool_arg_accepts_serialized_true_only() -> None:
     assert _bool_arg("YES")
     assert not _bool_arg(False)
     assert not _bool_arg("false")
+
+
+def test_intermediate_export_requires_explicit_matching_epoch():
+    validate = _EXPORT_MODULE._validate_export_state
+    state = {'global_step':2056,'max_steps':3084,'epoch':2.0}
+    with pytest.raises(ValueError, match='not completed'):
+        validate(state)
+    validate(state, 2)
+    with pytest.raises(ValueError, match='requested completed epoch'):
+        validate(state, 3)
+    with pytest.raises(ValueError, match='requested completed epoch'):
+        validate({**state,'epoch':1.9},2)
+    with pytest.raises(ValueError, match='invalid'):
+        validate({**state,'global_step':4000},2)
+    validate({'global_step':3084,'max_steps':3084,'epoch':3.0})
 
 
 def test_full_parameter_audit_can_accept_explicit_model_only_checkpoint(

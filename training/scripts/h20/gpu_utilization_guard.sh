@@ -34,6 +34,8 @@ start() {
     --low-window-seconds "${IFV_GPU_GUARD_LOW_WINDOW_SECONDS:-5400}" \
     --free-memory-limit-mib "${IFV_GPU_GUARD_FREE_MEMORY_LIMIT_MIB:-1024}" \
     --pulse-tokens "${IFV_GPU_GUARD_PULSE_TOKENS:-1024}" \
+    --model "${IFV_GPU_GUARD_MODEL:-ifv-qwen3.5-9b}" \
+    --keeper-script "${IFV_GPU_GUARD_KEEPER_SCRIPT:-${ROOT}/image-factual-verifier-v2/training/scripts/h20/gpu_memory_keeper.sh}" \
     </dev/null >>"${RUN_ROOT}/process.log" 2>&1 &
   echo "$!" >"$PID_FILE"
   echo "started GPU utilization guard pid=$!"

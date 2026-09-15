@@ -29,6 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--low-window-seconds", type=int, default=90 * 60)
     parser.add_argument("--free-memory-limit-mib", type=int, default=1024)
     parser.add_argument("--model", default="ifv-qwen3.5-9b")
+    parser.add_argument("--gpu-ids", default="0,1,2,3")
+    parser.add_argument("--vllm-ports", default="8902,8903,8904,8905")
     parser.add_argument("--pulse-tokens", type=int, default=1024)
     parser.add_argument("--pulse-timeout-seconds", type=float, default=180.0)
     parser.add_argument(
@@ -39,6 +41,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    args.gpu_ids = [int(x) for x in args.gpu_ids.split(',')]
+    args.vllm_ports = [int(x) for x in args.vllm_ports.split(',')]
+    if len(args.gpu_ids) != len(args.vllm_ports) or len(set(args.gpu_ids)) != len(args.gpu_ids):
+        parser.error('GPU IDs and vLLM ports must be aligned and unique')
     if args.poll_seconds < 5:
         parser.error("--poll-seconds must be at least 5")
     if not 0 < args.utilization_threshold_percent <= 100:
@@ -175,6 +181,23 @@ def healthy_vllm_ports(ports: Sequence[int]) -> set[int]:
     }
 
 
+def idle_vllm_port(port: int) -> bool:
+    """Fail closed: never enqueue maintenance behind real inference work."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=3) as response:
+            lines = response.read().decode('utf-8').splitlines()
+        values: dict[str, float] = {}
+        for line in lines:
+            if line.startswith(('vllm:num_requests_running', 'vllm:num_requests_waiting')):
+                name, value = line.rsplit(' ', 1)
+                name = name.split('{', 1)[0]
+                values[name] = values.get(name, 0.0) + float(value)
+        return all(values.get(name) == 0 for name in
+                   ('vllm:num_requests_running', 'vllm:num_requests_waiting'))
+    except (OSError, ValueError):
+        return False
+
+
 def pulse_vllm(
     *,
     port: int,
@@ -232,12 +255,13 @@ def protect(
         action["mode"] = "none"
         return action
 
-    port_by_gpu = dict(zip(DEFAULT_GPU_IDS, DEFAULT_VLLM_PORTS))
-    healthy_ports = healthy_vllm_ports(DEFAULT_VLLM_PORTS)
+    port_by_gpu = dict(zip(args.gpu_ids, args.vllm_ports))
+    healthy_ports = healthy_vllm_ports(args.vllm_ports)
     pulse_targets = [
         (gpu, port_by_gpu[gpu])
         for gpu in risk_ids
         if gpu in port_by_gpu and port_by_gpu[gpu] in healthy_ports
+        and idle_vllm_port(port_by_gpu[gpu])
     ]
     if pulse_targets:
         results: list[dict[str, Any]] = []

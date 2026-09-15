@@ -4,7 +4,7 @@
 
 - 评测集：筛选后的统一测试集
 - 样本数：1,527
-- 评测日期：2026-09-09 至 2026-09-14
+- 评测日期：2026-09-09 至 2026-09-15
 - 二分类任务：判断图像及其事件陈述为 `real` 或 `fake`
 - 证据质量评估模型：Gemini 3.7 Flash，`thinking_level=low`
 - Agent 结果的最终公平审核口径：v3 全材料输入，`max_output_tokens=32768`
@@ -20,9 +20,11 @@
 | 1 | **Gemini 3.7 Agent** | **81.57** | 84.35 | 78.78 | 42.89 |
 | 2 | Qwen3.5-9B Agent（SFT-4872，从 Base 独立训练） | 79.95 | 83.02 | 76.87 | 36.54 |
 | 3 | Qwen3.5-9B Agent（SFT-2578，从 Base 独立训练） | 79.87 | 79.58 | 80.17 | 34.77 |
-| 4 | **GPT-5.5 Agent** | 78.13 | 83.82 | 72.43 | **50.49** |
-| 5 | Qwen3.5-397B-A17B Agent | 71.72 | 50.66 | 92.78 | 43.29 |
-| 6 | Qwen3.5-9B Agent（训练前） | 65.67 | 70.03 | 61.30 | 3.14 |
+| 4 | Qwen3.5-9B Agent（SFT-4872，另一次 Base 初始化训练，epoch 3） | 79.08 | 78.25 | 79.91 | 待 judge |
+| 5 | **GPT-5.5 Agent** | 78.13 | 83.82 | 72.43 | **50.49** |
+| 6 | Qwen3.5-397B-A17B Agent | 71.72 | 50.66 | 92.78 | 43.29 |
+| 7 | Qwen3.5-9B Agent（训练前） | 65.67 | 70.03 | 61.30 | 3.14 |
+| 8 | Gemini 3.1 Pro Agent | 62.42 | 29.71 | 95.13 | 待 judge |
 
 ### Direct QA 模型
 
@@ -43,13 +45,14 @@
 
 ### Qwen3.5-9B 独立 SFT 对照
 
-**表 3　两个从 Base 模型分别启动的独立 SFT 实验**
+**表 3　从 Base 模型分别启动的独立 SFT 实验**
 
 | 实验 | 初始化模型 | 训练数据 | BAcc | 较训练前 | SESR | 较训练前 |
 |:---|:---|---:|---:|---:|---:|---:|
 | 训练前基线 | Qwen3.5-9B Base | 0 | 65.67 | — | 3.14 | — |
 | SFT-2578 | Qwen3.5-9B Base | 2,578 条 | 79.87 | +14.20 | 34.77 | +31.63 |
 | SFT-4872 | Qwen3.5-9B Base | 4,872 条 | 79.95 | +14.28 | 36.54 | +33.40 |
+| SFT-4872，另一次三 epoch 训练的 epoch 3 | Qwen3.5-9B Base | 4,872 条 | 79.08 | +13.41 | 待 judge | — |
 
 > 注：表中结果均为百分比（%），↑ 表示数值越高越好。严格证据充分率（Strict Evidence Sufficiency Rate, SESR）是指回答被独立评估模型判定为证据充分、来源可靠，且推理能够支撑最终结论的样本比例。
 
@@ -82,7 +85,11 @@ Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_le
 | Qwen3.5-9B Agent（SFT-2578） | 1,526/1,526 | 531 | 34.77% | `qwen35-sft-agent-final1526-batch-judge-v3-low32k-20260913/qwen35-9b-sft-agent` |
 | Qwen3.5-9B Agent（训练前） | 1,526/1,526 | 48 | 3.14% | `gemini37-qwen35base-agent-batch-judge-v3-low32k-20260913/qwen35-base-agent` |
 
-截至 2026-09-14，以上 Batch judge 均已完成且不应重复提交。当前仅有 Gemini 3.1 Pro Preview Agent 尚未进入最终 judge：其首轮全量运行只成功 389/1,526 条，另外 1,137 条全部因当时服务器 `No space left on device` 结束；这不是模型质量结果，也未提交最终 judge。必须仅重跑这 1,137 条并补齐到 1,526 个唯一成功 case 后，才能提交同口径 v3 Batch judge。原始失败记录位于服务器 `/volume/ybo/wza/runs/eval/gemini31pro-agent-formal1527-20260913/full-r2-c4`。
+以上六组 Batch judge 均已完成，不应重复提交。2026-09-15，Gemini 3.1 Pro Agent 的工程失败补跑已完成，冻结 1,526 个唯一成功 case：real 正确 112/377、fake 正确 1094/1150，BAcc 62.42%。旧磁盘满失败及所有补跑仍保留，合并索引位于服务器 `gemini31pro-agent-formal1527-20260913/resume-control-20260914/merged-success-results.jsonl`。
+
+另一次从 Base 初始化的三 epoch SFT 已完成 epoch-3/step-3084 全量 Agent 推理，冻结 1,526 个成功 case：real 正确 295/377、fake 正确 919/1150，BAcc 79.08%。与前述 SFT-4872 单 epoch 实验不是续跑关系；同一三 epoch 训练中的 epoch-2/step-2056 检查点尚未正式评测，不能混用其权重或结果。最终选择索引为 `qwen35-sft3084-3epoch-agent-formal1527-20260915/selected-traces.json`。
+
+这两组新结果的同口径 v3 Batch judge 正在分批提交，尚无最终 SESR。共享 File API 大图配额及 Batch 429 会延迟部分提交；不能把提交进程启动当成全量已提交。详情见 [epoch-2 加速调查与 judge 记录](sft-epoch2-serving-ab-20260915.md)。
 
 ## 初步结论
 
