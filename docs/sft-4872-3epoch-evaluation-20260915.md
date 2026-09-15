@@ -48,3 +48,64 @@
 
 Results and acceptance evidence will be recorded after the protocol commit;
 launch alone is not an accepted smoke or a completed evaluation.
+
+## Training and export acceptance (11:53 China time)
+
+Training finished normally at 11:23 on 2026-09-15, step 3084 / epoch 3.
+All three full-state checkpoints remain present. The final logged loss is
+0.19824876; the last 50-step mean is 0.190409255, versus 0.191538999 for the
+previous 50 steps. No nonfinite loss or gradient records were found.
+
+| Epoch | Logged steps | Mean training loss |
+| --- | ---: | ---: |
+| 1 | 1028 | 0.528483802 |
+| 2 | 1028 | 0.333407402 |
+| 3 | 1028 | 0.190552691 |
+
+The complete loss plot and its source hash/summary are under
+`/volume/ybo/wza/training-artifacts/sft-loss-3epoch-final-20260915`.
+Loss improved substantially over epochs but the end is a plateau with small
+sample-dependent fluctuations, not evidence of held-out capability improvement.
+
+BF16 export passed finite-tensor, full-weight and component-update checks;
+9,409,813,744 parameter elements were exported. Language, vision and aligner
+sampled weights all differ from Base. Optimizer, scheduler and four-rank RNG
+state remain intact. Audit evidence is `full-parameter-audit.json` and
+`export.json` in the export directory above.
+
+The isolated controller is
+`/volume/ybo/wza/training-artifacts/sft3084-evaluation-20260915/run_sft3084_eval.py`.
+It uses `--stage smoke`, then `--stage full` only with a trace-hash-bound
+`smoke-acceptance.json`. It never changes the live frozen runtime checkout.
+Both stages load external credentials internally and log only presence booleans.
+Automatic formal retries include both failed and missing case IDs, preserve
+accepted smoke successes, and reject successful-case resampling.
+
+## Smoke acceptance and full inference dispatch
+
+The four fixed smoke cases all completed successfully. All passed strict
+canonical audits with the frozen source-access policy: no malformed tool
+results, tool-argument format errors, scheduler/protocol rejection failures or
+unknown final evidence references. The source outputs are retained unchanged.
+
+Observed successful external calls: 26 Serper text searches, 23 Jina reranks,
+4 image uploads / reverse searches, 7 image searches, 12 page fetches and Gemini
+extracts, and 2 Baidu OCR calls. Two Jina HTTP422 page-fetch failures and one
+duplicate OCR rejection followed by a successful correction remain in the
+traces; these are not described as zero tool errors.
+
+The main trace metadata records 79 `tool_calls` finishes and four final `stop`
+finishes, no `length`/`abort`, at most 1387 output tokens per archived request,
+and at most 4078 reasoning characters. Reasoning characters are not tokens;
+this small smoke does not establish a full-test failure rate or quality gain.
+
+Archived main-history requests include up to 22 image slots, with repeated
+attachments of the original image. A separate diagnostic sent **two distinct
+images in one request to each of the four replicas**; all four returned nonempty
+responses with `finish_reason=stop`. This diagnostic is excluded from Agent
+metrics and did not change the Agent prompt or inference settings.
+
+Acceptance is bound in `smoke-acceptance.json`; the distinct-image diagnostic is
+`multiimage-service-probe.json`. Full inference dispatch uses concurrency 40 on
+the remaining 1522 cases, plus the four preserved smoke successes. It is not yet
+a completed evaluation, and no new BAcc/SESR result is claimed.
