@@ -1,0 +1,171 @@
+import asyncio
+import copy
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from ifv_training.psd_repair import _sha, build_hint_proposal, verify_repair
+from ifv_training.psd_slate import (validate_slate_review, assemble_slate_attempts,
+    validate_prefix_lineage, propose_slate)
+from ifv_training.psd_repairs import _validate_attempt
+from test_psd_repairs import _repair_candidate, _attempt
+
+
+def test_slate_review_requires_observed_support_for_every_position():
+    packet = {"decision_map": {0: 0, 1: 2, 24: 3}, "hinted_positions": [0, 1],
+        "episode_complete": True, "repaired_steps": [
+            {"index": 0, "thought": "earlier observed fact"},
+            {"index": 2, "thought": "later observed fact"}]}
+    review = {"status": "pass", "failed_position": -1, "passing_positions": [0, 1],
+        "explanation": "supported", "evidence": [
+            {"position": 0, "trace": "repaired", "step_index": 0, "quote": "earlier observed fact"},
+            {"position": 1, "trace": "repaired", "step_index": 2, "quote": "later observed fact"}]}
+    assert validate_slate_review(review, packet=packet) == review
+    for mutation in ("missing", "invented", "future", "incomplete", "nonexistent"):
+        bad, data = copy.deepcopy(review), copy.deepcopy(packet)
+        if mutation == "missing":
+            bad["evidence"].pop()
+        elif mutation == "invented":
+            bad["evidence"][0]["quote"] = "unobserved fact"
+        elif mutation == "future":
+            bad["evidence"][1]["position"] = 0
+        elif mutation == "nonexistent":
+            bad["passing_positions"].append(23)
+        else:
+            data["episode_complete"] = False
+        with pytest.raises(ValueError):
+            validate_slate_review(bad, packet=data)
+
+
+def make_targets():
+    result = []
+    for pos in [0, 1]:
+        h = build_hint_proposal(text="Check the unresolved relation." if not pos else "Revisit the unsupported inference.",
+            level=1, provider="gemini", model="judge", candidate_id=f"case-{pos}", public_failure_context={})
+        result.append({"position": pos, "hint": h.text, "hint_audit": dict(h.audit), "hint_level": 1,
+            "hint_record": vars(h), "student_prompt_ids": [1, 2 + pos], "teacher_prompt_ids": [1, 2 + pos, 4],
+            "completion_ids": [5, 6], "teacher_token_capture": {}, "context_request_id": f"r{pos}",
+            "runtime_store_path": "archive", "student_prefix_kind": "corrected_hint_free_history"})
+    return result
+
+
+def test_two_verified_local_targets_assemble_with_explicit_corrected_lineage(monkeypatch):
+    import ifv_training.psd_repair_verifier as verifier
+    verified = verify_repair(source_rollout_failed=True, hinted_local_pass=True,
+        hinted_recorded_verdict="real", expected_verdict="real", hinted_strict_trace_audit_pass=True,
+        hinted_episode_pass=True)
+    monkeypatch.setattr(verifier, "verify_causal_episode", lambda *a, **kw: verified)
+    episode = {"psd_repair": {"slate": {"used_positions": [0, 1], "unused_positions": []}}}
+    review = {"episode_sha256": _sha(episode), "private_reference_sha256": _sha({}),
+        "decision": {"status": "pass", "passing_positions": [0, 1], "evidence": [{"quote": "observed"}]},
+        "provenance": {"request_binding": {"model": "judge"}}}
+    role_record = _attempt("x", hint="Check the unresolved relation.", hint_level=1)["model_roles"]
+    candidates, records = assemble_slate_attempts(seed=_repair_candidate(), source={}, source_hash="trace-sha",
+        episode=episode, targets=make_targets(), review=review, gold={}, source_task_review={}, source_audit=None,
+        source_policy=None, roles=SimpleNamespace(record=lambda: role_record))
+    assert len(candidates) == len(records) == 2
+    for candidate, record in zip(candidates, records):
+        checked = _validate_attempt(candidate=candidate, attempt=record)
+        assert checked["row_weight"] == 1.0
+        assert "rollout_token_capture" not in candidate["repair_site"]
+        assert checked["student_prefix_capture"]["local_target"]["student_prefix_kind"] == "corrected_hint_free_history"
+        bad = copy.deepcopy(record)
+        bad["student_prompt_ids"] = [999]
+        with pytest.raises(ValueError, match="local target"):
+            validate_prefix_lineage(candidate, bad)
+    with pytest.raises(ValueError, match="coverage"):
+        assemble_slate_attempts(seed=_repair_candidate(), source={}, source_hash="trace-sha",
+            episode=episode, targets=make_targets()[:1], review=review, gold={}, source_task_review={},
+            source_audit=None, source_policy=None, roles=None)
+
+
+def test_proposer_receives_public_feedback_only_and_audits_actual_hint(monkeypatch):
+    import ifv_training.psd_gemini_judge as judge
+    packets = []
+    async def request(client, packet, **kwargs):
+        packets.append(packet)
+        return {"hints": [{"position": 0, "hint": "Check the unresolved relation."}]}, {}
+    monkeypatch.setattr(judge, "_request", request)
+    hints, _ = asyncio.run(propose_slate(None, public_context={"observed": "tool error"}, previous={},
+        passing_positions=[], failed_position=0, model="judge", cache_dir=None, private_context={"label": "fake"}))
+    assert hints[0].audit["passed"] is True
+    assert "fake" not in str(packets) and "label" not in str(packets)
+
+
+def test_psd_child_sampling_is_explicit_and_does_not_change_native_workflow(monkeypatch):
+    from scripts.collect_psd_rollouts import PSDWorkflow
+    from src.workflow import VerificationWorkflow
+    native = SimpleNamespace(_stage_generation_config=lambda stage: {"temperature": 1.0, "top_p": .95})
+    monkeypatch.setattr(VerificationWorkflow, "_get_orchestrator", lambda *a, **kw: native)
+    workflow = PSDWorkflow()
+    assert isinstance(workflow._new_batch_child(workflow.config), PSDWorkflow)
+    policy = workflow._get_orchestrator()
+    assert policy._stage_generation_config("UNIFIED_REACT") == {"temperature": .7, "top_p": .95}
+    assert policy._stage_generation_config("OTHER")["temperature"] == 1.0
+    # Repeated initialization must not stack wrappers / cause recursion.
+    assert workflow._get_orchestrator()._stage_generation_config("UNIFIED_JUDGMENT")["temperature"] == .7
+
+
+def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, tmp_path):
+    import httpx
+    import src.integrations.gemini as gemini
+    import src.orchestrator.runtime_events as runtime
+    import ifv_training.psd_gemini_judge as judge
+    import ifv_training.psd_slate_search as search
+    from ifv_training.psd_repair_runtime import ContinuationResult
+    from ifv_training.psd_repair import HintProposal
+    class Client:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            pass
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: Client())
+    monkeypatch.setattr(gemini, "GeminiInteractionsClient", lambda **kw: Client())
+    monkeypatch.setattr(runtime, "CaseRuntimeStore", lambda *a, **kw: SimpleNamespace(root=tmp_path))
+    monkeypatch.setattr(judge, "review_images", lambda *a, **kw: ([], {}))
+    trace = {"state": {"all_steps": [{"stage": "unified_react", "action_type": "tool_call",
+        "metadata": {"policy_input": {}, "policy_action": {}}}]}}
+    source_path = tmp_path / "source.json"
+    source_path.write_text("{}")
+    args = SimpleNamespace(max_suffix_actions=None, run_student_diagnostic=False, repair_attempts=6,
+        output_dir=tmp_path, trace=source_path, search_seconds=100000, policy_model="frozen",
+        hint_constructor_model="judge", judge_model="judge", image=tmp_path / "image",
+        round_start_checkpoint="frozen")
+    calls, assemblies = [], []
+    class Adapter:
+        policy_llm = SimpleNamespace(api_key="")
+        def _initial_runtime_state(self, **kw):
+            return SimpleNamespace(action_count=0), []
+        async def run_hinted_episode(self, **kw):
+            calls.append(kw)
+            targets = make_targets()[:len(kw["hints_by_action"])]
+            return ContinuationResult(teacher_steps=[], student_steps=[], teacher_history=[], student_history=[],
+                hint="", teacher_complete=True, teacher_episode_trace={**trace, "rerun": len(calls)}, local_targets=targets)
+    async def propose(*a, **kw):
+        n = 2 if kw["previous"] else 1
+        return {t["position"]: HintProposal(**t["hint_record"]) for t in make_targets()[:n]}, {}
+    async def review(*a, **kw):
+        n = kw["episode"]["rerun"]
+        return {"decision": {"status": "pass" if n == 2 else "fail", "passing_positions": [0, 1] if n == 2 else [0],
+            "failed_position": -1 if n == 2 else 1}}
+    def assemble(**kw):
+        assemblies.append(kw)
+        if len(assemblies) == 1:
+            raise RuntimeError("simulated CPU materialization crash")
+        return [{"candidate_id": "a"}, {"candidate_id": "b"}], [{"accepted": True}, {"accepted": True}]
+    monkeypatch.setattr(search, "propose_slate", propose)
+    monkeypatch.setattr(search, "review_slate", review)
+    monkeypatch.setattr(search, "assemble_slate_attempts", assemble)
+    options = dict(args=args, adapter=Adapter(), site=SimpleNamespace(stage="unified_react"),
+        candidate={"case_id": "train"}, trace=trace, gold={}, private_context={}, source_task_review={},
+        source_audit=None, source_policy=None, roles=None, profile={"base_url": "http://127.0.0.1:1/v1"}, config={})
+    with pytest.raises(RuntimeError, match="materialization crash"):
+        asyncio.run(search.run_slate_search(**options))
+    assert len(calls) == 2
+    result = asyncio.run(search.run_slate_search(**options))
+    assert len(calls) == 2 and len(assemblies) == 2
+    assert result["accepted_count"] == 2 and result["complete_reruns"] == 2
+    assert all(c["hint"] is None and c["failure_site"].step_index == 0 for c in calls)
+    assert search.audit_slate_search(tmp_path)["passed"]
+    assert asyncio.run(search.run_slate_search(**options)) == result

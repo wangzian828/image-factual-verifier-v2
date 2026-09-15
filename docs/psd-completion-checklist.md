@@ -1,5 +1,7 @@
 # PSD completion and acceptance checklist
 
+> Latest scope: [400-image pilot, slate repair and performance investigation](psd-adjustments-and-agent-latency-20260915.md). Grouped collection and multi-position code are prepared; the 3,200 rollouts and new real/GPU acceptance have not run. Existing evidence below retains its original scope.
+
 > Preparation update (2026-09-15): [4,000-input PSD preparation](psd-experiment-preparation-20260915.md).
 > Source semantic admission is integrated and tested on 8 saved real training
 > traces. New-SFT GPU save/reload and production capability remain unclaimed;

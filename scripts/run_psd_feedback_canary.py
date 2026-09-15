@@ -51,6 +51,13 @@ async def run(args):
     identity = {"inputs": {str(p.resolve()): sha256_file(p) for p in input_paths},
         "attempt_budget": args.attempts, "judge_model": args.judge_model,
         "selection": "all fixed original failed training cases, independent of repair outcomes"}
+    task_source_selection = getattr(args, "task_source_selection", "all")
+    if task_source_selection not in {"all", "longest_failed"}:
+        raise ValueError("unknown PSD task source selection")
+    if task_source_selection != "all":
+        identity["task_source_selection"] = task_source_selection
+    if getattr(args, "repair_mode", "feedback") != "feedback":
+        identity["repair_mode"] = args.repair_mode
     # Keep the default identity byte-compatible with the immutable historical
     # canary; only bind fields that change its execution/materialization policy.
     if proposal_rounds != 12:
@@ -82,9 +89,15 @@ async def run(args):
             "search_complete_no_verified_repairs"}:
         # A search-only probe is also immutable and resumable without a live
         # model or provider key. Verify all bound child snapshots before reuse.
-        from scripts.audit_psd_feedback_run import audit_feedback_run
-        if not audit_feedback_run(output)["passed"]:
-            raise ValueError("completed feedback search no longer passes verification")
+        if getattr(args, "repair_mode", "feedback") == "slate":
+            from ifv_training.psd_slate_search import audit_slate_search
+            for case in load_json(progress)["cases"]:
+                if not audit_slate_search(Path(case["directory"]))["passed"]:
+                    raise ValueError("completed slate search no longer passes verification")
+        else:
+            from scripts.audit_psd_feedback_run import audit_feedback_run
+            if not audit_feedback_run(output)["passed"]:
+                raise ValueError("completed feedback search no longer passes verification")
         return load_json(progress)
     previous_progress = load_json(progress) if progress.exists() else {}
     previous_wall_seconds = float(previous_progress.get("search_wall_seconds") or 0)
@@ -120,14 +133,29 @@ async def run(args):
             "--hint-constructor-model", args.judge_model, "--hint-constructor-wire-api", "interactions",
             "--judge-model", args.judge_model, "--repair-attempts", str(args.attempts),
             "--proposal-rounds", str(proposal_rounds),
-            "--search-mode", "feedback", "--max-suffix-actions", "8"]
-        if (directory / "search-state.json").exists():
+            "--search-mode", getattr(args, "repair_mode", "feedback")]
+        if (directory / "search-state.json").exists() or (directory / "run-inputs.json").exists():
             cli.append("--resume")
         result = await _run(_parser().parse_args(cli))
         return {"case_id": case, "directory": str(directory), "result": result}
 
+    repair_sources = load_jsonl(candidates_path)
+    if task_source_selection == "longest_failed":
+        from ifv_training.psd_collection import select_task_repair_sources
+        def source_trace(candidate):
+            path = (run_dir / candidate["source"]["source_trace_path"]).resolve()
+            path.relative_to(run_dir.resolve())
+            if sha256_file(path) != candidate["source"]["source_trace_sha256"]:
+                raise ValueError("PSD source changed before task selection")
+            return load_json(path)
+        repair_sources, selection = select_task_repair_sources(repair_sources, load_trace=source_trace)
+        selection_path = output / "task-source-selection.json"
+        if selection_path.exists() and load_json(selection_path) != selection:
+            raise ValueError("PSD task source selection changed")
+        write_json(selection_path, selection)
+        summary["task_source_selection"] = {k: v for k, v in selection.items() if k != "tasks"}
     search_started = time.monotonic()
-    async for index, candidate, outcome, error in completed_cases(load_jsonl(candidates_path),
+    async for index, candidate, outcome, error in completed_cases(repair_sources,
             repair_case, concurrency=args.case_concurrency):
         completed_after_seconds = time.monotonic() - search_started
         summary["search_wall_seconds"] = previous_wall_seconds + completed_after_seconds
@@ -206,6 +234,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     parser.add_argument("--score-missing-topk", action="store_true")
     parser.add_argument("--teacher-device", default="cpu")
+    parser.add_argument("--task-source-selection", choices=("all", "longest_failed"), default="longest_failed",
+        help="Use longest_failed for the published per-task grouped repair search")
+    parser.add_argument("--repair-mode", choices=("slate", "feedback"), default="slate")
     return parser
 
 

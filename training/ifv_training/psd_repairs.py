@@ -2,7 +2,8 @@
 
 This module joins public repair candidates with privileged repair attempts.
 Only a fully verified repair is allowed through, and the emitted student
-prefix always comes from the original no-hint rollout capture.
+prefix comes from the original no-hint capture or an explicitly verified,
+corrected hint-free slate prefix. These lineages must never be conflated.
 """
 
 from __future__ import annotations
@@ -97,6 +98,9 @@ def _candidate_step(candidate: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _candidate_student_prompt_ids(candidate: Mapping[str, Any]) -> list[int]:
+    if candidate.get("student_prefix_capture"):
+        from .psd_slate import validate_prefix_lineage
+        return _required_int_list(validate_prefix_lineage(candidate), field="corrected student prefix")
     capture = _mapping(_candidate_step(candidate).get("rollout_token_capture"))
     if _text(capture.get("status")) != "complete":
         raise ValueError("candidate rollout_token_capture is not complete")
@@ -217,6 +221,9 @@ def _validate_attempt(
 
     if attempt.get("accepted") is not True:
         raise ValueError("attempt_not_accepted")
+    if candidate.get("student_prefix_capture") or attempt.get("student_prefix_capture"):
+        from .psd_slate import validate_prefix_lineage
+        validate_prefix_lineage(candidate, attempt)
     repair_tier = _text(attempt.get("repair_tier") or attempt.get("tier"))
     if repair_tier != "causal_episode_pass":
         raise ValueError("repair_tier_not_causal_episode_pass")
@@ -350,6 +357,8 @@ def _validate_attempt(
         "verification": dict(verification),
         "model_roles": dict(model_roles),
         "local_verification": dict(local_verification),
+        **({"student_prefix_capture": candidate["student_prefix_capture"]}
+           if candidate.get("student_prefix_capture") else {}),
     }
 
 
@@ -371,6 +380,8 @@ def _repair_row(
         "stage": _text(repair_site.get("stage")),
         "example_type": _text(repair_site.get("example_type")),
         "accepted": True,
+        **({"student_prefix_capture": selected["student_prefix_capture"]}
+           if selected.get("student_prefix_capture") else {}),
         "repair_tier": "causal_episode_pass",
         "hint": _text(selected.get("hint")),
         "hint_level": int(selected["hint_level"]),

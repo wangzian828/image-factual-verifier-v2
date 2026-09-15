@@ -211,12 +211,19 @@ async def prepare(args):
     results = load_jsonl(run_dir / "run_results.jsonl")
     if {row["case_id"] for row in results} != {row["case_id"] for row in public_rows}:
         raise ValueError("PSD rollout does not cover the complete selected training manifest")
+    expected_rollouts = getattr(args, "expected_rollouts_per_case", None)
+    if expected_rollouts is not None:
+        from ifv_training.psd_collection import verify_collection
+        verify_collection(results, case_ids=[row["case_id"] for row in public_rows],
+            manifest=load_json(run_dir / "run_manifest.json"), expected_rollouts=expected_rollouts)
     paths = [args.benchmark, args.train_cases, args.private_gold, args.source_access_policy,
         serving, checkpoint, run_dir / "run_manifest.json", run_dir / "run_results.jsonl"]
     if args.previous_round_completion:
         paths.append(args.previous_round_completion)
     identity = {"round_index": args.round_index,
         "files": {str(path.resolve()): sha256_file(path) for path in paths}}
+    if expected_rollouts is not None:
+        identity["expected_rollouts_per_case"] = expected_rollouts
     root.mkdir(parents=True, exist_ok=True)
     from scripts.review_psd_sources import review_sources
     source_reviews = root / "source-reviews"
@@ -255,6 +262,8 @@ async def prepare(args):
     write_json(prepared, preparation)
     result = await run_feedback(SimpleNamespace(source=bank, output=root / "search", snapshot=snapshot,
         attempts=args.attempts, case_concurrency=args.case_concurrency, judge_model=args.judge_model,
+        task_source_selection=getattr(args, "task_source_selection", "all"),
+        repair_mode=getattr(args, "repair_mode", "feedback"),
         score_missing_topk=True, teacher_device=args.teacher_device))
     if result["status"] != "search_complete_datums_materialized":
         return {"status": result["status"], "training_started": False, "search": str(root / "search/progress.json")}
@@ -334,6 +343,10 @@ def main():
     prepare_parser.add_argument("--attempts", type=int, default=6)
     prepare_parser.add_argument("--case-concurrency", type=int, default=1)
     prepare_parser.add_argument("--source-review-concurrency", type=int, default=4)
+    prepare_parser.add_argument("--expected-rollouts-per-case", type=int, default=8,
+        help="Enforce every sampling slot before source review; published grouped collection uses 8")
+    prepare_parser.add_argument("--task-source-selection", choices=("all", "longest_failed"), default="longest_failed")
+    prepare_parser.add_argument("--repair-mode", choices=("slate", "feedback"), default="slate")
     prepare_parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     prepare_parser.add_argument("--teacher-device", default="cpu")
     attest_parser = commands.add_parser("attest")

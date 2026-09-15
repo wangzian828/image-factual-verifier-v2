@@ -213,7 +213,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--hint-count", type=int, default=4,
                         help="Proposal count in single mode; feedback mode always proposes one at a time")
     parser.add_argument("--hint-level", type=int, default=1)
-    parser.add_argument("--max-suffix-actions", type=int, default=8)
+    parser.add_argument("--max-suffix-actions", type=int,
+                        help="Optional diagnostic cap; by default retain the Agent's remaining action budget")
     parser.add_argument("--run-student-diagnostic", action="store_true")
     parser.add_argument("--verification-bundle", type=Path)
     parser.add_argument("--train-cases", type=Path, required=True)
@@ -225,17 +226,20 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--generation-retries", type=int, default=1,
                         help="Bounded retries of failed/incomplete generations; completed calls are cached")
-    parser.add_argument("--search-mode", choices=("feedback", "single"), default="feedback")
+    parser.add_argument("--search-mode", choices=("slate", "feedback", "single"), default="feedback")
+    parser.add_argument("--policy-temperature", type=float, default=0.7)
     parser.add_argument("--repair-attempts", type=int, default=6)
     parser.add_argument("--proposal-rounds", type=int, default=12)
-    parser.add_argument("--search-seconds", type=int, default=3600,
+    parser.add_argument("--search-seconds", type=int, default=1800,
                         help="Soft budget checked between rounds, never cancels an in-flight provider call")
     parser.add_argument("--search-media", type=Path, help=argparse.SUPPRESS)
     return parser
 
 
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
-    if args.search_mode == "single":
+    if args.search_mode == "slate" and (args.skip_auto_judge or args.verification_bundle):
+        raise ValueError("slate search requires full-episode live/cached verification")
+    if args.search_mode in {"single", "slate"}:
         return await _run_single(args)
     if args.skip_auto_judge or args.verification_bundle:
         raise ValueError("feedback search requires live/cached per-attempt verification; use single mode for offline bundles")
@@ -322,6 +326,7 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("generation retries must be between 0 and 3")
     config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()
               if key not in {"resume", "skip_auto_judge", "generation_retries"}}
+    config["continuation_policy_version"] = "local-hint-fold-native-budgets-v2"
     for key in ("trace", "candidate", "audit", "gold", "public_context", "private_context",
                 "image", "train_cases", "policy_serving_profile", "round_start_checkpoint_manifest",
                 "semantic_verification", "verification_bundle", "source_access_policy", "search_media"):
@@ -361,7 +366,8 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     from ifv_training.psd_candidate_binding import bind_localized_candidate
     candidate, site = bind_localized_candidate(
         load_json(args.candidate), trace, site, source_trace_sha256=source_trace_sha256)
-    write_jsonl(output_dir / "repair_candidates.jsonl", [candidate])
+    if args.search_mode != "slate":
+        write_jsonl(output_dir / "repair_candidates.jsonl", [candidate])
     runtime_store = CaseRuntimeStore(
         output_dir,
         case_id=_text(_mapping(trace.get("state")).get("runtime_case", {}).get("case_id"))
@@ -428,12 +434,12 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
         tool_call_limits=policy_orchestrator.verification_tool_limits,
         source_runtime_store_path=site.runtime_store_path,
         hint_constructor_thinking_level=args.hint_constructor_thinking_level,
-        generation_config=policy_orchestrator._stage_generation_config(
-            "UNIFIED_REACT"
-        ),
-        judgment_generation_config=policy_orchestrator._stage_generation_config(
-            "UNIFIED_JUDGMENT"
-        ),
+        max_output_tokens=policy_orchestrator._stage_output_tokens("UNIFIED_REACT", 8192),
+        judgment_max_output_tokens=policy_orchestrator._stage_output_tokens("UNIFIED_JUDGMENT", 8192),
+        generation_config={**policy_orchestrator._stage_generation_config(
+            "UNIFIED_REACT"), "temperature": args.policy_temperature},
+        judgment_generation_config={**policy_orchestrator._stage_generation_config(
+            "UNIFIED_JUDGMENT"), "temperature": args.policy_temperature},
         judgment_system_prompt=policy_orchestrator._sp(
             UNIFIED_JUDGMENT_SYSTEM_PROMPT
         ),
@@ -452,6 +458,12 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
                 attestation = validate_live_model(policy_profile, response.json())
             write_json(output_dir / "live-serving-check.json", attestation)
         adapter.before_policy_call = guard_live_policy
+        if args.search_mode == "slate":
+            from ifv_training.psd_slate_search import run_slate_search
+            return await run_slate_search(args=args, adapter=adapter, site=site, candidate=candidate,
+                trace=trace, gold=gold, private_context=private_context, source_task_review=source_task_review,
+                source_audit=source_audit, source_policy=source_policy, roles=model_roles,
+                profile=policy_profile, config=config)
         if args.search_media:
             from ifv_training.psd_gemini_judge import review_images
             adapter.search_review_images = []

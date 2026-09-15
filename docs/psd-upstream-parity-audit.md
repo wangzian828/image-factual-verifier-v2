@@ -1,5 +1,7 @@
 # PSD upstream parity audit
 
+> 2026-09-15: [Grouped collection, multi-position slate repair and latency follow-up](psd-adjustments-and-agent-latency-20260915.md) supersedes historical single-position limitations below. New code has CPU regression evidence; a new real multi-position episode and GPU save/resume remain acceptance gates, not completed claims.
+
 Audit date: 2026-09-11
 
 Current follow-up: 2026-09-12. Use the

@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Mapping, Sequence
 
 from . import _repo_import  # noqa: F401
@@ -21,6 +21,7 @@ from src.orchestrator.investigation_models import (
 )
 from src.orchestrator.llm_backend import LLMResponse
 from src.orchestrator.react_runtime import (
+    MAX_REACT_ACTIONS,
     REACT_RUNTIME_SCHEMA_VERSION,
     UnifiedReactState,
     build_react_runtime_tools,
@@ -60,6 +61,7 @@ class ContinuationResult:
     student_complete: bool = False
     stop_reason: str = ""
     teacher_episode_trace: Dict[str, Any] | None = None
+    local_targets: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class QwenContinuationAdapter:
@@ -79,6 +81,7 @@ class QwenContinuationAdapter:
         source_access_policy: SourceAccessPolicy | None = None,
         tool_call_limits: Mapping[str, int] | None = None,
         max_output_tokens: int = 8192,
+        judgment_max_output_tokens: int | None = None,
         generation_config: Mapping[str, Any] | None = None,
         judgment_generation_config: Mapping[str, Any] | None = None,
         judgment_system_prompt: str = "",
@@ -128,6 +131,8 @@ class QwenContinuationAdapter:
         self.source_access_policy = source_access_policy or SourceAccessPolicy()
         self.tool_call_limits = dict(tool_call_limits or {})
         self.max_output_tokens = max(1, int(max_output_tokens))
+        self.judgment_max_output_tokens = max(1, int(
+            judgment_max_output_tokens if judgment_max_output_tokens is not None else max_output_tokens))
         self.generation_config = dict(generation_config or {})
         self.judgment_generation_config = dict(
             judgment_generation_config or self.generation_config
@@ -206,6 +211,7 @@ class QwenContinuationAdapter:
             ),
             protocol_exhaustion_boundary=True,
             max_tool_calls_per_turn=1,
+            max_protocol_corrections=4,
             max_output_tokens=self.max_output_tokens,
             generation_config=self.generation_config,
             source_access_policy=self.source_access_policy,
@@ -234,6 +240,32 @@ class QwenContinuationAdapter:
         if any(row.get("role") == "system" for row in rows):
             raise ValueError("PSD native history contains an interior system message")
         return rows
+
+    @staticmethod
+    def _remove_local_hint(history, *, unhinted_prefix, hint):
+        """Remove exactly the injected message, never a matching observed string.
+
+        The archived teacher request retains the hint for scoring. Only the
+        native history used for later decisions is changed, as in upstream's
+        hint-free fold. Repeated text inside actual observations is preserved.
+        """
+        rows = copy.deepcopy(list(history))
+        index = len(unhinted_prefix)
+        if rows[:index] != list(unhinted_prefix):
+            raise ValueError("PSD continuation changed the pre-hint history")
+        if index >= len(rows) or rows[index] != {"role": "user", "content": hint}:
+            raise ValueError("PSD local hint is absent from its bound message position")
+        del rows[index]
+        return rows
+
+    @staticmethod
+    def _remaining_actions(runtime_state, requested):
+        remaining = max(0, MAX_REACT_ACTIONS - runtime_state.action_count)
+        if requested is None:
+            return remaining
+        if type(requested) is not int or requested < 1:
+            raise ValueError("max_suffix_actions must be positive or omitted")
+        return min(requested, remaining)
 
     @staticmethod
     def _stage_step_from_row(row: Mapping[str, Any]) -> StageStep:
@@ -354,7 +386,7 @@ class QwenContinuationAdapter:
             runtime_store=self.runtime_store,
             attach_image=False,
             output_validator=validate,
-            max_output_tokens=self.max_output_tokens,
+            max_output_tokens=self.judgment_max_output_tokens,
             generation_config=self.judgment_generation_config,
             source_access_policy=self.source_access_policy,
             request_timeout_seconds=self.request_timeout_seconds,
@@ -638,11 +670,13 @@ class QwenContinuationAdapter:
         self,
         *,
         failure_site: FailureSite,
-        hint: HintProposal,
+        hint: HintProposal | None,
         base_trace: Mapping[str, Any],
         prior_steps: Sequence[StageStep] = (),
-        max_suffix_actions: int = 8,
+        max_suffix_actions: int | None = None,
         run_student_diagnostic: bool = False,
+        hints_by_action: Mapping[int, HintProposal] | None = None,
+        capture_local_target: Any = None,
     ) -> ContinuationResult:
         """Generate one complete hinted teacher episode from the failed state.
 
@@ -652,22 +686,47 @@ class QwenContinuationAdapter:
         an extra no-hint action is optional diagnostics only.
         """
 
-        if max_suffix_actions < 1:
-            raise ValueError("max_suffix_actions must be positive")
         site = self._site(failure_site)
-        teacher_history = build_teacher_messages(site, hint)
         student_history = build_student_messages(site)
+        teacher_history = build_teacher_messages(site, hint) if hint is not None else copy.deepcopy(student_history)
         runtime_state, source_prefix = self._initial_runtime_state(
             base_trace=base_trace,
             failure_site=site,
         )
+        action_budget = self._remaining_actions(runtime_state, max_suffix_actions)
+        hint_free_prefix = self._native_history(student_history, _text(site.policy_input.get("system_instruction")))
+        # IFV has one user task, so slate positions are native decision ordinals,
+        # not fictitious extra user turns. The terminal judgment has its own key.
+        initial_position = MAX_REACT_ACTIONS if site.stage == "unified_judgment" else runtime_state.action_count
+        slate = dict(hints_by_action or {})
+        if any(type(k) is not int or not initial_position <= k <= MAX_REACT_ACTIONS for k in slate):
+            raise ValueError("PSD slate position is outside the repair episode")
+        if hint is not None and initial_position in slate and slate[initial_position] != hint:
+            raise ValueError("PSD initial slate hint differs from the selected repair hint")
+        if hint is not None:
+            slate[initial_position] = hint
+        elif initial_position in slate:
+            teacher_history = build_teacher_messages(site, slate[initial_position])
+        if not slate:
+            raise ValueError("PSD repair requires at least one explicit intervention")
+        if hints_by_action is not None and capture_local_target is None:
+            raise ValueError("PSD multi-position repair requires exact local target capture")
+        local_targets = []
+        used_positions = set()
         teacher_steps: list[StageStep] = []
         student_steps: list[StageStep] = []
         teacher_complete = False
         student_complete = False
 
         if site.stage != "unified_judgment":
-            for action_index in range(max_suffix_actions):
+            for action_index in range(action_budget):
+                position = runtime_state.action_count
+                local_hint = slate.get(position)
+                unhinted_prefix = hint_free_prefix if action_index == 0 else None
+                if action_index > 0 and local_hint is not None:
+                    unhinted_prefix = [*teacher_history,
+                        {"role": "user", "content": render_react_runtime_context(runtime_state)}]
+                    teacher_history = [*unhinted_prefix, {"role": "user", "content": local_hint.text}]
                 active_tools = build_react_runtime_tools(
                     runtime_state,
                     self.tools_by_name,
@@ -682,7 +741,7 @@ class QwenContinuationAdapter:
                 runner = self._runner(
                     site=site,
                     history=teacher_history,
-                    include_hint_as_pending_user=action_index == 0,
+                    include_hint_as_pending_user=action_index == 0 or local_hint is not None,
                     stage_name="psd_teacher_repair",
                     prior_steps=[*source_prefix, *prior_steps, *teacher_steps],
                     tools=active_tools,
@@ -697,7 +756,7 @@ class QwenContinuationAdapter:
                 )
                 await self._guard_policy()
                 _, steps = await runner.run(
-                    "" if action_index == 0 else render_react_runtime_context(runtime_state)
+                    "" if action_index == 0 or local_hint is not None else render_react_runtime_context(runtime_state)
                 )
                 teacher_steps.extend(steps)
                 if not runner.last_native_history:
@@ -705,6 +764,15 @@ class QwenContinuationAdapter:
                         "teacher continuation did not retain native history"
                     )
                 teacher_history = runner.last_native_history
+                if local_hint is not None:
+                    teacher_history = self._remove_local_hint(
+                        teacher_history, unhinted_prefix=unhinted_prefix, hint=local_hint.text)
+                    used_positions.add(position)
+                    if capture_local_target is not None:
+                        local_targets.append(await capture_local_target(position=position,
+                            hint=local_hint, steps=steps, unhinted_prefix=unhinted_prefix,
+                            runtime_store=self.runtime_store,
+                            system_instruction=_text(site.policy_input.get("system_instruction"))))
                 action = next(
                     (step for step in steps if step.action_type == "tool_call"),
                     None,
@@ -721,27 +789,45 @@ class QwenContinuationAdapter:
                 if runtime_state.stop_reason:
                     break
             if not runtime_state.stop_reason:
-                runtime_state.stop_reason = "psd_suffix_action_limit"
+                runtime_state.stop_reason = (
+                    "hard_budget_exhausted" if runtime_state.action_count >= MAX_REACT_ACTIONS
+                    else "psd_suffix_action_limit")
 
         basis = compile_react_judgment_basis(
             runtime_state,
             [*source_prefix, *teacher_steps],
         )
+        judgment_hint = slate.get(MAX_REACT_ACTIONS)
+        judgment_prefix = hint_free_prefix if site.stage == "unified_judgment" else None
+        if judgment_hint is not None and site.stage != "unified_judgment":
+            judgment_prefix = [*teacher_history,
+                {"role": "user", "content": render_react_judgment_context(runtime_state, basis)}]
+            teacher_history = [*judgment_prefix, {"role": "user", "content": judgment_hint.text}]
         judgment_runner = self._judgment_runner(
             history=teacher_history,
             basis=basis,
-            include_pending_user=site.stage == "unified_judgment",
+            include_pending_user=judgment_hint is not None,
             system_instruction=_text(site.policy_input.get("system_instruction")) if site.stage == "unified_judgment" else None,
         )
         await self._guard_policy()
         parsed_judgment, judgment_steps = await judgment_runner.run(
             ""
-            if site.stage == "unified_judgment"
+            if judgment_hint is not None
             else render_react_judgment_context(runtime_state, basis)
         )
         if parsed_judgment is None or not judgment_runner.last_native_history:
             raise RuntimeError("teacher continuation did not reach final Judgment")
         teacher_history = judgment_runner.last_native_history
+        if judgment_hint is not None:
+            teacher_history = self._remove_local_hint(
+                teacher_history, unhinted_prefix=judgment_prefix, hint=judgment_hint.text)
+            used_positions.add(MAX_REACT_ACTIONS)
+            if capture_local_target is not None:
+                local_targets.append(await capture_local_target(position=MAX_REACT_ACTIONS,
+                    hint=judgment_hint, steps=judgment_steps, unhinted_prefix=judgment_prefix,
+                    runtime_store=self.runtime_store,
+                    system_instruction=(_text(site.policy_input.get("system_instruction"))
+                        if site.stage == "unified_judgment" else self.judgment_system_prompt)))
         teacher_steps.extend(judgment_steps)
         teacher_complete = True
 
@@ -783,6 +869,13 @@ class QwenContinuationAdapter:
             teacher_steps=teacher_steps,
             stop_reason=runtime_state.stop_reason,
         )
+        if hints_by_action is not None:
+            teacher_episode_trace["psd_repair"]["slate"] = {
+                "schema_version": "ifv-psd-decision-slate-v1",
+                "positions": sorted(slate), "used_positions": sorted(used_positions),
+                "unused_positions": sorted(set(slate) - used_positions),
+                "hint_free_history_after_each_decision": True,
+                "local_target_count": len(local_targets)}
         if self.runtime_store is not None:
             teacher_episode_trace["state"]["runtime_store"] = dict(self.runtime_store.descriptor)
             teacher_episode_trace["psd_repair"]["source_runtime_store_path"] = site.runtime_store_path
@@ -792,7 +885,7 @@ class QwenContinuationAdapter:
             student_steps=student_steps,
             teacher_history=teacher_history,
             student_history=student_history,
-            hint=hint.text,
+            hint=hint.text if hint is not None else "",
             teacher_complete=teacher_complete,
             student_complete=student_complete,
             stop_reason=(
@@ -801,6 +894,7 @@ class QwenContinuationAdapter:
                 else "bounded_suffix_exhausted"
             ),
             teacher_episode_trace=teacher_episode_trace,
+            local_targets=local_targets,
         )
 
 

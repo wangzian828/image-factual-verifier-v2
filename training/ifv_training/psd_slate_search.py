@@ -1,0 +1,168 @@
+"""Sequential, cached full-episode slate search on one frozen policy snapshot.
+
+Case-level concurrency belongs to the caller. Attempts within a case depend on
+actual verifier feedback; speculative hints or unverified targets never train.
+"""
+from __future__ import annotations
+
+from functools import partial
+from pathlib import Path
+import time
+import uuid
+
+from .io import load_json, write_json, write_jsonl, sha256_file
+from .psd_repair import _sha
+from .psd_repair_storage import cached_continuation, load_bound, save_bound
+from .psd_slate import (capture_target, decision_map, propose_slate, review_slate,
+                        assemble_slate_attempts)
+
+
+async def run_slate_search(*, args, adapter, site, candidate, trace, gold, private_context,
+                           source_task_review, source_audit, source_policy, roles, profile, config):
+    from src.integrations.gemini import GeminiInteractionsClient
+    from src.orchestrator.runtime_events import CaseRuntimeStore
+    from .psd_gemini_judge import review_images, trace_steps
+    import httpx
+    if args.max_suffix_actions is not None or args.run_student_diagnostic:
+        raise ValueError("published slate mode retains native action budget and needs no student resampling")
+    if not 1 <= args.repair_attempts <= 6:
+        raise ValueError("published slate mode allows at most six complete repair reruns")
+    root = args.output_dir
+    marker = root / "slate-state.json"
+    identity = {"version": "slate-search-v1", "inputs": _sha(config)}
+    state = load_bound(marker, identity=identity) if marker.exists() else {
+        "rounds": [], "elapsed_seconds": 0.0, "status": "repairing"}
+    for row in state["rounds"]:
+        for raw, digest in row["files"].items():
+            path = Path(raw).resolve()
+            path.relative_to(root.resolve())
+            if sha256_file(path) != digest:
+                raise ValueError("PSD slate completed round changed")
+    if state["status"] != "repairing":
+        audit_slate_search(root)
+        return load_json(root / "manifest.json")
+    initial_state, _ = adapter._initial_runtime_state(base_trace=trace, failure_site=site)
+    initial = 24 if site.stage == "unified_judgment" else initial_state.action_count
+    from .psd_repair import FailureSite, project_policy_steps
+    first = next(row for row in project_policy_steps(trace) if row["action_type"] in {"tool_call", "output"})
+    replay_site = FailureSite(step_index=0, **{k: first[k] for k in (
+        "step_id", "stage", "example_type", "policy_input", "policy_action", "source_step_index",
+        "context_request_id", "runtime_store_path")})
+    started = time.monotonic()
+    elapsed_before = state["elapsed_seconds"]
+    records, candidates = [], []
+    source_hash = sha256_file(args.trace)
+    token_url = str(profile["base_url"]).rstrip("/").removesuffix("/v1") + "/tokenize"
+    key = adapter.policy_llm.api_key
+    headers = {"Authorization": "Bearer " + key} if key else {}
+    async with httpx.AsyncClient(timeout=240, trust_env=False, headers=headers) as token_client, \
+            GeminiInteractionsClient(timeout=240, max_retries=2) as judge:
+        async def tokenize(body):
+            response = await token_client.post(token_url, json=body)
+            response.raise_for_status()
+            return response.json()["tokens"]
+        capture = partial(capture_target, tokenize=tokenize, model=args.policy_model)
+        while len(state["rounds"]) < args.repair_attempts:
+            elapsed = elapsed_before + time.monotonic() - started
+            if elapsed >= args.search_seconds:
+                state["status"] = "time_budget_exhausted"
+                break
+            number = len(state["rounds"])
+            previous, passing, failed, observed = {}, [], initial, trace
+            if state["rounds"]:
+                last = state["rounds"][-1]
+                observed = load_json(Path(last["episode_path"]))
+                previous = {int(k): v for k, v in last["hints"].items()}
+                passing = last["review"]["decision"]["passing_positions"]
+                failed = last["review"]["decision"]["failed_position"]
+                if failed < 0:
+                    raise ValueError("PSD failed review has no actionable localization")
+            images, _ = review_images({"source": trace, **({"repaired": observed} if number else {})}, image_path=args.image)
+            public = {"source_steps": trace_steps(trace), "observed_steps": trace_steps(observed),
+                "decision_map": decision_map(observed)}
+            # Never forward private review explanations, labels, gold or reasons
+            # to the proposer. It sees observed material plus checker positions.
+            hints, provenance = await propose_slate(judge, public_context=public, previous=previous,
+                passing_positions=passing, failed_position=failed, model=args.hint_constructor_model,
+                cache_dir=root / "judge-cache", private_context=private_context, images=images)
+            if not hints:
+                state["status"] = "no_further_grounded_hint"
+                break
+            directory = root / "slate-rounds" / f"{number:02d}"
+            directory.mkdir(parents=True, exist_ok=True)
+            async def generate():
+                adapter.runtime_store = CaseRuntimeStore(root, case_id=candidate["case_id"],
+                    attempt_id=f"slate-{number:02d}-{uuid.uuid4().hex[:12]}", resume_from=root)
+                # Replay from the first native decision, not an immutable old
+                # failed suffix. Earlier actions may change under sampling.
+                return await adapter.run_hinted_episode(failure_site=replay_site, hint=None,
+                    base_trace=trace, hints_by_action=hints, capture_local_target=capture)
+            continuation = await cached_continuation(directory / "continuation.json",
+                identity={"inputs": _sha(config), "hints": {str(k): h.text for k, h in hints.items()}}, generate=generate)
+            episode = continuation.teacher_episode_trace
+            episode_path = directory / "episode.json"
+            write_json(episode_path, episode)
+            review = await review_slate(judge, source=trace, episode=episode, gold=gold,
+                image_path=args.image, model=args.judge_model, cache_dir=root / "judge-cache")
+            write_json(directory / "review.json", review)
+            round_state = {"hints": {k: h.text for k, h in hints.items()}, "review": review,
+                "proposal": provenance, "episode_path": str(episode_path),
+                "files": {str(p): sha256_file(p) for p in (
+                    episode_path, directory / "review.json", directory / "continuation.json")}}
+            state["rounds"].append(round_state)
+            state["elapsed_seconds"] = elapsed_before + time.monotonic() - started
+            # Generation and judge are already independently cached. Advance the
+            # search cursor only after materialization, so a crash here resumes
+            # this SAME round without re-sampling or losing a passing result.
+            if review["decision"]["status"] == "pass":
+                from .psd_media import media_from_archive, validate_media
+                for target in continuation.local_targets:
+                    if 248056 in target["teacher_prompt_ids"]:
+                        media = media_from_archive(target, processor_path=str(profile.get("engine_model_path")
+                            or args.round_start_checkpoint), output_dir=root / "media",
+                            prompt_ids=target["teacher_prompt_ids"])
+                        validate_media(media, target["student_prompt_ids"])
+                        target["psd_media"] = media
+                candidates, records = assemble_slate_attempts(seed=candidate, source=trace,
+                    source_hash=source_hash, episode=episode, targets=continuation.local_targets,
+                    review=review, gold=gold, source_task_review=source_task_review, source_audit=source_audit,
+                    source_policy=source_policy, roles=roles)
+                state["status"] = ("passed_without_intervention" if not continuation.local_targets else
+                    "converged" if records and all(r["accepted"] for r in records) else "paused_strict_audit_failed")
+                break
+            if review["decision"]["status"] == "unresolved":
+                state["status"] = "paused_unresolved_task_review"
+                break
+            save_bound(marker, identity=identity, payload=state)
+        else:
+            state["status"] = "attempt_budget_exhausted"
+    write_jsonl(root / "repair_candidates.jsonl", candidates)
+    write_jsonl(root / "repair_attempts.jsonl", records)
+    state["elapsed_seconds"] = elapsed_before + time.monotonic() - started
+    result = {"schema_version": "ifv-psd-slate-search-v1", "status": state["status"],
+        "complete_reruns": len(state["rounds"]), "candidate_count": len(records),
+        "accepted_count": sum(r["accepted"] for r in records), "elapsed_seconds": state["elapsed_seconds"],
+        "training_started": False, "per_target_weight": 1.0}
+    write_json(root / "manifest.json", result)
+    # The bound state is the terminal commit marker. Write every output first:
+    # a crash must not leave a completed state pointing at a missing manifest.
+    state["output_files"] = {str(root / name): sha256_file(root / name)
+        for name in ("repair_candidates.jsonl", "repair_attempts.jsonl", "manifest.json")}
+    save_bound(marker, identity=identity, payload=state)
+    return result
+
+
+def audit_slate_search(root):
+    marker = root / "slate-state.json"
+    saved = load_json(marker)
+    state = load_bound(marker, identity=saved["identity"])
+    for row in [*state["rounds"], {"files": state.get("output_files", {})}]:
+        for raw, digest in row["files"].items():
+            path = Path(raw).resolve()
+            path.relative_to(root.resolve())
+            if sha256_file(path) != digest:
+                raise ValueError("PSD slate artifact changed after completion")
+    result = load_json(root / "manifest.json")
+    if result["status"] != state["status"] or result["complete_reruns"] != len(state["rounds"]):
+        raise ValueError("PSD slate manifest differs from checkpoint")
+    return {"passed": not state["status"].startswith("paused_") and state["status"] != "repairing"}

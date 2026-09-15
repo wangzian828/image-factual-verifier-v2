@@ -34,7 +34,8 @@ async def cached_continuation(path: Path, *, identity, generate):
                "student_steps": [asdict(step) for step in result.student_steps],
                "hint": result.hint, "teacher_complete": result.teacher_complete,
                "student_complete": result.student_complete, "stop_reason": result.stop_reason,
-               "teacher_episode_trace": result.teacher_episode_trace}
+               "teacher_episode_trace": result.teacher_episode_trace,
+               "local_targets": result.local_targets}
     # Raw history is already immutable in the runtime archive. Do not duplicate
     # all base64 images in a second continuation snapshot.
     save_bound(path, identity=identity, payload=payload)
