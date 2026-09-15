@@ -1,0 +1,29 @@
+project: ifv-psd-preparation
+updated: '2026-09-15'
+phase: source-admission-audit
+scope: preparation-only
+input_pool: /volume/ybo/wza/data/psd-candidate-pool-4000-20260914-v3
+sample_count: 4000
+class_counts: {real: 1421, fake: 2579}
+input_status: verified-before-this-protocol
+production_psd_started: false
+main_experiments: do-not-interrupt
+monitor: gemini-3-1-pro-agent
+monitor_interval: hourly
+completed:
+  - verified-4000-input-pool
+  - inspected-source-candidate-and-causal-verifier-gates
+  - extended-existing-hourly-monitor-with-preparation-continuity
+next:
+  - implement-bound-source-semantic-admission-and-correct-label-repair
+  - validate-regressions-and-bounded-real-training-traces
+  - freeze-launch-configuration-and-resource-gates
+deferred:
+  - new-sft-snapshot-export-load-and-fresh-policy-canary
+  - production-psd-round-and-new-policy-evaluation
+constraints:
+  - server-root-only-/volume/ybo/wza
+  - preserve-old-weights
+  - no-test-training-or-training-source-dev-holdout
+  - no-expansion-of-delegated-overlap-investigation
+  - local-git-only
