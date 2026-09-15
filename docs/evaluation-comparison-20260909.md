@@ -1,5 +1,7 @@
 # 图像事实核查对比实验结果
 
+> **2026-09-16 缓存身份审计告警：** 三 epoch SFT 的 epoch2 有1,246/1,524条、epoch3有1,205/1,526条选中轨迹命中了跨图片复用的感知/OCR结果。下表两轮的数值保留为原故障流程的冻结记录，**暂不作为排除工程缺陷后的最终模型对比**；这些数量不等于最终标签全部错误。其余Agent尚未完成同类审计，不能据此宣称不受影响；Direct QA不经过此工具缓存。详见[缓存事件及处置](perception-cache-incident-20260916.md)。未擅自重跑历史评测或改动原预测。
+
 ## 实验设置
 
 - 评测集：筛选后的统一测试集
@@ -21,9 +23,9 @@
 | 1 | **Gemini 3.7 Agent** | **81.57** | 84.35 | 78.78 | 42.89 |
 | 2 | Qwen3.5-9B Agent（SFT-4872，从 Base 独立训练） | 79.95 | 83.02 | 76.87 | 36.54 |
 | 3 | Qwen3.5-9B Agent（SFT-2578，从 Base 独立训练） | 79.87 | 79.58 | 80.17 | 34.77 |
-| 4 | Qwen3.5-9B Agent（SFT-4872，另一次 Base 初始化训练，epoch 3） | 79.08 | 78.25 | 79.91 | 待 judge |
+| 4 | Qwen3.5-9B Agent（SFT-4872，另一次 Base 初始化训练，epoch 3；缓存缺陷记录） | 79.08 | 78.25 | 79.91 | 待 judge／口径待处理 |
 | 5 | **GPT-5.5 Agent** | 78.13 | 83.82 | 72.43 | **50.49** |
-| 6 | Qwen3.5-9B Agent（SFT-4872，同一次三 epoch 训练，epoch 2；2 条失败） | 77.80 | 75.33 | 80.26 | 待 judge |
+| 6 | Qwen3.5-9B Agent（SFT-4872，同一次三 epoch 训练，epoch 2；2 条失败、缓存缺陷记录） | 77.80 | 75.33 | 80.26 | 暂停新提交 |
 | 7 | Qwen3.5-397B-A17B Agent | 71.72 | 50.66 | 92.78 | 43.29 |
 | 8 | Qwen3.5-9B Agent（训练前） | 65.67 | 70.03 | 61.30 | 3.14 |
 | 9 | Gemini 3.1 Pro Agent | 62.42 | 29.71 | 95.13 | 待 judge |
@@ -55,8 +57,8 @@
 | 训练前基线 | Qwen3.5-9B Base | 0 | 65.67 | — | 3.14 | — |
 | SFT-2578 | Qwen3.5-9B Base | 2,578 条 | 79.87 | +14.20 | 34.77 | +31.63 |
 | SFT-4872 | Qwen3.5-9B Base | 4,872 条 | 79.95 | +14.28 | 36.54 | +33.40 |
-| SFT-4872，另一次三 epoch 训练的 epoch 2（2 条失败） | Qwen3.5-9B Base | 4,872 条 | 77.80 | +12.13 | 待 judge | — |
-| SFT-4872，另一次三 epoch 训练的 epoch 3 | Qwen3.5-9B Base | 4,872 条 | 79.08 | +13.41 | 待 judge | — |
+| SFT-4872，另一次三 epoch 训练的 epoch 2（缓存缺陷记录，2 条失败） | Qwen3.5-9B Base | 4,872 条 | 77.80 | +12.13 | 暂停新提交 | — |
+| SFT-4872，另一次三 epoch 训练的 epoch 3（缓存缺陷记录） | Qwen3.5-9B Base | 4,872 条 | 79.08 | +13.41 | 待 judge／口径待处理 | — |
 
 > 注：表中结果均为百分比（%），↑ 表示数值越高越好。严格证据充分率（Strict Evidence Sufficiency Rate, SESR）是指回答被独立评估模型判定为证据充分、来源可靠，且推理能够支撑最终结论的样本比例。
 
@@ -99,7 +101,9 @@ Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_le
 
 epoch3 与 Gemini 3.1 Pro 两组同口径 v3 judge 继续采用已固定的混合传输：已受理 28 个 Batch 共 149 条，其余 2,903 条分配给普通 API，不能重新启动旧 Batch 提交阶段。2026-09-16 05:04 巡检普通调用已有1,241条有效结果（epoch3 622、Pro619），25条明确拒绝未记作成功；Batch 28个仍为RUNNING、0个已回收，尚无最终SESR。epoch2不属于这两组既有任务。详情见 [普通 judge 切换记录](judge-realtime-switch-20260915.md)。
 
-05:13，epoch2独立提交入口完成精确case-ID关联：1,523条可按原图内联分为282个Batch，另1条GIF编码后约23.5MB超过保守内联阈值，保留待File API配额处理，不缩图、不丢图。第一次实际Batch创建被HTTP429拒绝，受理0条，并非已提交成功。独立收据位于上述epoch2准备目录的`create-intents`和`submission-progress.json`，源码`scripts/server/submit_sft2056_judge.py`。只有明确429可在一小时后有限续交，每分片累计最多6次；超时/不确定创建先对账，不重复付费；不会恢复旧epoch3/Pro Batch提交器。对应11项ID关联及防重放测试通过。[Gemini Batch内联限制](https://ai.google.dev/gemini-api/docs/batch-api)
+05:13，epoch2独立提交入口完成精确case-ID关联：1,523条可按原图内联分为282个Batch，另1条GIF编码后约23.5MB超过保守内联阈值，保留待File API配额处理，不缩图、不丢图。05:13及06:41两次实际Batch创建均被HTTP429拒绝，仍0受理。独立收据位于上述epoch2准备目录的`create-intents`和`submission-progress.json`。发现跨图片感知缓存后已加入`data-quality-hold.json`并在启动及逐片提交前强制检查，**原按一小时冷却续交的规则已暂停，不能仅因配额恢复就新付费提交**。不删除收据、不恢复旧epoch3/Pro Batch提交器，也不自动重跑历史全量。[Gemini Batch内联限制](https://ai.google.dev/gemini-api/docs/batch-api)
+
+07:02，仍运行的普通judge有效结果为epoch3 1,178条、Pro 1,177条，两个worker继续运行；07:06原Batch collector再次观测28个RUNNING、0已回收、无collector错误。它们审核的是原冻结输出，结果需保留本页顶部的缓存缺陷限定，尚无最终SESR。
 
 ## 初步结论
 

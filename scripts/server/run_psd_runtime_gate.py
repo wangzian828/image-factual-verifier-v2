@@ -24,6 +24,7 @@ EXPORT = ROOT/'exports/h20-sft-merged4872-epoch2-step2056-20260915/export.json'
 POLICY_NAME = 'ifv-qwen3.5-9b-sft-2056'
 BACKEND_ALIAS = 'ifv-psd-sft2056-safety'
 GATEWAY = 'http://127.0.0.1:19001'
+DISABLE_PERCEPTION_CACHE = False
 
 
 def digest(path):
@@ -51,6 +52,8 @@ def environment():
         AGENT_LLM_REQUEST_TIMEOUT_SECONDS='1230', AGENT_STAGE_REQUEST_TIMEOUT_SECONDS='1260',
         AGENT_LLM_REQUEST_MAX_RETRIES='0', TOOL_CACHE_ENABLED='0', OMP_NUM_THREADS='1',
         PYTHONPATH=str(CODE)+':'+str(CODE/'training'), TMPDIR=str(ROOT/'tmp'))
+    if DISABLE_PERCEPTION_CACHE:
+        env['PERCEPTION_CACHE_ENABLED'] = '0'
     return env, checks
 
 
@@ -89,6 +92,7 @@ def preflight():
             'export_sha256': digest(EXPORT), 'prepared_sha256': digest(PREP/'prepared.json'),
             'policy_model_name': POLICY_NAME, 'pinned_backend_alias': BACKEND_ALIAS,
             'gateway': GATEWAY,
+            'perception_cache_disabled': DISABLE_PERCEPTION_CACHE,
             'temperature': 0.7, 'think_budget': 8192, 'output_budget': 32768,
             'concurrency': 2, 'rollouts_per_case': 1, 'base_sampling_seed': 0,
             'purpose': 'runtime protocol diagnostic only; not 400x8 source collection',
@@ -117,6 +121,14 @@ def execute():
     config = run_cases._workflow_config(parsed)
     workflow = PSDWorkflow(config)
     orchestrator = workflow._get_orchestrator(validate_startup=False)
+    if DISABLE_PERCEPTION_CACHE:
+        assert not orchestrator.tool_cache.enabled
+        assert not orchestrator.cacheable_tools
+        save(RUN/'effective-cache-config.json', {
+            'tool_cache_enabled': False, 'cacheable_tools': [],
+            'TOOL_CACHE_ENABLED': os.environ.get('TOOL_CACHE_ENABLED'),
+            'PERCEPTION_CACHE_ENABLED': os.environ.get('PERCEPTION_CACHE_ENABLED'),
+            'Agent_source_changed': False})
     configs = {stage: orchestrator._stage_generation_config(stage)
                for stage in ['UNIFIED_REACT', 'UNIFIED_JUDGMENT']}
     for value in configs.values():
@@ -162,12 +174,19 @@ def launch_no_apc_gateway():
 
 
 def main():
-    global RUN, GATEWAY
+    global RUN, GATEWAY, DISABLE_PERCEPTION_CACHE
     parser = argparse.ArgumentParser()
     parser.add_argument('--launch', action='store_true')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--single-no-apc', action='store_true')
+    parser.add_argument('--cache-free', action='store_true',
+                        help='Separate two-case diagnostic with both tool/perception caches disabled')
     args = parser.parse_args()
+    if args.cache_free:
+        assert not args.single_no_apc
+        RUN = ROOT/'runs/psd-real-runtime-gate-no-perception-cache-20260916'
+        GATEWAY = 'http://127.0.0.1:19012'
+        DISABLE_PERCEPTION_CACHE = True
     if args.single_no_apc:
         RUN = ROOT/'runs/psd-real-runtime-gate-no-apc-20260916'
         GATEWAY = 'http://127.0.0.1:19012'
@@ -194,6 +213,8 @@ def main():
         command = [sys.executable, '-u', str(Path(__file__).resolve()), '--execute']
         if args.single_no_apc:
             command += ['--single-no-apc']
+        if args.cache_free:
+            command += ['--cache-free']
         child = subprocess.Popen(command,
             cwd=CODE, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     save(RUN/'process.json', {'pid': child.pid, 'time': time.time(), 'script_sha256': digest(Path(__file__))})

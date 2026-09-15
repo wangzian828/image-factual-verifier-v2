@@ -24,6 +24,7 @@ RUN = ROOT/'runs/psd-slate-canary4x8-20260916'
 EXPORT = ROOT/'exports/h20-sft-merged4872-epoch2-step2056-20260915/export.json'
 EXPORT_SHA = '55dfb77f56cb175573c5e966816c8a0a0c384385190ae5b62795963f681fbd28'
 ALIAS = 'ifv-qwen3.5-9b-sft-2056'
+CACHE_FREE = False
 
 
 def digest(path):
@@ -68,16 +69,27 @@ def source_revision(hashes):
 
 
 def helpers():
-    spec = importlib.util.spec_from_file_location('runtime_gate', HELPERS/'run_psd_runtime_gate_v3.py')
+    version = 'run_psd_runtime_gate_v4.py' if CACHE_FREE else 'run_psd_runtime_gate_v3.py'
+    spec = importlib.util.spec_from_file_location('runtime_gate', HELPERS/version)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.GATEWAY = 'http://127.0.0.1:19012'
+    if CACHE_FREE:
+        module.DISABLE_PERCEPTION_CACHE = True
     return module
 
 
 def preflight():
+    assert not (RUN/'cache-contamination-hold').exists(), (
+        'This canary is contaminated; preserve it and validate a new cache-free protocol before recollection')
     h = helpers()
     binding = h.preflight()
+    if CACHE_FREE:
+        gate = ROOT/'runs/psd-real-runtime-gate-no-perception-cache-20260916'
+        assert load(gate/'strict-runtime-audit.json')['passed']
+        config = load(gate/'effective-cache-config.json')
+        assert config['tool_cache_enabled'] is False and config['cacheable_tools'] == []
+        assert load(gate/'cache-identity-audit.json')['passed']
     for name in ('strict-runtime-audit.json', 'summary.json'):
         assert load(SERVICE/'tokenizer-gateway-validation-v1'/name)['passed']
     backend = load(SERVICE/'replica-2.json')
@@ -189,6 +201,8 @@ def execute():
     h, _ = preflight()
     binding = load(RUN/'binding.json')
     verify_binding(binding)
+    if CACHE_FREE:
+        assert os.environ.get('PERCEPTION_CACHE_ENABLED') == os.environ.get('TOOL_CACHE_ENABLED') == '0'
     sys.path[:0] = [str(CODE), str(CODE/'training')]
     from src.eval import run_cases
     from scripts.collect_psd_rollouts import main as collect
@@ -227,6 +241,8 @@ def launch():
     env, checks = h.environment()
     save(RUN/'credential-presence.json', checks)
     command = [sys.executable, '-u', str(Path(__file__).resolve()), '--execute']
+    if CACHE_FREE:
+        command += ['--cache-free']
     with (RUN/'run.log').open('xb') as log:
         child = subprocess.Popen(command, cwd=CODE, env=env, stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -240,11 +256,16 @@ def launch():
 
 
 def main():
+    global RUN, CACHE_FREE
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     for flag in ('prepare', 'launch', 'execute'):
         mode.add_argument('--'+flag, action='store_true')
+    parser.add_argument('--cache-free', action='store_true')
     args = parser.parse_args()
+    if args.cache_free:
+        CACHE_FREE = True
+        RUN = ROOT/'runs/psd-slate-canary4x8-no-perception-cache-20260916'
     if args.execute:
         try:
             execute()

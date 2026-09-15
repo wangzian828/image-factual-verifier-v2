@@ -1,5 +1,12 @@
 import pytest
-from scripts.server.submit_sft2056_judge import join_cases, check_intent
+from scripts.server.submit_sft2056_judge import join_cases, check_intent, ensure_submission_allowed
+
+
+def test_quality_hold_blocks_even_when_quota_cooldown_has_elapsed(tmp_path):
+    ensure_submission_allowed(tmp_path)
+    (tmp_path/'data-quality-hold.json').write_text('{}')
+    with pytest.raises(ValueError, match='data-quality hold'):
+        ensure_submission_allowed(tmp_path)
 
 
 def test_subset_join_does_not_zip_shift_after_missing_case():

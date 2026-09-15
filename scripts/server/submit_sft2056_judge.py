@@ -24,6 +24,11 @@ NAME = 'qwen35-9b-sft2056-agent'
 JOURNAL = WORK/'submitted_shards.jsonl'
 
 
+def ensure_submission_allowed(work):
+    if (work/'data-quality-hold.json').exists():
+        raise ValueError('Source data-quality hold: no new paid submissions until explicitly resolved')
+
+
 def save_durable(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix('.partial')
@@ -118,6 +123,7 @@ def plan(f, joined, prompt):
 
 
 def submit(f, record, shards, deferred, schema):
+    ensure_submission_allowed(WORK)
     from google import genai
     from google.genai import types
     from dotenv import dotenv_values
@@ -130,6 +136,7 @@ def submit(f, record, shards, deferred, schema):
     accepted = {row['shard_index']: row for row in prior}
     assert len(accepted) == len(prior)
     for offset, shard in enumerate(shards, 1):
+        ensure_submission_allowed(WORK)
         ids = [item['case_id'] for item in shard]
         fingerprint = hashlib.sha256(json.dumps({'record': record, 'shard': shard}, sort_keys=True).encode()).hexdigest()
         if offset in accepted:
@@ -185,6 +192,8 @@ def main():
     parser.add_argument('--stage', choices=['plan', 'submit', 'collect'], required=True)
     parser.add_argument('--launch', action='store_true')
     args = parser.parse_args()
+    if args.stage == 'submit':
+        ensure_submission_allowed(WORK)
     os.umask(0o077)
     if args.launch:
         receipt = WORK/(args.stage+'-process.json')
