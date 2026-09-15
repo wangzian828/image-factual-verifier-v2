@@ -8,6 +8,7 @@
 - 二分类任务：判断图像及其事件陈述为 `real` 或 `fake`
 - 证据质量评估模型：Gemini 3.7 Flash，`thinking_level=low`
 - Agent 结果的最终公平审核口径：v3 全材料输入，`max_output_tokens=32768`
+- 2026-09-15 晚，epoch3 Qwen 与 Gemini3.1Pro 的待审部分因 Batch 限流转普通 API；已受理的 149 条 Batch 保留，不重复。模型和审核内容不变，完成后统一合并，详见 [切换记录](judge-realtime-switch-20260915.md)。
 
 ## 主要结果
 

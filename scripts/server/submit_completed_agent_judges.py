@@ -309,6 +309,8 @@ def main():
     import fcntl
     lock = (WORK / (args.stage + '.lock')).open('a')
     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    if args.stage == 'submit' and (WORK / 'transport-switch.json').exists():
+        raise RuntimeError('Batch submission frozen: unsubmitted cases now belong to realtime judge')
     record = prepare()
     if args.stage == 'collect':
         from dotenv import dotenv_values
