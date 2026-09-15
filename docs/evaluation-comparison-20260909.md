@@ -4,7 +4,7 @@
 
 - 评测集：筛选后的统一测试集
 - 样本数：1,527
-- 评测日期：2026-09-09 至 2026-09-15
+- 评测日期：2026-09-09 至 2026-09-16
 - 二分类任务：判断图像及其事件陈述为 `real` 或 `fake`
 - 证据质量评估模型：Gemini 3.7 Flash，`thinking_level=low`
 - Agent 结果的最终公平审核口径：v3 全材料输入，`max_output_tokens=32768`
@@ -23,9 +23,10 @@
 | 3 | Qwen3.5-9B Agent（SFT-2578，从 Base 独立训练） | 79.87 | 79.58 | 80.17 | 34.77 |
 | 4 | Qwen3.5-9B Agent（SFT-4872，另一次 Base 初始化训练，epoch 3） | 79.08 | 78.25 | 79.91 | 待 judge |
 | 5 | **GPT-5.5 Agent** | 78.13 | 83.82 | 72.43 | **50.49** |
-| 6 | Qwen3.5-397B-A17B Agent | 71.72 | 50.66 | 92.78 | 43.29 |
-| 7 | Qwen3.5-9B Agent（训练前） | 65.67 | 70.03 | 61.30 | 3.14 |
-| 8 | Gemini 3.1 Pro Agent | 62.42 | 29.71 | 95.13 | 待 judge |
+| 6 | Qwen3.5-9B Agent（SFT-4872，同一次三 epoch 训练，epoch 2；2 条失败） | 77.80 | 75.33 | 80.26 | 待 judge |
+| 7 | Qwen3.5-397B-A17B Agent | 71.72 | 50.66 | 92.78 | 43.29 |
+| 8 | Qwen3.5-9B Agent（训练前） | 65.67 | 70.03 | 61.30 | 3.14 |
+| 9 | Gemini 3.1 Pro Agent | 62.42 | 29.71 | 95.13 | 待 judge |
 
 ### Direct QA 模型
 
@@ -54,6 +55,7 @@
 | 训练前基线 | Qwen3.5-9B Base | 0 | 65.67 | — | 3.14 | — |
 | SFT-2578 | Qwen3.5-9B Base | 2,578 条 | 79.87 | +14.20 | 34.77 | +31.63 |
 | SFT-4872 | Qwen3.5-9B Base | 4,872 条 | 79.95 | +14.28 | 36.54 | +33.40 |
+| SFT-4872，另一次三 epoch 训练的 epoch 2（2 条失败） | Qwen3.5-9B Base | 4,872 条 | 77.80 | +12.13 | 待 judge | — |
 | SFT-4872，另一次三 epoch 训练的 epoch 3 | Qwen3.5-9B Base | 4,872 条 | 79.08 | +13.41 | 待 judge | — |
 
 > 注：表中结果均为百分比（%），↑ 表示数值越高越好。严格证据充分率（Strict Evidence Sufficiency Rate, SESR）是指回答被独立评估模型判定为证据充分、来源可靠，且推理能够支撑最终结论的样本比例。
@@ -91,9 +93,11 @@ Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_le
 
 以上六组 Batch judge 均已完成，不应重复提交。2026-09-15，Gemini 3.1 Pro Agent 的工程失败补跑已完成，冻结 1,526 个唯一成功 case：real 正确 112/377、fake 正确 1094/1150，BAcc 62.42%。旧磁盘满失败及所有补跑仍保留，合并索引位于服务器 `gemini31pro-agent-formal1527-20260913/resume-control-20260914/merged-success-results.jsonl`。
 
-另一次从 Base 初始化的三 epoch SFT 已完成 epoch-3/step-3084 全量 Agent 推理，冻结 1,526 个成功 case：real 正确 295/377、fake 正确 919/1150，BAcc 79.08%。与前述 SFT-4872 单 epoch 实验不是续跑关系；同一三 epoch 训练中的 epoch-2/step-2056 于 2026-09-15 19:26 通过 4 条真实 Agent smoke 后启动 40 并发全量评测，尚无完整质量指标，不能混用两者权重或结果。epoch-3 最终选择索引为 `qwen35-sft3084-3epoch-agent-formal1527-20260915/selected-traces.json`。
+另一次从 Base 初始化的三 epoch SFT 已完成 epoch-3/step-3084 全量 Agent 推理，冻结 1,526 个成功 case：real 正确 295/377、fake 正确 919/1150，BAcc 79.08%。与前述 SFT-4872 单 epoch 实验不是续跑关系。epoch-3 最终选择索引为 `qwen35-sft3084-3epoch-agent-formal1527-20260915/selected-traces.json`。
 
-这两组新结果的同口径 v3 Batch judge 正在分批提交，尚无最终 SESR。共享 File API 大图配额及 Batch 429 会延迟部分提交；不能把提交进程启动当成全量已提交。详情见 [epoch-2 加速调查与 judge 记录](sft-epoch2-serving-ab-20260915.md)。
+同一次三 epoch 训练的 epoch-2/step-2056 已于 2026-09-16 用完原协议下的有限补跑：1,524 个唯一成功 case、2 条失败、另 1 条缺图不可运行，不称为 1,526 条全部成功。real 正确 284/377、fake 正确 923/1150，对应 BAcc 77.80%、Real Recall 75.33%、Fake Recall 80.26%；失败和缺图均未从分母剔除。两条最终失败均为 `finish_reason=length` 且无可用答案，此前还发生过读超时。冻结索引及汇总位于服务器 `/volume/ybo/wza/evaluation/qwen35-sft2056-epoch2-agent-budgeted1524-20260916`，索引 SHA256 为 `104bd65fec08f13966156beea4e012363d2ec02ddc67ec7a8f50066efcc210b0`。该轮 `thinking_token_budget=8192` 只是请求值，原 vLLM 未执行此预算；后续隔离 PSD 的预算修复不追溯改变本轮协议或结果。1,524 条有效轨迹的统一 v3 审核候选已准备在 `/volume/ybo/wza/evaluation/sft2056-v3-judge-20260916`，包含 20,275 个原始 observation，gzip 约 21.89 MiB、SHA256 `0bffefb2f4f9b6d9ecb8fcce4d8f0b64eb2cfd3cdb3fa2864cec032dae1a577c`；尚未提交，SESR 仍待审核，不能复用 epoch3 结果。
+
+epoch3 与 Gemini 3.1 Pro 两组同口径 v3 judge 继续采用已固定的混合传输：已受理 28 个 Batch 共 149 条，其余 2,903 条分配给普通 API，不能重新启动旧 Batch 提交阶段。2026-09-16 03:47 巡检普通调用仍在推进，Batch 28 个仍为 RUNNING，尚无最终 SESR；有限重试用尽和大图配额受阻的案例保留，未算作完成。epoch2 不属于这两组既有任务。详情见 [普通 judge 切换记录](judge-realtime-switch-20260915.md)。
 
 ## 初步结论
 

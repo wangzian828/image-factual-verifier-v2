@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
 from contextlib import asynccontextmanager
 
 import httpx
@@ -51,6 +52,10 @@ def normalize_payload(payload):
         raise ValueError('Enabled thinking requires an explicit budget in isolated PSD')
     if xargs:
         parsed['vllm_xargs'] = xargs
+    # A reproduced hybrid-state prefix-cache failure emitted token 0 from the
+    # first decoding step even with the budget disabled. Unique cache domains
+    # bypass that unsafe reuse without changing images, messages, or sampling.
+    parsed['cache_salt'] = 'ifv-psd-isolated-' + uuid.uuid4().hex
     return json.dumps(parsed, ensure_ascii=False, separators=(',', ':')).encode()
 
 
@@ -59,6 +64,7 @@ async def lifespan(app):
     gateway, client, stage = deadline_config()
     app.state.deadline = gateway
     app.state.timeout_contract = {'gateway': gateway, 'model_client': client, 'stage': stage}
+    app.state.post_dispatches = 0
     app.state.http = httpx.AsyncClient(
         transport=httpx.AsyncHTTPTransport(retries=0),
         timeout=httpx.Timeout(gateway, connect=10.0), trust_env=False)
@@ -78,6 +84,8 @@ async def disconnected(request):
 
 async def request_once(request, path, payload):
     index, replica = base._acquire_replica()
+    if request.method == 'POST':
+        request.app.state.post_dispatches = getattr(request.app.state, 'post_dispatches', 0) + 1
     upstream = asyncio.create_task(request.app.state.http.request(
         request.method, f'{replica}/{path.lstrip("/")}',
         content=payload, headers=base._forward_headers(request)))
@@ -113,7 +121,9 @@ async def health(request: Request):
     result = await base.health(request)
     result.update(protocol='isolated-psd-thinking-budget-v1',
                   timeout_contract=request.app.state.timeout_contract,
-                  post_retries=0, gpu_boundary_validated=False)
+                  post_retries=0, gpu_boundary_validated=False,
+                  prefix_cache_policy='unique_salt_per_request',
+                  post_dispatches=request.app.state.post_dispatches)
     return result
 
 

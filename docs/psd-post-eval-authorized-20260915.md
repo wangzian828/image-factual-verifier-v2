@@ -25,8 +25,8 @@
 - 输入：`/volume/ybo/wza/runs/psd-pilot400-preparation-20260915-v1`。
 - 隔离实现：`/volume/ybo/wza/training-artifacts/psd-adjustments-20260915/code`。
 - 原准备状态 `inputs_ready_not_started`，400 个唯一图，real/fake 各 200，保留 32 条训练 canary，图片硬链接复用。原 `prepared.json` 及所有哈希绑定文件保持不变，本文件单独记录新授权。
-- 当前 GPU 任务：`/volume/ybo/wza/runs/eval/qwen35-sft2056-epoch2-agent-formal1527-20260915`，核查时仍是 attempt0、并发40、四卡真实利用率100%。尚未到 GPU 交接条件。
+- 原 GPU 评测：`/volume/ybo/wza/runs/eval/qwen35-sft2056-epoch2-agent-formal1527-20260915`。2026-09-16 有限补跑已结束（1524 成功、2 失败、1 缺图），结果冻结后已排空并交接到 `/volume/ybo/wza/inference/psd-sft2056-safety-20260916`；不是全量全部成功，也不继续无限补跑。
 - 主实现细节与差异：[PSD 调整记录](psd-adjustments-and-agent-latency-20260915.md)。
 - 2026-09-16 新增隔离预算插件与取消安全网关候选，位于 `/volume/ybo/wza/training-artifacts/psd-serving-safety-20260916`；详见 [PSD serving 安全候选](psd-serving-safety-20260916.md)。没有修改现有评测或原 PSD 准备快照。GPU 交接后优先核验该候选及显式超时配置，仍须真实生成/取消/多图验收，不可因为 CPU 测试通过就放行采样。
 
-原小时监控将 PSD 从“暂停/未授权”更新为“当前推理收尾后，有门槛的已授权执行”。使用 OpenAI Docs 核对既有定时任务更新方式，不新增重复监控。运行中未出现新异常时保持安静；真实验收失败、无法继续、完整完成或需要新增权限时报告。所有服务器写入只在 `/volume/ybo/wza` 内，Git 仅从本地提交。
+原小时监控将 PSD 从“暂停/未授权”更新为“当前推理收尾后，有门槛的已授权执行”，并已同步新服务/守护路径和原评测终态。使用 OpenAI Docs 核对既有定时任务更新方式，不新增重复监控。运行中未出现新异常时保持安静；真实验收失败、无法继续、完整完成或需要新增权限时报告。所有服务器写入只在 `/volume/ybo/wza` 内，Git 仅从本地提交。

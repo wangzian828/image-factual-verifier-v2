@@ -108,7 +108,17 @@ def test_gateway_rejects_silent_budget_bypass(gateway, changes):
 
 def test_non_thinking_request_untouched(gateway):
     value = {'max_tokens': 128, 'chat_template_kwargs': {'enable_thinking': False}}
-    assert json.loads(gateway.normalize_payload(json.dumps(value).encode())) == value
+    result = json.loads(gateway.normalize_payload(json.dumps(value).encode()))
+    assert result.pop('cache_salt').startswith('ifv-psd-isolated-')
+    assert result == value
+
+
+def test_requests_cannot_share_a_corrupted_prefix_cache(gateway):
+    value = {'max_tokens': 32768, 'thinking_token_budget': 8192, 'cache_salt': 'shared'}
+    one = json.loads(gateway.normalize_payload(json.dumps(value).encode()))
+    two = json.loads(gateway.normalize_payload(json.dumps(value).encode()))
+    assert one.pop('cache_salt') != two.pop('cache_salt')
+    assert one == two
 
 
 def test_timeout_order_and_no_client_retry(gateway, monkeypatch):

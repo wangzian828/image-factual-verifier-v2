@@ -1,6 +1,6 @@
 # PSD 隔离推理安全候选（2026-09-16）
 
-此候选只服务后续 PSD 验收，未部署进正在运行的 epoch2 测试集推理。主 Agent、旧网关、旧请求协议、旧模型权重均未修改。当前正式评测里的 `thinking_token_budget=8192` 仍只是请求值，不能追溯称为已生效。
+此候选只服务后续 PSD 验收，没有部署进 epoch2 测试集推理。该评测及其有限重试现已结束，保留 1,524 成功、2 失败及 1 缺图。主 Agent、旧网关源码、旧请求协议、旧模型权重均未修改。已结束的正式评测里 `thinking_token_budget=8192` 仍只是请求值，不能追溯称为已生效。
 
 ## 预算控制
 
@@ -44,3 +44,37 @@ vLLM 0.18.1 支持通过自定义 logits processor 和 `vllm_xargs` 接入逐请
 3. 真正模型生成测到思考边界，确认 `</think>` 后仍能生成 native tool 或最终答案；包含多图、并发、提前结束、正式 8192 上限。保存实际 token 和请求参数，不能只观察字符数。
 4. 实测 HTTP 超时/客户端取消后 GPU 请求能释放、没有第二次 POST；同步核对 Agent、客户端、网关三个时间参数。
 5. 以上通过再走新多位置 PSD 真实 canary、top20、GPU 更新和 native 保存/恢复 gate，全部通过才采 400×8。CPU 验证完成不自动放行 3200 条采样。
+
+## 03:47 后的实际交接与 GPU 验证
+
+`freeze_sft2056_budgeted.py` 逐条核验 1,524 个选中 trace 的 SHA、case、有效终态和冻结 gold，结果单独保存在 `/volume/ybo/wza/evaluation/qwen35-sft2056-epoch2-agent-budgeted1524-20260916`，不复制原始图片或轨迹。`transition_to_psd_probe.py` 先只读预检 PID/进程组、导出 SHA、终态及空闲锁，再停止明确归属的旧 guard、核实队列排空、正常停止旧服务。旧权重及所有结果均保留。
+
+新服务目录为 `/volume/ybo/wza/inference/psd-sft2056-safety-20260916`，四卡 TP1、vLLM 0.18.1、BF16、128K、多图 32、同一 epoch2 权重，网关端口 19001，后端 19002–19005。新的 guard 进程记录是该目录根下的 `guard.json`，采样在 `idle-guard`，不能继续读取旧服务目录来判断当前守护是否运行。
+
+初版真实生成探针保存在 `generation-probes-v1`：机械强制边界的 1/3/8192 均在对应位置生成 `</think>`，8192 探针共生成 8205 token 并正常 STOP；正常提前结束探针在 50 token 关闭思考并 STOP。3-token 极端机械探针在关闭后重复答案至 length，因此只说明边界和后续 token 放行，不当作正常 Agent 行为通过。
+
+同轮双图 native-tool 探针失败：19003 副本输出 32767 个 token 0（`!`），加上强制的一个结束思考 token，最终 length。该失败没有被藏掉，也没有用于放行采样。
+
+### 缓存复用缺陷及隔离修复
+
+对照证据保存在 `multimodal-diagnosis-v1` 和 `multimodal-diagnosis-v2`：另一副本同输入有/无预算均能调用工具；在故障的同一 19003 副本上，关闭预算仍输出全 token 0，开启预算也失败。只加入独立 `cache_salt`、保持图像/文本/工具/采样不变后，正常输出 412 token、两图描述和一次 native tool call。因而已定位到前缀缓存复用这条路径；尚未用中间 tensor 证明具体 NaN 来源，不能把上游别版本 issue 当成已确认的内核根因。
+
+[上游相关报告](https://github.com/vllm-project/vllm/issues/55766)描述了 hybrid GDN/align 前缀命中后从首 token 输出 `!`、隔离 cache salt 后恢复的类似症状，但其版本为 0.28.0、模型及硬件不同。这里只将其作为诊断线索，没有升级 vLLM 或套用未经验证的内核补丁。
+
+隔离网关 v2 为每次请求生成不同 `cache_salt`，绕开跨请求前缀复用，不改变消息、图像字节、工具、思考预算、采样或权重；代价是当前 PSD 请求不能享受之前的跨请求 APC 加速，不能继续引用热缓存 511–515 token/s 作为这一配置吞吐。新网关源码镜像在 `/volume/ybo/wza/training-artifacts/psd-serving-safety-20260916/gateway-v2`，旧候选保持原样。只重启了已排空的隔离网关，四个模型后端未重载；`gateway-before-cache-isolation.json` 保存原进程记录。
+
+新增缓存隔离和派发计数测试。首次回归因 pytest 将旧回归文件所在目录前置，实际导入了旧网关，出现两项失败；改用 `--import-mode=importlib` 并断言真实模块路径后，**36 passed，13.48 秒**，确认验证的是 gateway-v2，不是通过修改断言忽略缓存检查。
+
+### 真实取消链路
+
+初版/第二版测试的 `request_success_total{finished_reason="abort"}` 断言均未通过，虽然 GPU 队列和网关在途数已经归零；延长 30 秒仍不递增，不能把这个计数当作客户端断连的可靠完成信号。原始失败分别保存在 `cancellation-probes-v1/v2`。
+
+v3 使用网关在每次实际派发前递增的 POST 计数，并同时观察 GPU 进入 running、取消后 running/waiting 清零、网关 reservation 释放以及随后持续无排队。正式 19001 网关的客户端断连测试、独立 19011 网关的 5 秒 deadline 测试均通过：各派发一次 POST、GPU 释放；后者返回 504。正式网关的 1200/1230/1260 超时没有缩短。证据在 `cancellation-probes-v3`；临时测试网关已正常停止，guard 已恢复。该结果不等于 PSD 真实 canary 或 GPU 训练已通过。
+
+缓存隔离后的混合 64/8192 预算双图四副本复验由 `probe_psd_cache_isolation.py` 执行，产物 `cache-isolation-probes-v2`。64 只用于边界诊断，正式仍为 8192；真实 PSD 多位置 canary、top20、更新及 native 保存恢复仍须后续逐项验证，不得从这些合成协议探针推断全流程成功。
+
+这 8 个请求已全部返回，覆盖四副本，均不再出现 token 0 连发，耗时 2.4–5.0 秒；这是同一双图协议探针的耗时，不是完整 Agent 的加速倍数。但严格参数检查仅 2/8 通过：4 个正式 8192 预算探针中 2 个通过，4 个强制 64 预算探针均未通过。失败包括缺少 native call、数组字符串损坏，以及数组末尾多逗号。
+
+已直接对比原始生成 token 与解析结果：例如 `descriptions` 原文为 `["...", "..."],`，不是合法 JSON；vLLM 0.18.1 的 qwen3_coder parser 在 JSON 失败后执行 `ast.literal_eval`，得到包含一个数组的 tuple，序列化成嵌套数组，违反期望的 `array[string]`。该结果是模型原始格式错误与 parser fallback 的共同表现，不能靠偷偷展开数组来宣称成功。也不能因为这种人工新工具探针失败，就断言原有 Agent 的所有工具都失效。
+
+当前结论：缓存隔离的重复字符回归、真实取消链路通过；完整多图 native-tool/PSD gate 仍未通过。下一步用冻结真实 Agent 工具 schema 和训练 canary 检查原始 token、解析、错误留存与多轮 roundtrip，再决定是否需要仅作用于隔离 serving 的精确 parser 修复；不修改原 Agent schema/提示或放宽目标准入。400×8 尚未开始。
