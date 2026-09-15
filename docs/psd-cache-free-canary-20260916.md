@@ -40,3 +40,5 @@
 GIF SHA `72aed244f121f6599e0a863674d77e2d72ec800109bf5935a9c37f5d7c2f0078`，17,581,496 bytes，360×640、268帧。现在不能再仅归因File API配额：[Google官方支持的图像格式](https://ai.google.dev/gemini-api/docs/image-understanding#supported-image-formats)列PNG/JPEG/WEBP/HEIC/HEIF，未列GIF。只读File API抽查100个文件合计122,840,039 bytes，不能据此推断全部配额或已恢复；未上传、删除远端文件或新调这两条judge。不能偷偷只取第一帧、丢帧、改成视频或修改已有request hash；多帧输入口径需明确后再处理。24条耗尽重试也不无限拉起。
 
 epoch2仍因跨图片缓存data-quality-hold禁止任何新judge提交。以上judge只对应原冻结输出，其缓存缺陷限定仍保留。小时监控继续，后续优先读取8并发诊断和Batch状态，不能因为仅修复了分组校验器就放行PSD。
+
+07:57尾项更新：旧Batch已回收2个任务、26个仍RUNNING，无collector错误。在确认普通runner退出和锁释放后执行只读API的结果合并，每源新增5条有效审核，总有效epoch3为1,445、Pro为1,442，仍不完整。两源尚缺165条：139条仍由旧Batch负责、24条重试耗尽、2条多帧GIF。朋友任务133成功16失败、287未尝试，仍keep-going；四卡守护近期均完成约13秒计算脉冲。39项定向回归、编译和diff检查通过，代码及主体记录已从本地提交推送`453f9c3`。
