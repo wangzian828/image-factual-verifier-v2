@@ -53,6 +53,8 @@ async def run(args):
     checkpoint = args.snapshot / "checkpoint-manifest.json"
     identity = {str(path): sha256_file(path) for path in (preparation_path, split, gold_path, policy,
         benchmark, serving, checkpoint, run_dir / "run_manifest.json", run_dir / "run_results.jsonl")}
+    if (root / "source-reviews/summary.json").exists():
+        identity["source_review_summary_sha256"] = sha256_file(root / "source-reviews/summary.json")
     progress_path = root / "acceptance-progress.json"
     if progress_path.exists():
         previous = load_json(progress_path)
@@ -77,8 +79,19 @@ async def run(args):
     def save():
         write_json(root / "acceptance-progress.json", summary)
     save()
+    from scripts.review_psd_sources import review_sources
+    source_reviews = root / "source-reviews"
+    source_summary = await review_sources(run_dir=run_dir, benchmark=benchmark,
+        train_cases=split, private_gold=gold_path, output=source_reviews,
+        model=args.judge_model, concurrency=2)
+    if source_summary["pending"]:
+        summary.update(status="paused_source_review_requires_resolution", source_review_pending=source_summary["pending"])
+        save()
+        return summary
+    identity["source_review_summary_sha256"] = sha256_file(source_reviews / "summary.json")
     completed_stage(root, "postprocess", identity, lambda: (
-        postprocess(run_dir=run_dir, train_cases=split, private_gold=gold_path, source_access_policy=policy),
+        postprocess(run_dir=run_dir, train_cases=split, private_gold=gold_path, source_access_policy=policy,
+            source_reviews=source_reviews),
         [run_dir / "post_rollout_rewards.jsonl", run_dir / "rollout_groups.jsonl", run_dir / "psd-postprocess.json"]))
     gate = root / "rollout-gate.json"
     gate_result = verify_psd_round_rollout(round_index=1, run_dir=run_dir, train_cases_path=split,

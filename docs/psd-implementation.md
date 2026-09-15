@@ -4,6 +4,10 @@
 > [psd-completion-checklist.md](psd-completion-checklist.md). Implemented does
 > not mean a real PSD round or a capability improvement has been demonstrated.
 
+> 2026-09-15: source preservation requires a bound semantic task review, not
+> just a correct label/strict trace. Correct-label semantic and bound structural
+> failures can enter repair. See [current preparation](psd-experiment-preparation-20260915.md).
+
 ## Automatic repair verification and recovery (2026-09-12)
 
 `psd_gemini_judge.py` now implements the training-only semantic localizer and
@@ -96,8 +100,9 @@ The implementation was compared against upstream commit
 
 PSD keeps three roles separate:
 
-1. The **hint constructor** may be a stronger model and may inspect
-   training-only privileged information. It proposes the intervention but its
+1. The **hint constructor** may be a stronger model. Current public-only search
+   supplies the trace, images and checker feedback, not the answer key; private
+   references stay in the task verifier and hint audit. It proposes the intervention but its
    token distribution is never a self-distillation target.
 2. The **frozen self-teacher** is the round-start student policy. It receives
    the original student-reached prefix plus the verified hint and supplies the

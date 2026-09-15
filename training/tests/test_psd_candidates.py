@@ -21,7 +21,20 @@ def _write_jsonl(path: Path, values: list[dict[str, object]]) -> None:
     )
 
 
-def _rollout_gate(run_dir: Path, train_cases: Path) -> Path:
+def _rollout_gate(run_dir: Path, train_cases: Path, *, add_review=True) -> Path:
+    if add_review:
+        from test_psd_source_review import artifact
+        from ifv_training.psd_repair_storage import save_bound
+        rewards = [json.loads(line) for line in (run_dir / "post_rollout_rewards.jsonl").read_text().splitlines()]
+        for reward in rewards:
+            if reward.get("classification_correct") and reward.get("strict_trace_audit_pass"):
+                trace_path = run_dir / "traces" / (reward["episode_id"] + ".json")
+                review_path = run_dir / "test-source-reviews" / (reward["episode_id"] + ".json")
+                save_bound(review_path, identity={"synthetic_control": True},
+                    payload=artifact(json.loads(trace_path.read_text())))
+                reward.update(source_task_status="pass", source_task_review={
+                    "path": str(review_path), "sha256": sha256_file(review_path)})
+        _write_jsonl(run_dir / "post_rollout_rewards.jsonl", rewards)
     manifest = run_dir / "run_manifest.json"
     if not manifest.is_file():
         _write_json(manifest, {"run_id": run_dir.name, "git_commit": "abc"})
@@ -101,7 +114,7 @@ def _trace(
     return {
         "image_id": f"episode-{case_id}",
         "state": {
-            "runtime_case": {"case_id": case_id},
+            "runtime_case": {"case_id": case_id, "image_sha256": "a" * 64},
             "all_steps": [react, judgment],
         },
     }
@@ -207,6 +220,7 @@ def test_build_psd_candidate_package_separates_public_queues(
         "engineering_requeue": 1,
         "rejections": 2,
         "token_capture_requeue": 0,
+        "source_review_pending": 0,
     }
     repairs = [
         json.loads(line)

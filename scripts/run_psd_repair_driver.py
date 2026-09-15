@@ -305,7 +305,11 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     private_context = load_json(args.private_context) if args.private_context else gold
     from ifv_training.psd_gemini_judge import require_training_case
     require_training_case(trace, args.train_cases)
-    source_verification = verify_source_rollout_failure(trace, gold=gold)
+    from ifv_training.psd_source_review import source_review_reference
+    source_task_review = source_review_reference(seed.get("source", {}))
+    source_audit = audit if audit.get("source_trace_canonical_sha256") else None
+    source_verification = verify_source_rollout_failure(trace, gold=gold,
+        source_task_review=source_task_review, source_audit=source_audit)
     if source_verification["passed"] is not True:
         raise RuntimeError(
             "source no-hint rollout was not explicitly verified as failed: "
@@ -370,6 +374,8 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
         write_json(output_dir / "manifest.json", {
         "schema_version": "ifv-psd-repair-driver-result-v1", "status": "generating",
         "trace": str(args.trace), "runtime_archive": str(runtime_root),
+        "source_task_review": seed.get("source", {}).get("source_task_review"),
+        "source_audit": {"path": str(args.audit.resolve()), "sha256": sha256_file(args.audit)} if source_audit else None,
         "train_cases_sha256": sha256_file(args.train_cases),
         "source_access_policy": {"path": str(args.source_access_policy.resolve()),
                                  "sha256": sha256_file(args.source_access_policy)},
@@ -573,6 +579,8 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
                 repair_step_id=site.step_id,
                 hint_sha256=expected_hint_sha,
                 source_access_policy=source_policy,
+                source_task_review=source_task_review,
+                source_audit=source_audit,
             )
             teacher_capture = _capture_from_steps(
                 continuation.teacher_steps,
@@ -673,6 +681,8 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
             "source_access_policy": {"path": str(args.source_access_policy.resolve()),
                                      "sha256": sha256_file(args.source_access_policy)},
             "trace": str(args.trace),
+            "source_task_review": seed.get("source", {}).get("source_task_review"),
+            "source_audit": {"path": str(args.audit.resolve()), "sha256": sha256_file(args.audit)} if source_audit else None,
             "runtime_archive": str(runtime_root),
             "policy_serving_attestation": {
                 "profile": str(args.policy_serving_profile),

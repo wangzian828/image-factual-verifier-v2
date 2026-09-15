@@ -82,6 +82,7 @@ def _source_fields(candidate: Mapping[str, Any]) -> dict[str, Any]:
             candidate.get("runtime_commit") or source.get("runtime_commit")
         ),
         "source_trace_sha256": _source_trace_sha256(candidate),
+        **({"source_task_review": source["source_task_review"]} if source.get("source_task_review") else {}),
         "psd_round_index": candidate.get("psd_round_index")
         or source.get("psd_round_index"),
         "psd_rollout_gate_sha256": _text(

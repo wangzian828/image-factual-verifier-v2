@@ -1,6 +1,6 @@
 project: ifv-psd-preparation
 updated: '2026-09-15'
-phase: source-admission-audit
+phase: preparation-complete-awaiting-main-experiments
 scope: preparation-only
 input_pool: /volume/ybo/wza/data/psd-candidate-pool-4000-20260914-v3
 sample_count: 4000
@@ -14,12 +14,25 @@ completed:
   - verified-4000-input-pool
   - inspected-source-candidate-and-causal-verifier-gates
   - extended-existing-hourly-monitor-with-preparation-continuity
-next:
-  - implement-bound-source-semantic-admission-and-correct-label-repair
-  - validate-regressions-and-bounded-real-training-traces
-  - freeze-launch-configuration-and-resource-gates
+  - bound-source-semantic-admission-and-correct-label-causal-repair
+  - bound-structural-source-failure-proof
+  - local-regression-and-server-219-test-cpu-regression
+  - live-source-review-8-of-8-and-offline-routing-audit
+  - real-cache-reuse-16-files-zero-provider-calls
+  - frozen-32-training-canary-and-400-test-observation-ids
+  - launch-plan-and-runbook-with-storage-and-checkpoint-gates
+next: []
+server_plan: /volume/ybo/wza/runs/psd-experiment-preparation-4000-20260915-v1
+server_review: /volume/ybo/wza/runs/psd-source-review-canary-20260915-r1
+isolated_code: /volume/ybo/wza/training-artifacts/psd-preparation-20260915/code-final
+live_source_review: {selected: 8, pass: 2, fail: 6, unresolved: 0, api_errors: 0}
+source_review_accuracy_measured: false
+tests: {local_dependency_free: 208, server_full_cpu: 219, real_source_reviews: 8}
 deferred:
   - new-sft-snapshot-export-load-and-fresh-policy-canary
+  - source-judge-materiality-and-evidence-boundary-calibration
+  - worst-length-gpu-throughput-and-full-state-save-reload
+  - actual-user-quota-or-explicit-budget
   - production-psd-round-and-new-policy-evaluation
 constraints:
   - server-root-only-/volume/ybo/wza

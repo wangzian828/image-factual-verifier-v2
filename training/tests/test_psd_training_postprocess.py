@@ -35,6 +35,26 @@ def test_private_training_derivation_does_not_export_other_datasets(tmp_path, mo
     assert result["correct"] == result["strict_pass"] == 1
     assert not (args["run_dir"] / "trajectory_sft.jsonl").exists()
     assert not (args["run_dir"] / "perception_trajectories.jsonl").exists()
+    assert result["verified_full_task"] == 0
+    assert result["source_review_pending"] == 1
+
+
+@pytest.mark.parametrize("status,verified,pending", [("pass", 1, 0), ("fail", 0, 0), ("unresolved", 0, 1)])
+def test_semantic_source_admission_propagates_into_rewards(tmp_path, monkeypatch, status, verified, pending):
+    from test_psd_source_review import artifact, source_trace
+    from scripts.review_psd_sources import review_path
+    from ifv_training.psd_repair_storage import save_bound
+    args = setup(tmp_path, monkeypatch)
+    trace = source_trace()
+    write(args["run_dir"] / "traces/a.json", trace)
+    reviews = tmp_path / "reviews"
+    save_bound(review_path(reviews, "a"), identity={"test": True}, payload=artifact(trace, status=status))
+    result = module.postprocess(**args, source_reviews=reviews)
+    assert result["verified_full_task"] == verified
+    assert result["source_review_pending"] == pending
+    reward = module.load_jsonl(args["run_dir"] / "post_rollout_rewards.jsonl")[0]
+    assert reward["source_task_status"] == status
+    assert reward["source_task_review"]["sha256"]
 
 
 @pytest.mark.parametrize("failure", ["heldout", "unknown_gold", "unfinished", "policy_changed", "duplicate"])

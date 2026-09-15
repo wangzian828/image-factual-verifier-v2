@@ -84,6 +84,14 @@ def finalize_psd_repair_run(
         source_policy = SourceAccessPolicy.load(policy_path)
     source_trace = load_json(source_trace_path)
     gold = load_json(gold_path)
+    from .psd_source_review import source_review_reference
+    source_task_review = source_review_reference(manifest)
+    source_audit = None
+    if manifest.get("source_audit"):
+        ref = manifest["source_audit"]
+        if sha256_file(Path(ref["path"])) != ref["sha256"]:
+            raise ValueError("source audit changed before finalization")
+        source_audit = load_json(Path(ref["path"]))
     source_sha256 = sha256_file(source_trace_path)
     attempts = load_jsonl(attempts_path)
     if not attempts:
@@ -167,6 +175,8 @@ def finalize_psd_repair_run(
                 [int(item) for item in completion_ids]
             ),
             source_access_policy=source_policy,
+            source_task_review=source_task_review,
+            source_audit=source_audit,
         )
         attempt.update(
             {

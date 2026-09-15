@@ -18,7 +18,7 @@ from src.trajectory.exporter import trajectory_policy_step_ids
 from src.trajectory.scoring import score_process_trace
 
 
-def postprocess(*, run_dir, train_cases, private_gold, source_access_policy):
+def postprocess(*, run_dir, train_cases, private_gold, source_access_policy, source_reviews=None):
     run_dir = run_dir.resolve()
     manifest = load_json(run_dir / "run_manifest.json")
     if manifest.get("status") != "completed" or manifest.get("benchmark", {}).get("training_prohibited"):
@@ -66,9 +66,12 @@ def postprocess(*, run_dir, train_cases, private_gold, source_access_policy):
             failures = [asdict(item) for item in audit.failures(strict_scheduler=True)]
             report = {"case_id": case, "episode_id": episode, "source_trace_sha256": sha256_file(path),
                       "passed": not failures, "failures": failures}
+            from ifv_training.psd_repair import _sha
+            report["source_trace_canonical_sha256"] = _sha(trace)
             audit_path = run_dir / "psd-audits" / (path.stem + ".json")
             write_json(audit_path, report)
             audits.append({"episode_id": episode, "path": str(audit_path), "sha256": sha256_file(audit_path)})
+            reward["source_audit"] = {"path": str(audit_path.resolve()), "sha256": sha256_file(audit_path)}
             reward.update(classification_correct=bool(metrics.get("result_correct")),
                 fatal_engineering_error=bool(metrics.get("engineering_error")),
                 strict_trace_audit_pass=not failures,
@@ -77,6 +80,20 @@ def postprocess(*, run_dir, train_cases, private_gold, source_access_policy):
                 process_components=score.get("components", {}))
             scores.append({**metrics, "episode_id": episode, "prompt_group_id": group})
             member["trace_sha256"] = sha256_file(path)
+            # A label/format pass is not evidence-grounded task success.
+            reward["source_task_status"] = "pending"
+            if source_reviews is not None:
+                from scripts.review_psd_sources import review_path
+                from ifv_training.psd_source_review import source_review_reference, validate_source_review
+                review_file = review_path(source_reviews, episode)
+                if review_file.exists():
+                    reward["source_task_review"] = {"path": str(review_file.resolve()),
+                        "sha256": sha256_file(review_file)}
+                    artifact = source_review_reference(reward)
+                    reward["source_task_status"] = validate_source_review(artifact, trace=trace, gold=gold[case])
+            reward["verified_full_task"] = bool(reward["classification_correct"]
+                and reward["strict_trace_audit_pass"] and not reward["fatal_engineering_error"]
+                and reward["source_task_status"] == "pass")
         rewards.append(reward)
     write_jsonl(run_dir / "rollout_groups.jsonl", groups)
     write_jsonl(run_dir / "post_rollout_rewards.jsonl", rewards)
@@ -85,6 +102,9 @@ def postprocess(*, run_dir, train_cases, private_gold, source_access_policy):
         "correct": sum(row["classification_correct"] for row in rewards),
         "strict_pass": sum(row["strict_trace_audit_pass"] for row in rewards),
         "engineering_errors": sum(row["fatal_engineering_error"] for row in rewards),
+        "verified_full_task": sum(row.get("verified_full_task") is True for row in rewards),
+        "source_review_pending": sum(row.get("source_task_status", "pending") in {"pending", "unresolved"}
+                                     for row in rewards if not row["fatal_engineering_error"]),
         "inputs": {"train_cases_sha256": sha256_file(train_cases), "private_gold_sha256": sha256_file(private_gold),
                    "source_access_policy_sha256": sha256_file(source_access_policy)}, "audits": audits}
     write_json(run_dir / "psd-postprocess.json", result)
@@ -96,4 +116,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("run-dir", "train-cases", "private-gold", "source-access-policy"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--source-reviews", type=Path)
     print(json.dumps(postprocess(**vars(parser.parse_args())), ensure_ascii=False, indent=2))

@@ -464,6 +464,8 @@ def verify_source_rollout_failure(
     *,
     gold: Mapping[str, Any],
     score_metadata: Mapping[str, Any] | None = None,
+    source_task_review: Mapping[str, Any] | None = None,
+    source_audit: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Prove that the original no-hint on-policy rollout actually failed."""
 
@@ -471,6 +473,8 @@ def verify_source_rollout_failure(
     reasons: list[str] = []
     result_correct: bool | None = None
     expected_verdict = ""
+    semantic_failure = False
+    structural_failure = False
     try:
         metrics, _score = score_process_trace(
             trace,
@@ -480,12 +484,25 @@ def verify_source_rollout_failure(
         raw_result = metrics.get("result_correct")
         result_correct = raw_result if isinstance(raw_result, bool) else None
         expected_verdict = _text(metrics.get("expected_verdict"))
-        if result_correct is not False:
+        if source_task_review is not None:
+            from .psd_source_review import validate_source_review
+            semantic_failure = validate_source_review(source_task_review, trace=trace, gold=gold) == "fail"
+        if source_audit is not None:
+            if (source_audit.get("source_trace_canonical_sha256") != _sha(trace)
+                    or type(source_audit.get("passed")) is not bool
+                    or not isinstance(source_audit.get("failures"), list)):
+                raise ValueError("source audit trace binding invalid")
+            structural_failure = source_audit["passed"] is False and bool(source_audit["failures"])
+            if source_audit["passed"] == bool(source_audit["failures"]):
+                raise ValueError("source audit result disagrees with failures")
+        if result_correct is not False and not semantic_failure and not structural_failure:
             reasons.append("source_rollout_not_explicitly_failed")
     except Exception as exc:
         reasons.append(f"source_verification_error:{type(exc).__name__}:{exc}")
     return {
-        "passed": result_correct is False and not reasons,
+        "passed": (result_correct is False or semantic_failure or structural_failure) and not reasons,
+        "semantic_failure": semantic_failure,
+        "structural_failure": structural_failure,
         "result_correct": result_correct,
         "recorded_verdict": _text(trace.get("verdict")),
         "expected_verdict": expected_verdict,
@@ -507,6 +524,8 @@ def verify_causal_episode(
     downstream_patch_count: int = 0,
     score_metadata: Mapping[str, Any] | None = None,
     source_access_policy: Any = None,
+    source_task_review: Mapping[str, Any] | None = None,
+    source_audit: Mapping[str, Any] | None = None,
 ) -> VerificationResult:
     """Verify one hinted frozen-policy continuation against its failed source.
 
@@ -521,6 +540,8 @@ def verify_causal_episode(
         source_trace,
         gold=gold,
         score_metadata=score_metadata,
+        source_task_review=source_task_review,
+        source_audit=source_audit,
     )
     local_result = validate_local_verification(
         local_verification,
@@ -630,6 +651,8 @@ def verify_continuation_pair(
     repair_step_id: str,
     hint_sha256: str,
     source_access_policy: Any = None,
+    source_task_review: Mapping[str, Any] | None = None,
+    source_audit: Mapping[str, Any] | None = None,
 ) -> tuple[VerificationResult, dict[str, Any]]:
     """Verify the hinted teacher; keep the unhinted student as diagnostics."""
 
@@ -651,7 +674,8 @@ def verify_continuation_pair(
         teacher_steps
     )
     if hinted_teacher_episode_trace is None:
-        source_result = verify_source_rollout_failure(base_trace, gold=gold)
+        source_result = verify_source_rollout_failure(base_trace, gold=gold,
+            source_task_review=source_task_review, source_audit=source_audit)
         local_result = validate_local_verification(
             local_verification,
             repair_step_id=repair_step_id,
@@ -684,6 +708,8 @@ def verify_continuation_pair(
             teacher_prompt_sha256=teacher_prompt_sha256,
             teacher_completion_sha256=teacher_completion_sha256,
             source_access_policy=source_access_policy,
+            source_task_review=source_task_review,
+            source_audit=source_audit,
         )
     student_diagnostic = None
     if unhinted_student_episode_trace is not None:

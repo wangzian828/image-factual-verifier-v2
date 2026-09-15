@@ -1,5 +1,10 @@
 # PSD completion and acceptance checklist
 
+> Preparation update (2026-09-15): [4,000-input PSD preparation](psd-experiment-preparation-20260915.md).
+> Source semantic admission is integrated and tested on 8 saved real training
+> traces. New-SFT GPU save/reload and production capability remain unclaimed;
+> historical acceptance below retains its original scope.
+
 This checklist supersedes any earlier claim that PSD was fully accepted.
 Implementation, synthetic tests, live-provider tests and a real training round
 are separate milestones. A component test is not an end-to-end acceptance.

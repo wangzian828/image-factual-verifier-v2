@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "training")]
-from ifv_training.io import load_json
+from ifv_training.io import load_json, sha256_file
 from ifv_training.psd_gemini_judge import (
     _atomic_json, judge_run, localize_failure, require_training_case,
 )
@@ -20,7 +20,11 @@ async def run(args):
     from ifv_training.psd_repair_verifier import verify_source_rollout_failure
     trace, gold = load_json(args.trace), load_json(args.gold)
     require_training_case(trace, args.train_cases)
-    if not verify_source_rollout_failure(trace, gold=gold)["passed"]:
+    from ifv_training.psd_source_review import source_review_reference
+    source_review = source_review_reference({"source_task_review": {
+        "path": str(args.source_review), "sha256": sha256_file(args.source_review)
+    }}) if getattr(args, "source_review", None) else None
+    if not verify_source_rollout_failure(trace, gold=gold, source_task_review=source_review)["passed"]:
         raise ValueError("PSD source is not a verified failed training rollout")
     async with GeminiInteractionsClient(timeout=240, max_retries=2) as client:
         if args.mode == "localize":
@@ -45,6 +49,7 @@ def main():
     parser.add_argument("--train-cases", type=Path, required=True)
     parser.add_argument("--model", default="gemini-3.1-pro-preview")
     parser.add_argument("--run-dir", type=Path)
+    parser.add_argument("--source-review", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.mode == "localize" and not args.output:

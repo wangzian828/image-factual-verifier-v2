@@ -218,9 +218,18 @@ async def prepare(args):
     identity = {"round_index": args.round_index,
         "files": {str(path.resolve()): sha256_file(path) for path in paths}}
     root.mkdir(parents=True, exist_ok=True)
+    from scripts.review_psd_sources import review_sources
+    source_reviews = root / "source-reviews"
+    review_summary = await review_sources(run_dir=run_dir, benchmark=args.benchmark,
+        train_cases=args.train_cases, private_gold=args.private_gold, output=source_reviews,
+        model=args.judge_model, concurrency=getattr(args, "source_review_concurrency", 4))
+    if review_summary["pending"]:
+        return {"status": "paused_source_review_requires_resolution", "training_started": False,
+                "source_reviews": str(source_reviews / "summary.json"), "pending": review_summary["pending"]}
+    identity["source_review_summary_sha256"] = sha256_file(source_reviews / "summary.json")
     completed_stage(root, "postprocess", identity, lambda: (
         postprocess(run_dir=run_dir, train_cases=args.train_cases, private_gold=args.private_gold,
-            source_access_policy=args.source_access_policy),
+            source_access_policy=args.source_access_policy, source_reviews=source_reviews),
         [run_dir / name for name in ("post_rollout_rewards.jsonl", "rollout_groups.jsonl", "psd-postprocess.json")]))
     gate = root / "rollout-gate.json"
     rollout = completed_stage(root, "rollout-gate", identity, lambda: (
@@ -324,6 +333,7 @@ def main():
     prepare_parser.add_argument("--previous-round-completion", type=Path)
     prepare_parser.add_argument("--attempts", type=int, default=6)
     prepare_parser.add_argument("--case-concurrency", type=int, default=1)
+    prepare_parser.add_argument("--source-review-concurrency", type=int, default=4)
     prepare_parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     prepare_parser.add_argument("--teacher-device", default="cpu")
     attest_parser = commands.add_parser("attest")

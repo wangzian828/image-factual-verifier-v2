@@ -497,6 +497,7 @@ def build_psd_candidate_package(
     preservation_candidates: list[dict[str, Any]] = []
     engineering_requeue: list[dict[str, Any]] = []
     token_capture_requeue: list[dict[str, Any]] = []
+    source_review_pending: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
     source = _source_metadata(
         run_manifest,
@@ -591,8 +592,26 @@ def build_psd_candidate_package(
             "source_trace_path": trace_path.relative_to(run_dir).as_posix(),
             "source_trace_sha256": trace_sha256,
             "source_runtime_store_path": _trace_runtime_store_path(trace),
+            **({"source_audit": reward["source_audit"]} if reward.get("source_audit") else {}),
         }
-        if classification_correct and strict_audit_pass:
+        from .psd_source_review import source_review_reference, validate_source_review
+        review_status = "pending"
+        try:
+            source_review = source_review_reference(reward)
+            if source_review is not None:
+                review_status = validate_source_review(source_review, trace=trace)
+                trace_source["source_task_review"] = reward["source_task_review"]
+                if reward.get("source_task_status") != review_status:
+                    raise ValueError("source task status differs from bound review")
+        except (OSError, ValueError, KeyError) as exc:
+            rejections.append(_rejection(row_index=row_index, reward=reward,
+                reason=f"source_review_rejected:{type(exc).__name__}"))
+            continue
+        if classification_correct and strict_audit_pass and review_status in {"pending", "unresolved"}:
+            source_review_pending.append({"case_id": case_id, "episode_id": episode_id,
+                "queue_reason": "source_semantic_review_required", "source": trace_source})
+            continue
+        if classification_correct and strict_audit_pass and review_status == "pass":
             incomplete_steps = [
                 step["step_id"]
                 for step in steps
@@ -641,6 +660,7 @@ def build_psd_candidate_package(
             repair_signal = (
                 "strict_trace_audit_failure"
                 if not strict_audit_pass
+                else "source_semantic_failure" if classification_correct and review_status == "fail"
                 else "terminal_outcome_mismatch"
             )
             repair_site = steps[repair_index]
@@ -720,6 +740,7 @@ def build_psd_candidate_package(
     )
     write_jsonl(output_dir / "engineering_requeue.jsonl", engineering_requeue)
     write_jsonl(output_dir / "token_capture_requeue.jsonl", token_capture_requeue)
+    write_jsonl(output_dir / "source_review_pending.jsonl", source_review_pending)
     write_jsonl(output_dir / "rejections.jsonl", rejections)
     manifest = {
         "schema_version": PSD_CANDIDATE_MANIFEST_SCHEMA_VERSION,
@@ -738,6 +759,7 @@ def build_psd_candidate_package(
             "preservation_candidates": len(preservation_candidates),
             "engineering_requeue": len(engineering_requeue),
             "token_capture_requeue": len(token_capture_requeue),
+            "source_review_pending": len(source_review_pending),
             "rejections": len(rejections),
         },
         "repair_signals": dict(
@@ -752,6 +774,7 @@ def build_psd_candidate_package(
             "preservation_candidates": "preservation_candidates.jsonl",
             "engineering_requeue": "engineering_requeue.jsonl",
             "token_capture_requeue": "token_capture_requeue.jsonl",
+            "source_review_pending": "source_review_pending.jsonl",
             "rejections": "rejections.jsonl",
         },
         "status": (
