@@ -23,7 +23,10 @@ def verify_collection(rows, *, case_ids, manifest, expected_rollouts):
         rollouts_per_case=expected_rollouts, base_sampling_seed=agent["base_sampling_seed"],
         policy_revision=manifest["git_commit"], model=agent["model"],
         episode_namespace=agent.get("episode_namespace"))
-    keys = ("case_id", "episode_id", "prompt_group_id", "rollout_index", "sampling_seed", "group_size")
+    # The native run_result_record serializes slot identity but not group_size.
+    # Group size remains bound by the manifest, hashed prompt_group_id, and the
+    # exact complete slot set below; do not rewrite historical result rows.
+    keys = ("case_id", "episode_id", "prompt_group_id", "rollout_index", "sampling_seed")
     expected_by_id = {r["episode_id"]: r for r in expected}
     if len(expected_by_id) != len(expected):
         raise ValueError("PSD generated episode ID collision")
@@ -34,11 +37,15 @@ def verify_collection(rows, *, case_ids, manifest, expected_rollouts):
             raise ValueError("PSD collection contains duplicate or unexpected episodes")
         if any(row.get(k) != expected_by_id[episode][k] for k in keys):
             raise ValueError("PSD collection slot seed/index/policy binding mismatch")
+        if "group_size" in row and row["group_size"] != expected_rollouts:
+            raise ValueError("PSD collection explicit group size mismatch")
         seen.add(episode)
     if seen != set(expected_by_id):
         raise ValueError("PSD collection is incomplete; missing sampling slots")
     return {"passed": True, "cases": len(case_ids), "episodes": len(rows),
-        "rollouts_per_case": expected_rollouts, "selection_by_success": False}
+        "rollouts_per_case": expected_rollouts, "selection_by_success": False,
+        "group_size_attestation": "manifest_and_hashed_group_and_complete_slot_set",
+        "rows_without_redundant_group_size": sum("group_size" not in row for row in rows)}
 
 
 def select_task_repair_sources(candidates, *, load_trace):
