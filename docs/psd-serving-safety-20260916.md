@@ -55,7 +55,7 @@ vLLM 0.18.1 支持通过自定义 logits processor 和 `vllm_xargs` 接入逐请
 
 同轮双图 native-tool 探针失败：19003 副本输出 32767 个 token 0（`!`），加上强制的一个结束思考 token，最终 length。该失败没有被藏掉，也没有用于放行采样。
 
-### 缓存复用缺陷及隔离修复
+### 短输入缓存复用异常及隔离尝试（未证明解决长输入）
 
 对照证据保存在 `multimodal-diagnosis-v1` 和 `multimodal-diagnosis-v2`：另一副本同输入有/无预算均能调用工具；在故障的同一 19003 副本上，关闭预算仍输出全 token 0，开启预算也失败。只加入独立 `cache_salt`、保持图像/文本/工具/采样不变后，正常输出 412 token、两图描述和一次 native tool call。因而已定位到前缀缓存复用这条路径；尚未用中间 tensor 证明具体 NaN 来源，不能把上游别版本 issue 当成已确认的内核根因。
 
@@ -77,4 +77,30 @@ v3 使用网关在每次实际派发前递增的 POST 计数，并同时观察 G
 
 已直接对比原始生成 token 与解析结果：例如 `descriptions` 原文为 `["...", "..."],`，不是合法 JSON；vLLM 0.18.1 的 qwen3_coder parser 在 JSON 失败后执行 `ast.literal_eval`，得到包含一个数组的 tuple，序列化成嵌套数组，违反期望的 `array[string]`。该结果是模型原始格式错误与 parser fallback 的共同表现，不能靠偷偷展开数组来宣称成功。也不能因为这种人工新工具探针失败，就断言原有 Agent 的所有工具都失效。
 
-当前结论：缓存隔离的重复字符回归、真实取消链路通过；完整多图 native-tool/PSD gate 仍未通过。下一步用冻结真实 Agent 工具 schema 和训练 canary 检查原始 token、解析、错误留存与多轮 roundtrip，再决定是否需要仅作用于隔离 serving 的精确 parser 修复；不修改原 Agent schema/提示或放宽目标准入。400×8 尚未开始。
+当时结论：这组短输入的缓存隔离回归和真实取消链路通过；完整多图 native-tool/PSD gate 仍未通过。后续长输入再次失败，见下方记录，不能把这一局部结果描述为缓存异常全部解决。400×8 尚未开始。
+
+## 04:44 真实 Agent 两案例诊断已启动
+
+入口 `scripts/server/run_psd_runtime_gate.py` 从已冻结 32 条训练 canary 的前两条取固定案例，不按结果挑样，使用未修改的真实 Agent 工具、prompt、图片及 24-action 原生预算，T=0.7、think8192、输出32768、并发2、每例1条、seed0。每例一条仅用于运行协议诊断，不进入 400×8 的源轨迹银行，也不以此代替原方法的八次采样。
+
+新运行目录 `/volume/ybo/wza/runs/psd-real-runtime-gate-20260916-v2`，入口在服务器代码根 `run_psd_runtime_gate_v2.py`，启动 PID 990475 只是线索，检查时须核验 `process.json` 和真实进程。运行前逐文件比较隔离快照 `src` 与冻结 Agent 的规范化文本一致，原始字节差异来自 CRLF；所有源文件 SHA、导出 SHA、选中 case、凭据存在性（不含值）均单独记录。未调用服务器 Git，也未加载私有 gold。
+
+发现一个配置陷阱并在启动器里规避：冻结 runtime 通过模型名称是否含 `qwen3.5` 选择专用采样参数，因此不能直接用不带该字符串的隔离后端 alias。Agent 保持公开策略名 `ifv-qwen3.5-9b-sft-2056`，网关按既有固定映射转到同一导出的 `ifv-psd-sft2056-safety`；不是更换权重。`effective-stage-config.json` 已确认两阶段实际配置都是 T0.7、top_p0.95、top_k20、presence_penalty1.5、think8192，模型/阶段超时仍1230/1260，重试0。原人工工具探针没有完整使用这组采样参数，也不因此修改或删除旧失败记录。
+
+第一次启动因同时指定 provider profile 与独立 `--model` 被参数校验拒绝，尚未进入 Agent。已保留其失败目录，v2 去掉冲突 CLI 项并由 profile 环境变量传入策略名，随后正常创建真实 run manifest，当前在执行。该启动不表示工具验收、PSD checker/repair、top20 或训练已通过；完成后必须审查 canonical trace 与真实外部 subcall。
+
+### 两条真实诊断的完成结果
+
+两条均已结束，但没有有效最终报告。第一条耗时40.35秒、4个工具调用，最后收到 `finish_reason=tool_calls` 却没有可用调用；第二条耗时417.19秒、12个工具调用，最后是 `finish_reason=length`、无可用答案。因此真实运行 gate 仍未通过，不能把它们作为成功 preservation 或把服务标记为完全验收。
+
+已逐项解析 canonical `state.all_steps`：16个已完成工具结果均为 `status=success`，涉及 scene perception、OCR、图搜、文本搜索、反搜、访问网页和视觉检查。实际子调用包括 OCR3次、图搜1次、文本查询7次、候选重排7次、上传/反搜/页面获取/提取各1次。不是“没注入外部凭据”的重现。
+
+原 API backend 对“不可用响应”只留错误摘要，没有把该响应体写入 context ledger，不能据此臆测原始 token 或擅自修正格式。在 `failed-request-diagnostic` 对第一条的 `req-000005` 做了一次独立的归档请求诊断，要求返回 token IDs；它不是重跑完整轨迹，不计入任何评测/训练结果。归档 JSON 字符串可能规范化，因此明确不声称 exact-token 重放。该请求的 SSH 输出连接中断，但服务器最终写出了 `response.json`：32768 个 token，其中 32767 个是 token 0（`!`），另一个为强制 `</think>`，最终 length、无工具。请求经过 unique-salt 网关，故此前短输入的缓存隔离不足以解决长上下文；未因 SSH 断开重复发送同一请求。
+
+## 05:07 单卡 cache-off 对照
+
+`probe_psd_no_apc_backend.py` 核实归属与空队列后，只重启 GPU2/19004，将 APC 关闭、mamba cache mode 从 align 改为 none，其余权重、BF16、128K、多图32、vLLM版本不变。其他三副本未重启。旧后端/guard 记录保存在 `no-apc-backend-probe-v1`，新后端 PID992562 为线索，以 `replica-2.json` 实查为准；当前隔离服务是混合配置，不能当作四卡同配置的正式服务。
+
+该次只诊断首 token：使用同一个归档上下文，关闭预算插件的逐请求开关、最大输出256，两副本都正常返回 native tool，未出现 token0：cache-off GPU2 139token/13.78秒，cache-on GPU1 229token/3.22秒。这不是完整 Agent 成功，也不能据此认定关缓存是唯一修复：重启/副本状态及请求预算均可能影响结果。未用不同输出长度比较性能。测试结束 guard 已恢复。
+
+下一组 `archived-context-budget-ab-v2` 在这两副本上各重复两次，保留真实8192预算、32768输出、Qwen采样参数及 unique salt，同时检查真实工具 schema。v1 因训练 Python 环境缺少 jsonschema 在发出任何生成请求前失败，guard 已自动恢复；v2 改用已经具备依赖的 vLLM Python 环境，无安装/升级，并在暂停 guard 前验证依赖。结果必须逐项读取，不以诊断启动代替通过；真实多位置PSD、top20、GPU更新及保存恢复仍未完成。

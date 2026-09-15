@@ -97,7 +97,9 @@ Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_le
 
 同一次三 epoch 训练的 epoch-2/step-2056 已于 2026-09-16 用完原协议下的有限补跑：1,524 个唯一成功 case、2 条失败、另 1 条缺图不可运行，不称为 1,526 条全部成功。real 正确 284/377、fake 正确 923/1150，对应 BAcc 77.80%、Real Recall 75.33%、Fake Recall 80.26%；失败和缺图均未从分母剔除。两条最终失败均为 `finish_reason=length` 且无可用答案，此前还发生过读超时。冻结索引及汇总位于服务器 `/volume/ybo/wza/evaluation/qwen35-sft2056-epoch2-agent-budgeted1524-20260916`，索引 SHA256 为 `104bd65fec08f13966156beea4e012363d2ec02ddc67ec7a8f50066efcc210b0`。该轮 `thinking_token_budget=8192` 只是请求值，原 vLLM 未执行此预算；后续隔离 PSD 的预算修复不追溯改变本轮协议或结果。1,524 条有效轨迹的统一 v3 审核候选已准备在 `/volume/ybo/wza/evaluation/sft2056-v3-judge-20260916`，包含 20,275 个原始 observation，gzip 约 21.89 MiB、SHA256 `0bffefb2f4f9b6d9ecb8fcce4d8f0b64eb2cfd3cdb3fa2864cec032dae1a577c`；尚未提交，SESR 仍待审核，不能复用 epoch3 结果。
 
-epoch3 与 Gemini 3.1 Pro 两组同口径 v3 judge 继续采用已固定的混合传输：已受理 28 个 Batch 共 149 条，其余 2,903 条分配给普通 API，不能重新启动旧 Batch 提交阶段。2026-09-16 03:47 巡检普通调用仍在推进，Batch 28 个仍为 RUNNING，尚无最终 SESR；有限重试用尽和大图配额受阻的案例保留，未算作完成。epoch2 不属于这两组既有任务。详情见 [普通 judge 切换记录](judge-realtime-switch-20260915.md)。
+epoch3 与 Gemini 3.1 Pro 两组同口径 v3 judge 继续采用已固定的混合传输：已受理 28 个 Batch 共 149 条，其余 2,903 条分配给普通 API，不能重新启动旧 Batch 提交阶段。2026-09-16 05:04 巡检普通调用已有1,241条有效结果（epoch3 622、Pro619），25条明确拒绝未记作成功；Batch 28个仍为RUNNING、0个已回收，尚无最终SESR。epoch2不属于这两组既有任务。详情见 [普通 judge 切换记录](judge-realtime-switch-20260915.md)。
+
+05:13，epoch2独立提交入口完成精确case-ID关联：1,523条可按原图内联分为282个Batch，另1条GIF编码后约23.5MB超过保守内联阈值，保留待File API配额处理，不缩图、不丢图。第一次实际Batch创建被HTTP429拒绝，受理0条，并非已提交成功。独立收据位于上述epoch2准备目录的`create-intents`和`submission-progress.json`，源码`scripts/server/submit_sft2056_judge.py`。只有明确429可在一小时后有限续交，每分片累计最多6次；超时/不确定创建先对账，不重复付费；不会恢复旧epoch3/Pro Batch提交器。对应11项ID关联及防重放测试通过。[Gemini Batch内联限制](https://ai.google.dev/gemini-api/docs/batch-api)
 
 ## 初步结论
 
