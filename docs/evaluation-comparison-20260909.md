@@ -87,7 +87,7 @@ Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_le
 
 以上六组 Batch judge 均已完成，不应重复提交。2026-09-15，Gemini 3.1 Pro Agent 的工程失败补跑已完成，冻结 1,526 个唯一成功 case：real 正确 112/377、fake 正确 1094/1150，BAcc 62.42%。旧磁盘满失败及所有补跑仍保留，合并索引位于服务器 `gemini31pro-agent-formal1527-20260913/resume-control-20260914/merged-success-results.jsonl`。
 
-另一次从 Base 初始化的三 epoch SFT 已完成 epoch-3/step-3084 全量 Agent 推理，冻结 1,526 个成功 case：real 正确 295/377、fake 正确 919/1150，BAcc 79.08%。与前述 SFT-4872 单 epoch 实验不是续跑关系；同一三 epoch 训练中的 epoch-2/step-2056 检查点尚未正式评测，不能混用其权重或结果。最终选择索引为 `qwen35-sft3084-3epoch-agent-formal1527-20260915/selected-traces.json`。
+另一次从 Base 初始化的三 epoch SFT 已完成 epoch-3/step-3084 全量 Agent 推理，冻结 1,526 个成功 case：real 正确 295/377、fake 正确 919/1150，BAcc 79.08%。与前述 SFT-4872 单 epoch 实验不是续跑关系；同一三 epoch 训练中的 epoch-2/step-2056 于 2026-09-15 19:26 通过 4 条真实 Agent smoke 后启动 40 并发全量评测，尚无完整质量指标，不能混用两者权重或结果。epoch-3 最终选择索引为 `qwen35-sft3084-3epoch-agent-formal1527-20260915/selected-traces.json`。
 
 这两组新结果的同口径 v3 Batch judge 正在分批提交，尚无最终 SESR。共享 File API 大图配额及 Batch 429 会延迟部分提交；不能把提交进程启动当成全量已提交。详情见 [epoch-2 加速调查与 judge 记录](sft-epoch2-serving-ab-20260915.md)。
 

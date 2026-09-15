@@ -137,6 +137,27 @@ Before future service/training transitions, stop this guard and its scoped
 The existing hourly app monitor was updated to epoch2 and the two pending judges,
 without creating a duplicate schedule or restarting completed epoch3 inference.
 
+### Smoke accepted; full inference running (19:26 China time)
+
+All four complete smoke trajectories passed the strict audit and were bound to
+the epoch2 export. All four replicas also passed the separate two-distinct-image
+diagnostic. Main archived requests retained output32768 / think8192 and enabled
+thinking. Observed: 83 native `tool_calls` finishes and four final `stop` finishes,
+no `length`/`abort`, maximum1403 output tokens per request, maximum3862 reasoning
+characters (not tokens), and up to25 image slots including repeated attachments.
+
+Successful real external subcalls included23 Serper text searches,21 Jina
+reranks,3 reverse searches,13 image searches,4 OCR calls,10 page fetches and10
+Gemini extracts. One Jina page-fetch error remains preserved; this is not a
+claim of zero external-tool failures. Acceptance is in `smoke-acceptance.json`.
+
+The pipeline advanced to `full_inference`, attempt0, concurrency40, with1522
+pending cases at start and four smoke successes preserved. This is an active
+full run, not1526 completed predictions; no new BAcc/SESR is available yet.
+Only failed/missing cases may be retried, using the existing frozen protocol.
+Local implementation and measured engine report were pushed in commit52051ea;
+this acceptance addendum is a subsequent local-only documentation update.
+
 ## Speculative decoding scope
 
 The epoch-2 export contains 760 tensor keys and no `mtp`/`nextn` keys. The original
