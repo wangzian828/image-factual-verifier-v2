@@ -91,6 +91,40 @@ def load_module(path, name):
     return module
 
 
+def select_unattempted(jobs, directory_for):
+    """Resume untouched cases without resetting receipts or replaying old failures."""
+    pending, skipped = [], Counter()
+    for name, case in jobs:
+        directory = directory_for(name, case)
+        if (directory / 'result.json').exists():
+            skipped['completed'] += 1
+            continue
+        attempts = sorted(p for p in directory.glob('attempt-*.json')
+                          if not p.name.endswith('.response.json'))
+        status_path = directory / 'status.json'
+        status = json.loads(status_path.read_text()) if status_path.exists() else {}
+        if list(directory.glob('attempt-*.response.json')):
+            raise ValueError('Recover archived response before unattempted-only resume')
+        if attempts:
+            if (any(json.loads(p.read_text()).get('state') != 'provider_rejected' for p in attempts)
+                    or status.get('state') != 'provider_rejected'):
+                raise ValueError('Reconcile nonterminal or ambiguous attempts before resume')
+            skipped['previously_rejected'] += 1
+        elif str(status.get('state', '')).startswith('deferred_'):
+            skipped['deferred'] += 1
+        elif status:
+            raise ValueError('Unexpected status without attempt receipts')
+        else:
+            pending.append((name, case))
+    return pending, dict(skipped)
+
+
+def final_phase(stage, held_for_errors):
+    if stage.startswith('held'):
+        return stage
+    return 'held_consecutive_errors' if held_for_errors else 'realtime_pass_finished'
+
+
 class Runner:
     def __init__(self, frozen, client, types, record, candidates, ownership, schema, prompt):
         self.f, self.client, self.types = frozen, client, types
@@ -287,6 +321,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stage', choices=['run', 'merge'], default='run')
     parser.add_argument('--workers', type=int, default=4)
+    parser.add_argument('--unattempted-only', action='store_true',
+                        help='After diagnosis, continue untouched cases; preserve all prior attempts')
     parser.add_argument('--frozen-script', type=Path, default=Path('/volume/ybo/wza/training-artifacts/submit_completed_agent_judges_20260915.py'))
     args = parser.parse_args()
     if not 1 <= args.workers <= 4:
@@ -328,7 +364,8 @@ def main():
         print(json.dumps(runner.merge()), flush=True)
         return 0
     f.save(runner.root / 'process.json', {'pid': os.getpid(), 'started_at': time.time(),
-                                        'workers': args.workers, 'script_sha256': f.digest(Path(__file__))})
+                                        'workers': args.workers, 'script_sha256': f.digest(Path(__file__)),
+                                        'unattempted_only': args.unattempted_only})
     jobs = []
     for index in range(max(len(v['realtime']) for v in sources.values())):
         for name, members in sources.items():
@@ -336,12 +373,22 @@ def main():
                 jobs.append((name, members['realtime'][index]))
     pilot_file = runner.root / 'pilot-acceptance.json'
     pilot = not pilot_file.exists()
+    if args.unattempted_only:
+        if pilot:
+            raise ValueError('Unattempted-only resume requires accepted pilot')
+        jobs, skipped = select_unattempted(jobs, runner.directory)
+        f.save(runner.root / ('resume-selection-' + str(time.time_ns()) + '.json'), {
+            'time': time.time(), 'mode': 'unattempted_only', 'workers': args.workers,
+            'selected_cases': jobs, 'skipped': skipped,
+            'journal_sha256': ownership['journal_sha256'],
+            'script_sha256': f.digest(Path(__file__))})
     queue = iter(jobs[:4] if pilot else jobs)
     pending = {}
     failures = 0
     stage = 'pilot' if pilot else 'realtime_running'
     completed_this_run = 0
     last_merge = 0
+    held_for_errors = False
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         exhausted = False
         while pending or not exhausted:
@@ -353,6 +400,7 @@ def main():
                     break
                 pending[executor.submit(runner.run_one, name, case)] = (name, case)
             if failures >= 3:
+                held_for_errors = True
                 exhausted = True
             done, _ = wait(pending, timeout=15, return_when=FIRST_COMPLETED)
             for future in done:
@@ -388,8 +436,7 @@ def main():
                     stage = 'held_pilot_failed'
                     break
     summaries = runner.merge()
-    f.save(runner.root / 'progress.json', {'phase': stage if stage.startswith('held') else
-        ('held_consecutive_errors' if failures >= 3 else 'realtime_pass_finished'),
+    f.save(runner.root / 'progress.json', {'phase': final_phase(stage, held_for_errors),
         'time': time.time(), 'in_flight': 0, 'sources': summaries})
     client.close()
     return 0

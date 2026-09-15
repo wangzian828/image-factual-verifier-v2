@@ -1,8 +1,11 @@
 import copy
 import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from scripts.server.run_realtime_agent_judges import audit_text, check_intents, partition, retry_delay, valid_output
+from scripts.server.run_realtime_agent_judges import (audit_text, check_intents, final_phase,
+                                                     partition, retry_delay, select_unattempted, valid_output)
 from src.eval.private_gold_judge_contract import PRIVATE_GOLD_JUDGE_RESPONSE_SCHEMA as SCHEMA
 
 
@@ -75,6 +78,51 @@ class RealtimeJudgeTests(unittest.TestCase):
             self.assertIsNone(retry_delay(6, code))
         self.assertIsNone(retry_delay(1, None))
         self.assertIsNone(retry_delay(1, 400))
+
+    def test_unattempted_resume_preserves_completed_rejected_and_deferred(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            for case in ['done', 'rejected', 'deferred', 'untouched']:
+                (root / case).mkdir()
+            (root / 'done/result.json').write_text('{}')
+            for attempt in range(1, 7):
+                (root / 'rejected' / f'attempt-{attempt:02d}.json').write_text(
+                    json.dumps({'state': 'provider_rejected', 'attempt': attempt, 'http_code': 503}))
+            (root / 'rejected/status.json').write_text('{"state":"provider_rejected"}')
+            (root / 'deferred/status.json').write_text('{"state":"deferred_file_quota"}')
+            before = {p: p.read_bytes() for p in root.rglob('*.json')}
+            selected, skipped = select_unattempted(
+                [('q', case) for case in ['done', 'rejected', 'deferred', 'untouched', 'new']],
+                lambda name, case: root / case)
+            self.assertEqual(selected, [('q', 'untouched'), ('q', 'new')])
+            self.assertEqual(skipped, {'completed': 1, 'previously_rejected': 1, 'deferred': 1})
+            self.assertEqual(before, {p: p.read_bytes() for p in root.rglob('*.json')})
+
+    def test_unattempted_resume_rejects_ambiguous_or_unrecovered_response(self):
+        for state in ['in_flight', 'ambiguous_transport', 'invalid_response', 'internal_error']:
+            with self.subTest(state=state), TemporaryDirectory() as temp:
+                root = Path(temp)
+                (root / 'attempt-01.json').write_text(json.dumps({'state': state}))
+                (root / 'status.json').write_text(json.dumps({'state': state}))
+                with self.assertRaises(ValueError):
+                    select_unattempted([('q', 'case')], lambda *_: root)
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'attempt-01.response.json').write_text('{}')
+            with self.assertRaises(ValueError):
+                select_unattempted([('q', 'case')], lambda *_: root)
+
+    def test_unattempted_resume_rejects_status_without_receipt(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'status.json').write_text('{"state":"provider_rejected"}')
+            with self.assertRaises(ValueError):
+                select_unattempted([('q', 'case')], lambda *_: root)
+
+    def test_circuit_breaker_remains_held_after_drain_success(self):
+        self.assertEqual(final_phase('realtime_running', True), 'held_consecutive_errors')
+        self.assertEqual(final_phase('realtime_running', False), 'realtime_pass_finished')
+        self.assertEqual(final_phase('held_pilot_failed', True), 'held_pilot_failed')
 
 
 if __name__ == '__main__':
