@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import socket
 import sys
 import time
 import urllib.request
@@ -22,6 +23,7 @@ EXPORT = ROOT/'exports/h20-sft-merged4872-epoch2-step2056-20260915/export.json'
 # The isolated gateway pins this public policy name to its verified backend alias.
 POLICY_NAME = 'ifv-qwen3.5-9b-sft-2056'
 BACKEND_ALIAS = 'ifv-psd-sft2056-safety'
+GATEWAY = 'http://127.0.0.1:19001'
 
 
 def digest(path):
@@ -43,7 +45,7 @@ def environment():
               'gemini_tools': present('GEMINI_API_KEY', 'GOOGLE_API_KEY'),
               'baidu_ocr': present('BAIDU_OCR_API_KEY') and present('BAIDU_OCR_SECRET_KEY')}
     assert all(checks.values()), 'External credentials incomplete; values never logged'
-    env.update(QWEN35_LOCAL_BASE_URL='http://127.0.0.1:19001/v1', QWEN35_LOCAL_MODEL=POLICY_NAME,
+    env.update(QWEN35_LOCAL_BASE_URL=GATEWAY+'/v1', QWEN35_LOCAL_MODEL=POLICY_NAME,
         QWEN_UNIFIED_REACT_MAX_OUTPUT_TOKENS='32768', QWEN_UNIFIED_REACT_THINKING_TOKEN_BUDGET='8192',
         QWEN_UNIFIED_JUDGMENT_MAX_OUTPUT_TOKENS='32768', QWEN_UNIFIED_JUDGMENT_THINKING_TOKEN_BUDGET='8192',
         AGENT_LLM_REQUEST_TIMEOUT_SECONDS='1230', AGENT_STAGE_REQUEST_TIMEOUT_SECONDS='1260',
@@ -55,10 +57,13 @@ def environment():
 def preflight():
     assert digest(EXPORT) == '55dfb77f56cb175573c5e966816c8a0a0c384385190ae5b62795963f681fbd28'
     assert json.loads((SERVICE/'cancellation-probes-v3/summary.json').read_text())['cancellation_gpu_gate_passed']
-    with urllib.request.urlopen('http://127.0.0.1:19001/health', timeout=5) as response:
+    with urllib.request.urlopen(GATEWAY+'/health', timeout=5) as response:
         health = json.load(response)
     assert health['prefix_cache_policy'] == 'unique_salt_per_request'
     assert health['timeout_contract'] == {'gateway': 1200, 'model_client': 1230, 'stage': 1260}
+    if GATEWAY.endswith(':19012'):
+        assert [row['url'] for row in health['replicas']] == ['http://127.0.0.1:19004']
+        assert health['replicas'][0]['healthy']
     for port in range(19002, 19006):
         with urllib.request.urlopen(f'http://127.0.0.1:{port}/v1/models', timeout=5) as response:
             model = json.load(response)['data'][0]
@@ -83,6 +88,7 @@ def preflight():
             'source_sha256': hashes, 'source_normalized_equal_to_frozen': True,
             'export_sha256': digest(EXPORT), 'prepared_sha256': digest(PREP/'prepared.json'),
             'policy_model_name': POLICY_NAME, 'pinned_backend_alias': BACKEND_ALIAS,
+            'gateway': GATEWAY,
             'temperature': 0.7, 'think_budget': 8192, 'output_budget': 32768,
             'concurrency': 2, 'rollouts_per_case': 1, 'base_sampling_seed': 0,
             'purpose': 'runtime protocol diagnostic only; not 400x8 source collection',
@@ -122,11 +128,52 @@ def execute():
                             'time': time.time(), 'psd_collection': False, 'gate_passed': False})
 
 
+def launch_no_apc_gateway():
+    backend = json.loads((SERVICE/'replica-2.json').read_text())
+    backend_args = [p.decode() for p in Path(f'/proc/{backend["pid"]}/cmdline').read_bytes().split(b'\0') if p]
+    assert backend_args == backend['command']
+    assert '--no-enable-prefix-caching' in backend_args
+    assert backend_args[backend_args.index('--mamba-cache-mode')+1] == 'none'
+    receipt = SERVICE/'gateway-no-apc.json'
+    assert not receipt.exists(), 'Inspect existing isolated gateway; do not duplicate it'
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 19012))
+    original = json.loads((SERVICE/'gateway.json').read_text())
+    args = [p.decode() for p in Path(f'/proc/{original["pid"]}/cmdline').read_bytes().split(b'\0') if p]
+    assert args == original['command']
+    env = dict(p.decode().split('=', 1) for p in Path(f'/proc/{original["pid"]}/environ').read_bytes().split(b'\0') if p)
+    env['QWEN_REPLICA_BACKENDS'] = 'http://127.0.0.1:19004'
+    args[args.index('--port')+1] = '19012'
+    with (SERVICE/'gateway-no-apc.log').open('xb') as log:
+        child = subprocess.Popen(args, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    save(receipt, {'pid': child.pid, 'command': args, 'started_at': time.time(),
+                   'backends': ['http://127.0.0.1:19004']})
+    for _ in range(30):
+        if child.poll() is not None:
+            raise RuntimeError('Dedicated gateway exited; inspect gateway-no-apc.log')
+        try:
+            with urllib.request.urlopen(GATEWAY+'/health', timeout=1) as response:
+                assert json.load(response)['status'] == 'ok'
+            return
+        except OSError:
+            time.sleep(1)
+    raise RuntimeError('Dedicated gateway readiness timeout')
+
+
 def main():
+    global RUN, GATEWAY
     parser = argparse.ArgumentParser()
     parser.add_argument('--launch', action='store_true')
     parser.add_argument('--execute', action='store_true')
+    parser.add_argument('--single-no-apc', action='store_true')
     args = parser.parse_args()
+    if args.single_no_apc:
+        RUN = ROOT/'runs/psd-real-runtime-gate-no-apc-20260916'
+        GATEWAY = 'http://127.0.0.1:19012'
+        if args.launch:
+            assert not RUN.exists()
+            launch_no_apc_gateway()
     if args.execute:
         try:
             execute()
@@ -144,9 +191,16 @@ def main():
     save(RUN/'binding.json', binding)
     save(RUN/'credential-presence.json', checks)
     with (RUN/'run.log').open('xb') as log:
-        child = subprocess.Popen([sys.executable, '-u', str(Path(__file__).resolve()), '--execute'],
+        command = [sys.executable, '-u', str(Path(__file__).resolve()), '--execute']
+        if args.single_no_apc:
+            command += ['--single-no-apc']
+        child = subprocess.Popen(command,
             cwd=CODE, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     save(RUN/'process.json', {'pid': child.pid, 'time': time.time(), 'script_sha256': digest(Path(__file__))})
+    state = json.loads((SERVICE/'state.json').read_text())
+    state.update(phase='real_runtime_gate_running', runtime_gate=str(RUN),
+                 runtime_gateway=GATEWAY, gpu_verified=False, source_collection_started=False)
+    save(SERVICE/'state.json', state)
     print('RUNTIME_GATE_LAUNCHED', child.pid, flush=True)
 
 

@@ -104,3 +104,7 @@ v3 使用网关在每次实际派发前递增的 POST 计数，并同时观察 G
 该次只诊断首 token：使用同一个归档上下文，关闭预算插件的逐请求开关、最大输出256，两副本都正常返回 native tool，未出现 token0：cache-off GPU2 139token/13.78秒，cache-on GPU1 229token/3.22秒。这不是完整 Agent 成功，也不能据此认定关缓存是唯一修复：重启/副本状态及请求预算均可能影响结果。未用不同输出长度比较性能。测试结束 guard 已恢复。
 
 下一组 `archived-context-budget-ab-v2` 在这两副本上各重复两次，保留真实8192预算、32768输出、Qwen采样参数及 unique salt，同时检查真实工具 schema。v1 因训练 Python 环境缺少 jsonschema 在发出任何生成请求前失败，guard 已自动恢复；v2 改用已经具备依赖的 vLLM Python 环境，无安装/升级，并在暂停 guard 前验证依赖。结果必须逐项读取，不以诊断启动代替通过；真实多位置PSD、top20、GPU更新及保存恢复仍未完成。
+
+05:20结果：cache-off GPU2两次均139token、在108关闭think、正常native tool且schema通过，耗时2.44/2.43秒；cache-on GPU1第一次32767个token0加endthink、length，耗时250.61秒，第二次251token但工具参数带空字段名、schema失败。两种失败均保留，不删除字段、改写参数或把快速返回算成成功。guard已恢复（995299仅作进程线索）。这支持优先测试cache-off配置，但仍不足以唯一确认底层内核根因，或证明所有完整轨迹都正常。
+
+完整Agent后续测试仍用同样两个固定训练canary和相同采样协议，只通过独立loopback网关19012定向到cache-off 19004副本。网关源码仍是gateway-v2，保留1200/1230/1260和禁止POST重放；原四副本网关19001未改。入口`run_psd_runtime_gate.py --single-no-apc --launch`（服务器版本`run_psd_runtime_gate_v3.py`），独立目录`/volume/ybo/wza/runs/psd-real-runtime-gate-no-apc-20260916`，所有旧失败与权重保留。是否通过必须检查新目录的完整轨迹和外部调用，不能将归档单请求的2/2通过直接算作完整Agent通过。
