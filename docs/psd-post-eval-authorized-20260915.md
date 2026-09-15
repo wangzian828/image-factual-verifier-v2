@@ -30,3 +30,5 @@
 - 2026-09-16 新增隔离预算插件与取消安全网关候选，位于 `/volume/ybo/wza/training-artifacts/psd-serving-safety-20260916`；详见 [PSD serving 安全候选](psd-serving-safety-20260916.md)。没有修改现有评测或原 PSD 准备快照。GPU 交接后优先核验该候选及显式超时配置，仍须真实生成/取消/多图验收，不可因为 CPU 测试通过就放行采样。
 
 原小时监控将 PSD 从“暂停/未授权”更新为“当前推理收尾后，有门槛的已授权执行”，并已同步新服务/守护路径和原评测终态。使用 OpenAI Docs 核对既有定时任务更新方式，不新增重复监控。运行中未出现新异常时保持安静；真实验收失败、无法继续、完整完成或需要新增权限时报告。所有服务器写入只在 `/volume/ybo/wza` 内，Git 仅从本地提交。
+
+2026-09-16 06:04：cache-off两个完整Agent协议案例和tokenizer转发对照已通过，当前小样推进至`/volume/ybo/wza/runs/psd-slate-canary4x8-20260916`，固定4图×8槽、T0.7、单卡并发8；它与400图正式源采集分开。源checker/多位置repair/top20/优化器及恢复测试仍须完成，不能据此将第4、5步跳过。具体现场记录见[serving安全记录](psd-serving-safety-20260916.md)。

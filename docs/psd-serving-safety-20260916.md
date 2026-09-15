@@ -108,3 +108,21 @@ v3 使用网关在每次实际派发前递增的 POST 计数，并同时观察 G
 05:20结果：cache-off GPU2两次均139token、在108关闭think、正常native tool且schema通过，耗时2.44/2.43秒；cache-on GPU1第一次32767个token0加endthink、length，耗时250.61秒，第二次251token但工具参数带空字段名、schema失败。两种失败均保留，不删除字段、改写参数或把快速返回算成成功。guard已恢复（995299仅作进程线索）。这支持优先测试cache-off配置，但仍不足以唯一确认底层内核根因，或证明所有完整轨迹都正常。
 
 完整Agent后续测试仍用同样两个固定训练canary和相同采样协议，只通过独立loopback网关19012定向到cache-off 19004副本。网关源码仍是gateway-v2，保留1200/1230/1260和禁止POST重放；原四副本网关19001未改。入口`run_psd_runtime_gate.py --single-no-apc --launch`（服务器版本`run_psd_runtime_gate_v3.py`），独立目录`/volume/ybo/wza/runs/psd-real-runtime-gate-no-apc-20260916`，所有旧失败与权重保留。是否通过必须检查新目录的完整轨迹和外部调用，不能将归档单请求的2/2通过直接算作完整Agent通过。
+
+## 05:57 完整 Agent 与 tokenizer 网关验证
+
+cache-off 的两个固定案例已经各自产出最终报告：259.27秒/24次工具调用/35次外部子调用，以及129.35秒/13次工具调用/19次外部子调用。`audit_real_trace` 使用实际 source-access policy 和 strict scheduler 审查，2/2通过、0 warning；未发现 length/abort、工具参数格式或最终证据 ID 契约问题。37个工具结果中36个成功、1个参考图下载外部不可用（Reddit图片HTTP403），该错误完整保留，不算作成功。运行协议成功不等于私有 gold checker 判定正确，也不等于完整PSD验证。
+
+接入现有PSD修复器前发现两个网关缺口：其一，精确token构建需要根路径`POST /tokenize`，原候选仅代理`/v1/*`；其二，现场模型校验要求公开策略名与实际权重绑定，而Agent又依赖含`qwen3.5`的模型名选择正确采样配置。因此gateway-v3新增tokenize单次转发，并在`/v1/models`真实后端模型卡之外添加公开alias；该卡保留实际root/context并标记`ifv_backend_model_id`，不伪造不同权重。tokenize仅映射模型名，不加salt、预算或采样参数，不修改消息、图像、工具及模板选项。HTTP响应的Content-Length重新计算。
+
+40项服务器回归全过（13.26秒，包含实际vLLM CPU/tokenizer测试，无跳过）。`promote_psd_tokenizer_gateway.py`核对19012请求排空及PID/命令后，只替换该loopback网关为gateway-v3；模型后端、原19001网关、Agent、权重和guard未重启。实际12,487-token多图/工具归档上下文经网关与直连19004的token列表/count逐项一致，现场模型卡也通过现有`validate_live_model`。归档文本可能规范化，这只验证相同重建请求的转发等价，不冒充精确live capture。全部证据在服务目录`tokenizer-gateway-validation-v1`；`psd_training_gate_passed=false`仍保留。
+
+## 06:04 有界分组 canary 已启动
+
+`scripts/server/run_psd_grouped_canary.py`从冻结32条训练canary中依序取前4张，未根据当前分组结果筛选，按每图8次/T0.7/seed0采集32个槽。保持128K、多图、think8192、输出32768、原生Agent动作预算和真实外部工具；单个已验证cache-off副本上并发8。这是新多位置PSD链路的小样验收，不是已放行400×8，更不是优化器训练。
+
+独立目录`/volume/ybo/wza/runs/psd-slate-canary4x8-20260916`，入口在serving安全代码目录同名脚本；启动PID999823仅作线索，实查`process.json`、`state.json`和`episodes/run_manifest.json`。公开输入只有case/image/path/hash，私有gold单独存放，未传给模型；图片通过硬链接复用。源epoch2/2056权重全部重新核验SHA，并与原export绑定；snapshot不复制权重，不把SFT谎称pretrained，也不把仅供推理的导出包说成包含优化器。原完整optimizer/scheduler/RNG checkpoint保持原处未动。
+
+服务器不运行Git。分组槽的policy identity使用明确的`source-sha256:`前缀与完整冻结源码哈希，写入旧runner的`git_commit`字段，绑定中明确`source_content_hash_not_git_commit`；不伪造一个Git提交。新增6项固定选择/训练集边界/内容identity测试通过，已编译检查。采完32槽后先验完整性，再进入源checker、六次上限的多位置修复、精确live-token/图像目标、top20、GPU更新及native保存恢复；这几个后续环节本节尚未宣称通过。不会自动重采已完成槽或直接开始正式五epoch训练。
+
+启动后已核验实际进程、manifest策略名和每图8槽/seed0；19004为8 running、0 waiting、0 preemption，真实工具记录持续产生。扩展跑原分组采样回归时，第一次本地因未设置training包的PYTHONPATH而未收集测试；补上项目根和training后，新6项及原8项共14项通过，未修改测试标准或安装依赖。

@@ -121,6 +121,72 @@ def test_requests_cannot_share_a_corrupted_prefix_cache(gateway):
     assert one == two
 
 
+def test_tokenizer_only_remaps_attested_alias(gateway, monkeypatch):
+    monkeypatch.setenv('PSD_PUBLIC_MODEL_ALIAS', 'public-qwen3.5-policy')
+    monkeypatch.setattr(gateway.base, 'PINNED_MODEL_ID', 'backend-policy')
+    body = {'model': 'public-qwen3.5-policy', 'messages': [{'role': 'user', 'content': [
+        {'type': 'text', 'text': '{ "original": " spacing " }'},
+        {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,EXACT'}}]}],
+        'tools': [{'type': 'function', 'function': {'name': 'verify'}}],
+        'chat_template_kwargs': {'enable_thinking': True}, 'add_special_tokens': False}
+    result = json.loads(gateway.normalize_tokenize_payload(json.dumps(body).encode()))
+    assert result == {**body, 'model': 'backend-policy'}
+    with pytest.raises(ValueError):
+        gateway.normalize_tokenize_payload(json.dumps({**body, 'model': 'other'}).encode())
+    with pytest.raises(ValueError):
+        gateway.normalize_tokenize_payload(json.dumps({'model': 'backend-policy'}).encode())
+
+
+def test_alias_card_keeps_actual_weight_root_and_backend_card(gateway, monkeypatch):
+    monkeypatch.setenv('PSD_PUBLIC_MODEL_ALIAS', 'public-qwen3.5-policy')
+    monkeypatch.setattr(gateway.base, 'PINNED_MODEL_ID', 'backend-policy')
+    backend = {'id': 'backend-policy', 'root': '/weights/frozen', 'max_model_len': 131072}
+    wire = json.dumps({'object': 'list', 'data': [backend]}).encode()
+    result = json.loads(gateway.model_alias_payload(wire))
+    assert result['data'][0] == backend
+    assert result['data'][1] == {**backend, 'id': 'public-qwen3.5-policy', 'ifv_backend_model_id': 'backend-policy'}
+    assert gateway.model_alias_payload(gateway.model_alias_payload(wire)) == gateway.model_alias_payload(wire)
+    with pytest.raises(ValueError):
+        gateway.model_alias_payload(json.dumps({'data': []}).encode())
+    with pytest.raises(ValueError):
+        gateway.model_alias_payload(json.dumps({'data': [backend, {'id': 'public-qwen3.5-policy', 'root': '/other'}]}).encode())
+
+
+def test_tokenize_route_forwards_once_without_generation_options(gateway, monkeypatch):
+    monkeypatch.setenv('PSD_PUBLIC_MODEL_ALIAS', 'public-qwen3.5-policy')
+    monkeypatch.setattr(gateway.base, 'PINNED_MODEL_ID', 'backend-policy')
+    seen = []
+    async def once(request, path, payload):
+        seen.append((path, json.loads(payload)))
+        return httpx.Response(200, json={'tokens': [1, 2, 3], 'count': 3})
+    monkeypatch.setattr(gateway, 'request_once', once)
+    body = {'model': 'public-qwen3.5-policy', 'prompt': 'exact  spacing'}
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway.app), base_url='http://test') as client:
+            reply = await client.post('/tokenize', json=body)
+            assert reply.status_code == 200 and reply.json()['tokens'] == [1, 2, 3]
+            invalid = await client.post('/tokenize', json={**body, 'model': 'other'})
+            assert invalid.status_code == 400
+    asyncio.run(run())
+    assert seen == [('tokenize', {**body, 'model': 'backend-policy'})]
+
+
+def test_model_alias_route_recomputes_response_length(gateway, monkeypatch):
+    monkeypatch.setenv('PSD_PUBLIC_MODEL_ALIAS', 'public-qwen3.5-policy')
+    monkeypatch.setattr(gateway.base, 'PINNED_MODEL_ID', 'backend-policy')
+    body = b'{"data":[{"id":"backend-policy","root":"/weights","max_model_len":131072}]}'
+    async def once(request, path, payload):
+        assert request.method == 'GET' and path == 'v1/models'
+        return httpx.Response(200, content=body, headers={'content-length': str(len(body))})
+    monkeypatch.setattr(gateway, 'request_once', once)
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway.app), base_url='http://test') as client:
+            reply = await client.get('/v1/models')
+            assert len(reply.json()['data']) == 2
+            assert int(reply.headers['content-length']) == len(reply.content) > len(body)
+    asyncio.run(run())
+
+
 def test_timeout_order_and_no_client_retry(gateway, monkeypatch):
     monkeypatch.setenv('PSD_GATEWAY_DEADLINE_SECONDS', '1200')
     monkeypatch.setenv('AGENT_LLM_REQUEST_TIMEOUT_SECONDS', '1230')

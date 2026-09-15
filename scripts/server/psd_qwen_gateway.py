@@ -17,6 +17,44 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from scripts.server import qwen_replica_gateway as base
 
 
+def public_alias():
+    return os.environ.get('PSD_PUBLIC_MODEL_ALIAS', '').strip()
+
+
+def normalize_tokenize_payload(payload):
+    parsed = json.loads(payload)
+    if not isinstance(parsed, dict):
+        raise ValueError('Expected tokenizer request object')
+    allowed = {value for value in [public_alias(), base.PINNED_MODEL_ID] if value}
+    if not allowed or parsed.get('model') not in allowed:
+        raise ValueError('Tokenizer model must identify this frozen policy')
+    if not ('messages' in parsed or 'prompt' in parsed):
+        raise ValueError('Tokenizer request needs messages or prompt')
+    parsed['model'] = base.PINNED_MODEL_ID
+    # Do not change text, tools, images, template kwargs, order or token flags.
+    # This is non-generative: no budget plugin, salt or sampling parameters.
+    return json.dumps(parsed, ensure_ascii=False, separators=(',', ':')).encode()
+
+
+def model_alias_payload(payload):
+    alias = public_alias()
+    if not alias or alias == base.PINNED_MODEL_ID:
+        return payload
+    parsed = json.loads(payload)
+    rows = parsed.get('data', [])
+    backend = [row for row in rows if row.get('id') == base.PINNED_MODEL_ID]
+    if len(backend) != 1 or not backend[0].get('root'):
+        raise ValueError('Cannot attest alias without a unique actual backend model')
+    existing = [row for row in rows if row.get('id') == alias]
+    if existing:
+        if len(existing) != 1 or existing[0].get('root') != backend[0]['root']:
+            raise ValueError('Public alias conflicts with backend weights')
+        return payload
+    parsed['data'] = rows + [{**backend[0], 'id': alias,
+                             'ifv_backend_model_id': base.PINNED_MODEL_ID}]
+    return json.dumps(parsed, ensure_ascii=False, separators=(',', ':')).encode()
+
+
 def deadline_config():
     gateway = float(os.environ.get('PSD_GATEWAY_DEADLINE_SECONDS', '1200'))
     client = float(os.environ.get('AGENT_LLM_REQUEST_TIMEOUT_SECONDS', '1230'))
@@ -123,8 +161,21 @@ async def health(request: Request):
                   timeout_contract=request.app.state.timeout_contract,
                   post_retries=0, gpu_boundary_validated=False,
                   prefix_cache_policy='unique_salt_per_request',
+                  public_model_alias=public_alias() or None,
+                  tokenizer_endpoint='/tokenize',
                   post_dispatches=request.app.state.post_dispatches)
     return result
+
+
+@app.post('/tokenize')
+async def tokenize(request: Request):
+    try:
+        payload = normalize_tokenize_payload(await request.body())
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    response = await request_once(request, 'tokenize', payload)
+    return Response(content=response.content, status_code=response.status_code,
+                    headers=base._response_headers(response))
 
 
 @app.api_route('/v1/{path:path}', methods=['POST', 'GET'])
@@ -138,5 +189,11 @@ async def proxy(request: Request, path: str):
         except (ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(400, str(exc)) from exc
     response = await request_once(request, 'v1/' + path, payload)
-    return Response(content=response.content, status_code=response.status_code,
+    body = response.content
+    if request.method == 'GET' and path == 'models' and response.status_code == 200:
+        try:
+            body = model_alias_payload(body)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise HTTPException(502, str(exc)) from exc
+    return Response(content=body, status_code=response.status_code,
                     headers=base._response_headers(response))
