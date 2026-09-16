@@ -52,3 +52,20 @@ GPU guard 继续真实计算脉冲，阶段交接排空身份明确服务，不�
 及时处理而非等写满。上限可能被已有在途请求越过少量，不宣称硬磁盘配额。
 
 本文件为执行计划；实际是否启动及完成量以服务器上述状态与进程为准。
+
+## 首次启动实况
+
+- 代码 `fe5522d` 已从本地推送；本地及服务器6项新增定向测试均通过。
+- 部署入口 `/volume/ybo/wza/training-artifacts/psd-production-collection-20260916-v24/run_psd_production_collection.py`。
+- 正式控制器已启动（初始PID1216870只是线索），40个持久化槽与40个真实runtime已存在，
+  四副本同时有在途请求；一次观测 GPU 利用率为100/89/100/100%。
+- 首条已结束轨迹 `main-02754--d5fdfd7f--r003` 是 unusable tool response，
+  `finish_reason=tool_calls,content_chars=0,reasoning_chars=1`。原始错误保留；
+  不能凭该文本认定 NaN，也不能为了得到正确答案自动重采。终端输出是
+  `deterministic_segment_boundary=true`，没有模型capture是预期的异常终止记录，
+  在线capture检查跳过该机械段而不跳过真正模型输出。
+- 后续接续要重点核对既有下游 `review_psd_sources.py`、`postprocess_psd_training.py`
+  和 `psd_round.py` 的 `status == completed` 门槛：正常模型错误会让 native manifest
+  写成 `completed_with_errors`。需要用完整槽位/基础设施ledger证据区分结束状态与
+  模型答对率，不能篡改 manifest 为 completed、丢失败槽或重采到全部无错误来过门槛。
+  这是待完善的下游接续点，尚未修改或声称已通过。
