@@ -69,6 +69,23 @@ def test_production_psd_profile_gate_accepts_upstream_recipe(tmp_path: Path) -> 
     assert gate["optimization"]["unique_targets_per_step"] == 32
 
 
+@pytest.mark.parametrize('steps,batch,lr,passed', [(2, 32, '4e-5', True),
+    (1, 32, '4e-5', False), (3, 32, '4e-5', False),
+    (2, 16, '4e-5', False), (2, 32, '1e-5', False)])
+def test_native_resume_probe_keeps_recipe_and_fixed_horizon(tmp_path, steps, batch, lr, passed):
+    output = tmp_path / 'gate.json'
+    command = _command(output)
+    command[command.index('--mode') + 1] = 'resume_probe'
+    position = command.index('--num-train-epochs')
+    command[position:position + 2] = ['--max-steps', str(steps)]
+    command[command.index('--gradient-accumulation-steps') + 1] = str(batch)
+    command[command.index('--learning-rate') + 1] = lr
+    result = subprocess.run(command, check=False, capture_output=True)
+    assert (result.returncode == 0) is passed
+    gate = json.loads(output.read_text())
+    assert gate['passed'] is passed and gate['mode'] == 'resume_probe'
+
+
 def test_production_psd_profile_gate_accepts_dp8_with_sparse_logits(tmp_path: Path) -> None:
     output = tmp_path / "gate.json"
     command = _command(output)

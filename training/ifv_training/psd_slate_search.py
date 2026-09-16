@@ -14,7 +14,40 @@ from .io import load_json, write_json, write_jsonl, sha256_file
 from .psd_repair import _sha
 from .psd_repair_storage import cached_continuation, load_bound, save_bound
 from .psd_slate import (capture_target, decision_map, propose_slate, review_slate,
-                        assemble_slate_attempts)
+                        assemble_slate_attempts, SlateProposalRejected)
+
+
+async def propose_with_budget(*, state, round_index, budget, persist, judge, kwargs):
+    """Reserve accepted proposals before generation; only invalid hints advance.
+
+    Transport/checker errors propagate instead of being labeled model failures.
+    Completed rejected proposal responses remain in the normal SHA-bound cache.
+    """
+    from .psd_repair import HintProposal
+    pending = state.get('pending_proposal')
+    if pending is not None:
+        if pending['round_index'] != round_index:
+            raise ValueError('PSD pending proposal belongs to another rerun')
+        return {int(k):HintProposal(**v) for k,v in pending['hints'].items()}, pending['provenance']
+    attempts = state.setdefault('proposals', [])
+    while len(attempts) < budget:
+        rejected = sum(r['round_index']==round_index and r['status']=='rejected' for r in attempts)
+        options = dict(kwargs)
+        if rejected:
+            options['proposal_feedback']={'rejected_proposals':rejected,'reason':'invalid_or_nonprocedural_slate'}
+        try:
+            hints, provenance = await propose_slate(judge, **options)
+        except SlateProposalRejected as error:
+            attempts.append({'round_index':round_index,'status':'rejected','provenance':error.provenance})
+            persist()
+            continue
+        attempts.append({'round_index':round_index,'status':'accepted' if hints else 'no_hint',
+                         'provenance':provenance})
+        state['pending_proposal']={'round_index':round_index,'hints':{str(k):vars(v) for k,v in hints.items()},
+                                   'provenance':provenance}
+        persist()
+        return hints, provenance
+    return None, None
 
 
 async def run_slate_search(*, args, adapter, site, candidate, trace, gold, private_context,
@@ -27,9 +60,12 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
         raise ValueError("published slate mode retains native action budget and needs no student resampling")
     if not 1 <= args.repair_attempts <= 6:
         raise ValueError("published slate mode allows at most six complete repair reruns")
+    proposal_budget = getattr(args, 'proposal_rounds', 12)
+    if type(proposal_budget) is not int or not args.repair_attempts <= proposal_budget <= 64:
+        raise ValueError('PSD proposal budget must cover the rerun budget and be at most 64')
     root = args.output_dir
     marker = root / "slate-state.json"
-    identity = {"version": "slate-search-v1", "inputs": _sha(config)}
+    identity = {"version": "slate-search-v2", "inputs": _sha(config), 'proposal_budget':proposal_budget}
     state = load_bound(marker, identity=identity) if marker.exists() else {
         "rounds": [], "elapsed_seconds": 0.0, "status": "repairing"}
     for row in state["rounds"]:
@@ -82,9 +118,14 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                 "decision_map": decision_map(observed)}
             # Never forward private review explanations, labels, gold or reasons
             # to the proposer. It sees observed material plus checker positions.
-            hints, provenance = await propose_slate(judge, public_context=public, previous=previous,
-                passing_positions=passing, failed_position=failed, model=args.hint_constructor_model,
-                cache_dir=root / "judge-cache", private_context=private_context, images=images)
+            hints, provenance = await propose_with_budget(state=state,round_index=number,
+                budget=proposal_budget,persist=lambda:save_bound(marker,identity=identity,payload=state),judge=judge,
+                kwargs=dict(public_context=public, previous=previous, passing_positions=passing,
+                    failed_position=failed, model=args.hint_constructor_model,cache_dir=root / "judge-cache",
+                    private_context=private_context,images=images))
+            if hints is None:
+                state['status']='proposal_budget_exhausted'
+                break
             if not hints:
                 state["status"] = "no_further_grounded_hint"
                 break
@@ -133,6 +174,7 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
             if review["decision"]["status"] == "unresolved":
                 state["status"] = "paused_unresolved_task_review"
                 break
+            state.pop('pending_proposal', None)
             save_bound(marker, identity=identity, payload=state)
         else:
             state["status"] = "attempt_budget_exhausted"
@@ -141,6 +183,8 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
     state["elapsed_seconds"] = elapsed_before + time.monotonic() - started
     result = {"schema_version": "ifv-psd-slate-search-v1", "status": state["status"],
         "complete_reruns": len(state["rounds"]), "candidate_count": len(records),
+        'proposal_count':len(state.get('proposals',[])),
+        'rejected_proposal_count':sum(r['status']=='rejected' for r in state.get('proposals',[])),
         "accepted_count": sum(r["accepted"] for r in records), "elapsed_seconds": state["elapsed_seconds"],
         "training_started": False, "per_target_weight": 1.0}
     write_json(root / "manifest.json", result)

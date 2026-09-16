@@ -18,7 +18,7 @@ def _bool(value: str) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("memory_probe", "production"), required=True)
+    parser.add_argument("--mode", choices=("memory_probe", "resume_probe", "production"), required=True)
     parser.add_argument("--world-size", type=int, required=True)
     parser.add_argument("--sequence-parallel-size", type=int, required=True)
     parser.add_argument("--padding-free", type=_bool, required=True)
@@ -116,6 +116,17 @@ def main() -> None:
             errors.append("production_learning_rate_must_be_4e-5")
         if unique_targets_per_step != 32:
             errors.append("production_unique_targets_per_step_must_be_32")
+    elif args.mode == "resume_probe":
+        # Run two steps, then resume checkpoint-1 into a separate output with
+        # the SAME two-step horizon. Never present this as a five-epoch run.
+        if args.max_steps != 2:
+            errors.append("resume_probe_max_steps_must_be_2")
+        if args.num_train_epochs is not None:
+            errors.append("resume_probe_epochs_must_be_unset")
+        if unique_targets_per_step != 32:
+            errors.append("resume_probe_unique_targets_per_step_must_be_32")
+        if not math.isclose(args.learning_rate, 4e-5, rel_tol=1e-12):
+            errors.append("resume_probe_learning_rate_must_be_4e-5")
     else:
         if args.max_steps != 1:
             errors.append("memory_probe_max_steps_must_be_1")

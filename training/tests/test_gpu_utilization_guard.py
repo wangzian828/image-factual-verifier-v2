@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+import sys
 
 
 MODULE_PATH = (
@@ -84,3 +86,21 @@ def test_idle_check_requires_both_counters_and_no_active_request() -> None:
         assert not guard.idle_vllm_port(8902)
         response.read.return_value = b'vllm:num_requests_running 0\n'
         assert not guard.idle_vllm_port(8902)
+
+
+def test_model_list_is_aligned_and_validated():
+    args=['guard','--state-file','state.json','--log-file','samples.jsonl',
+          '--gpu-ids','0,1','--vllm-ports','8902,8903','--models','old,new']
+    with patch.object(sys,'argv',args):
+        parsed=guard.parse_args()
+    assert parsed.models == ['old','new']
+
+
+def test_pulse_uses_actual_gpu_model():
+    args=SimpleNamespace(dry_run=False,gpu_ids=[0,1],vllm_ports=[8902,8903],
+        models=['old','new'],model='fallback',pulse_tokens=10,pulse_timeout_seconds=2)
+    with patch.object(guard,'healthy_vllm_ports',return_value={8902,8903}), \
+         patch.object(guard,'idle_vllm_port',return_value=True), \
+         patch.object(guard,'pulse_vllm',return_value={'status':'success'}) as pulse:
+        guard.protect(args=args,state={'gpus':{}},samples=[_sample(0,0),_sample(1,0)],risk_ids=[1])
+    assert pulse.call_args.kwargs['model']=='new'

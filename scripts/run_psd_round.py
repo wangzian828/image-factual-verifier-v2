@@ -264,7 +264,7 @@ async def prepare(args):
         attempts=args.attempts, case_concurrency=args.case_concurrency, judge_model=args.judge_model,
         task_source_selection=getattr(args, "task_source_selection", "all"),
         repair_mode=getattr(args, "repair_mode", "feedback"),
-        score_missing_topk=True, teacher_device=args.teacher_device))
+        score_missing_topk=not getattr(args, "defer_topk", False), teacher_device=args.teacher_device))
     if result["status"] != "search_complete_datums_materialized":
         return {"status": result["status"], "training_started": False, "search": str(root / "search/progress.json")}
     datums = root / "search/datums/datums.jsonl"
@@ -349,6 +349,8 @@ def main():
     prepare_parser.add_argument("--repair-mode", choices=("slate", "feedback"), default="slate")
     prepare_parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     prepare_parser.add_argument("--teacher-device", default="cpu")
+    prepare_parser.add_argument("--defer-topk", action="store_true",
+        help="Finish source review/repair/target assembly before a separate GPU teacher handoff; rerun without this flag to score the same frozen targets")
     attest_parser = commands.add_parser("attest")
     for name in ("rollout-gate", "datums", "snapshot", "output"):
         attest_parser.add_argument("--" + name, type=Path, required=True)

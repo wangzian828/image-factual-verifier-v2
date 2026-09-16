@@ -1,5 +1,42 @@
 # PSD 后续执行授权与交接
 
+## 2026-09-16 11:20 实际执行更新（原始32槽诊断不混入新bank）
+
+- 用户已明确选定 **400张×8**，授权完成全部目标构建和首轮五个优化epoch；原epoch3参数及全状态checkpoint保留，PSD独立LoRA输出。
+- 初始epoch3 canary发现启动环境缺少`IFV_CAPTURE_POLICY_TOKENS`/`IFV_POLICY_TOPK`，不能充当精确token训练bank；已按PID/完整命令核对后停止，原产物及`capture-preflight-hold.json`保留。没有用网关观测记录冒充原生policy capture。
+- 新采集位置：`/volume/ybo/wza/runs/psd-sft3084-captured-canary4x8-20260916`；代码快照`/volume/ybo/wza/training-artifacts/psd-epoch3-capture-20260916-v2/code`，collector receipt在新RUN/process.json。相同预选4图×8槽/T0.7，不按结果换样。
+- 新网关19018，`SERVICE/captured-v2/gateway.json`；GPU1仍为原三epoch模型。native capture已在真实轨迹中确认完整prompt/completion token IDs、逐token logprob及top20，启动前缺失开关现在直接拒绝运行。
+- 独立继续控制器：`/volume/ybo/wza/training-artifacts/psd-epoch3-repair-20260916-v4/continue_psd_epoch3_canary.py`；`state.json`/`process.json`/`run.log`为实况。只替换尚在等待的v3控制器，不停止collector。固定32槽结束后自动strict audit、源checker和最多6次完整多位置repair，输出新RUN/`psd-round-v4`。`--defer-topk`在GPU交接前停止HF打分，不盲目在满显存上加载teacher。
+- 修复提案真正执行12次预算；无效/不合规的完成提案有缓存和计数，给proposer的反馈仅通用原因，不含gold或私有checker解释。有效提案在生成前持久化，断点不重复提案/重采已完成修复。
+- 11:15抽查已完成25/32完整轨迹，均无顶层错误。wire中10次中断均是感知辅助请求，存在相同完整请求的成功响应；这不能证明每次中断都是同一逻辑重试，也不算native policy失败。`psd_wire_audit.py`严格区分：未知请求、native失败、截断、capture错误仍拒绝；辅助中断保留逐条错误凭证及同请求成功凭证，canonical tool outcome另审计，不删任何失败。
+- wire总预算仍2GiB，单响应上限提高到64MiB以容纳top20，保守预留在请求完成后换算实际压缩字节。11:16实测新RUN约1.10GB、wire约0.776GB。共享GPFS `df`约45TiB空闲**不是个人配额**；quota工具未提供，不能据此宣称无存储风险。全量采样前须按实际产物预算，诊断wire不能无界扩增或影响原生capture。
+- 已新增独立`resume_probe`配置：原batch32/LR4e-5等不变，固定两步horizon、每步存全状态并保留两份；从checkpoint-1到新输出恢复第二步，不能改变horizon后宣称精确续跑。该模式不是production，也尚未运行GPU验收。正式production仍五epoch。
+- 本地72项定向测试通过；远端v3代码既有`training/tests`389项通过。二者是代码验证，不能代替尚未完成的真实checker、repair、GPU更新/保存恢复。
+
+**仍待完成**：固定32槽验收→真实source checker/多位置repair→同epoch3 frozen teacher top20及MM精确对齐→GPU典型/最长target和native保存/恢复→400×8完整构建→首轮五epoch正式优化。当前不能表述为“PSD已完整验收”或“正式训练已启动”。
+
+## 2026-09-16 10:45 新授权及实际起点（优先于下方历史）
+
+用户明确要求完整修复后开始训练，并确认使用原计划 **400 张 × 8 次**，完成全部目标构建和正式训练；不扩大到4,000张。自动执行终点已从“仅3,200槽采样”扩展到首轮PSD五个优化epoch完成。不是无限多轮PSD，也不改变原有限修复预算和真实验收要求。
+
+- 起点改为三epoch SFT的 **epoch3 / step3084**。此前epoch2诊断只保留作证据，不混入epoch3 bank。
+- 冻结导出：`/volume/ybo/wza/exports/h20-sft-merged4872-3epoch-step3084-20260915/model`。`export.json` SHA256：`1c342e73e6fc82bfa573e4435c67c2c38f26207030307313e7a1396a09a1850c`。
+- 原完整checkpoint：`/volume/ybo/wza/checkpoints/h20-sft-merged4929-agent-v2-3epoch-fullstate-20260914/v0-20260914-200132/checkpoint-3084`；原三轮权重、optimizer/RNG和旧实验权重均不删除，不原地merge adapter。PSD LoRA/checkpoint单独输出。
+- 新部署：`/volume/ybo/wza/training-artifacts/psd-epoch3-20260916-v1`；新的code快照保留原冻结src，只带入已修group-size校验。
+- 服务：`/volume/ybo/wza/inference/psd-sft3084-20260916`。`protected-sft.json`记载全量模型SHA与checkpoint元数据实际通过校验；GPU1/19003加载epoch3，专用网关19017/public alias `ifv-qwen3.5-9b-sft-3084`。
+- 4图×8正式分组验收：`/volume/ybo/wza/runs/psd-sft3084-canary4x8-20260916`，10:43已开始采集32槽；不是400×8全量，也不是优化器训练。
+- 工具与感知缓存都关；单工具生成约束、think8192/out32768、128K、多图32、T0.7保持。原GPU0/2/3仍是旧服务闲时计算守护，不混入新policy。
+- 新GPU守护在新SERVICE/guard.json，按各卡实际模型ID调用，避免GPU1换权重后沿用旧alias。旧guard已正常停止，不双开。
+- wire archive仍为2GiB硬界限，改成“已完成实际压缩字节＋在途保守预留”，不将每条响应未用完的8MiB永久累计；不清理旧证据或放开无限存储。
+
+完成顺序仍是：真实32槽及checker、多位置修复、去hint精确token/MM目标、同epoch3冻结teacher top20、真实GPU有限loss/梯度和native保存恢复验收，然后400×8→全量目标→LoRA r32/LR4e-5/batch32/5epoch训练。LoRA/优化参数再次核对[上游发表配置](https://github.com/essamsleiman/psd/blob/778be78bdac582b51a975ff819046583aad383e0/experiments/bfcl/configs/qwen35_9b_published.json)。
+
+`run_psd_round.py prepare --defer-topk`新增显式阶段边界：先修复/组装目标，不在推理占满GPU时盲目加载HF teacher。随后不带此参数继续同一绑定产物，已有生成和审核不重采。
+
+每小时监控已按照新授权和epoch3路径更新；更新方式使用[官方OpenAI文档](https://learn.chatgpt.com/docs/automations?surface=app)核对。judge收尾和朋友实验的已有边界不变。
+
+## 2026-09-15 历史授权
+
 2026-09-15 晚，用户明确确认“刚才你关于psd的计划可以的”。这是对后续顺序的批准，不是声称 PSD 已经开始采样或训练。
 
 ## 执行顺序

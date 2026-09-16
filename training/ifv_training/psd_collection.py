@@ -5,6 +5,13 @@ from types import SimpleNamespace
 from src.eval.rollout import rollout_specs
 
 
+def require_token_capture_environment(environ):
+    if str(environ.get("IFV_CAPTURE_POLICY_TOKENS", "")).strip().lower() not in {"1", "true", "yes", "on"}:
+        raise ValueError("PSD source collection requires native policy token/logprob capture before dispatch")
+    if str(environ.get("IFV_POLICY_TOPK", "20")).strip() != "20":
+        raise ValueError("PSD source collection requires top-20 policy capture")
+
+
 def verify_collection(rows, *, case_ids, manifest, expected_rollouts):
     """Count slots, not just case IDs; do not accept 400 rows as 400 x 8."""
     if type(expected_rollouts) is not int or expected_rollouts < 1:

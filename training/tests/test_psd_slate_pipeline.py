@@ -93,6 +93,56 @@ def test_proposer_receives_public_feedback_only_and_audits_actual_hint(monkeypat
     assert "fake" not in str(packets) and "label" not in str(packets)
 
 
+def test_invalid_hint_budget_is_bounded_and_pending_proposal_is_reused(monkeypatch):
+    import ifv_training.psd_slate_search as search
+    from ifv_training.psd_slate import SlateProposalRejected
+    from ifv_training.psd_repair import HintProposal
+    calls, saved, state = [], [], {}
+    async def proposal(*a,**kw):
+        calls.append(kw)
+        if len(calls)==1:raise SlateProposalRejected({'response_sha256':'rejected'})
+        target=make_targets()[0]
+        return {0:HintProposal(**target['hint_record'])},{'response_sha256':'accepted'}
+    monkeypatch.setattr(search,'propose_slate',proposal)
+    options=dict(state=state,round_index=0,budget=2,persist=lambda:saved.append(copy.deepcopy(state)),
+                 judge=None,kwargs={})
+    first=asyncio.run(search.propose_with_budget(**options))
+    assert len(calls)==2 and len(saved)==2
+    assert calls[1]['proposal_feedback']=={'rejected_proposals':1,'reason':'invalid_or_nonprocedural_slate'}
+    assert asyncio.run(search.propose_with_budget(**options))==first and len(calls)==2
+    state.pop('pending_proposal')
+    assert asyncio.run(search.propose_with_budget(**{**options,'round_index':1}))==(None,None)
+    assert len(calls)==2
+
+
+def test_proposal_transport_errors_do_not_spend_hint_budget(monkeypatch):
+    import ifv_training.psd_slate_search as search
+    state={}
+    async def proposal(*a,**kw):raise TimeoutError('provider unavailable')
+    monkeypatch.setattr(search,'propose_slate',proposal)
+    with pytest.raises(TimeoutError):
+        asyncio.run(search.propose_with_budget(state=state,round_index=0,budget=12,
+            persist=lambda:None,judge=None,kwargs={}))
+    assert state['proposals']==[]
+
+
+def test_rejected_hint_feedback_never_reveals_private_match(monkeypatch):
+    import ifv_training.psd_gemini_judge as judge
+    from ifv_training.psd_slate import SlateProposalRejected
+    packets=[]
+    async def request(client,packet,**kw):
+        packets.append(packet)
+        return {'hints':[{'position':0,'hint':'Use the exact query {secret}.'}]},{'response_sha256':'x'}
+    monkeypatch.setattr(judge,'_request',request)
+    with pytest.raises(SlateProposalRejected) as e:
+        asyncio.run(propose_slate(None,public_context={'observed':'tool error'},previous={},
+            passing_positions=[],failed_position=0,model='judge',cache_dir=None,
+            private_context={'private_reference':'hidden_private_gold'},
+            proposal_feedback={'rejected_proposals':1,'reason':'invalid_or_nonprocedural_slate'}))
+    assert str(e.value)=='invalid_or_nonprocedural_slate'
+    assert 'hidden_private_gold' not in str(packets)
+
+
 def test_psd_child_sampling_is_explicit_and_does_not_change_native_workflow(monkeypatch):
     from scripts.collect_psd_rollouts import PSDWorkflow
     from src.workflow import VerificationWorkflow

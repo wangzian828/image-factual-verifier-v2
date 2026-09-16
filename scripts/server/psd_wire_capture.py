@@ -26,6 +26,8 @@ class WireCapture:
         self.max_response_bytes = max_response_bytes
         self.min_free_bytes = min_free_bytes
         self.reserved = 0
+        self.committed = 0
+        self.outstanding = {}
         self.lock = threading.Lock()
         self.started = self.completed = self.failed = 0
 
@@ -36,7 +38,10 @@ class WireCapture:
             return None
         path = Path(value).resolve()
         path.relative_to(Path('/volume/ybo/wza').resolve())
-        return cls(path)
+        response_limit = int(os.environ.get('PSD_WIRE_MAX_RESPONSE_BYTES', str(8*1024**2)))
+        if not 1 <= response_limit <= 64*1024**2:
+            raise ValueError('PSD wire response allowance must be at most 64 MiB')
+        return cls(path, max_response_bytes=response_limit)
 
     def _json(self, directory, name, value):
         with (directory / name).open('x', encoding='utf-8') as stream:
@@ -50,21 +55,33 @@ class WireCapture:
                 'gzip_bytes': (directory / name).stat().st_size}
 
     def begin(self, body):
-        # Reserve uncompressed space for both sides before dispatch; no eviction.
-        required = len(body) + self.max_response_bytes + 4096
+        # Bound gzip expansion and metadata before dispatch. On completion,
+        # retain actual disk usage, not an unused 8 MiB allowance forever.
+        bound = lambda size: size + (size // 16384 + 1) * 16 + 128
+        required = bound(len(body)) + bound(self.max_response_bytes) + 16384
+        key = str(time.time_ns()) + '-' + uuid.uuid4().hex
+        directory = self.root / key
         with self.lock:
             if len(body) > self.max_request_bytes or self.reserved + required > self.max_bytes:
                 raise ValueError('PSD diagnostic capture budget exhausted before dispatch')
             if shutil.disk_usage(self.root).free < self.min_free_bytes + required:
                 raise ValueError('PSD diagnostic capture minimum free space reached')
             self.reserved += required
+            self.outstanding[directory] = required
             self.started += 1
-        key = str(time.time_ns()) + '-' + uuid.uuid4().hex
-        directory = self.root / key
         directory.mkdir()
         binding = self._body(directory, 'request.json.gz', body)
         self._json(directory, 'request-meta.json', {'started_at':time.time(), **binding})
         return directory
+
+    def _settle(self, ticket):
+        with self.lock:
+            allowance = self.outstanding.pop(ticket, None)
+            if allowance is None:
+                return
+            actual = sum(path.stat().st_size for path in ticket.iterdir() if path.is_file())
+            self.reserved += actual - allowance
+            self.committed += actual
 
     def response(self, ticket, body, *, status_code, replica):
         if len(body) > self.max_response_bytes:
@@ -74,12 +91,16 @@ class WireCapture:
         self._json(ticket, 'response-meta.json', {'ended_at':time.time(), 'status_code':status_code,
                                                   'replica':replica, **binding})
         self.completed += 1
+        self._settle(ticket)
         return True
 
     def error(self, ticket, kind, **metadata):
         self._json(ticket, 'error.json', {'ended_at':time.time(), 'kind':kind, **metadata})
         self.failed += 1
+        self._settle(ticket)
 
     def status(self):
         return {'enabled':True,'root':str(self.root),'started':self.started,'completed':self.completed,
-                'failed':self.failed,'reserved_bytes':self.reserved,'max_bytes':self.max_bytes}
+                'failed':self.failed,'reserved_bytes':self.reserved,'max_bytes':self.max_bytes,
+                'committed_bytes':self.committed,'outstanding_requests':len(self.outstanding),
+                'budget_accounting':'compressed_completed_plus_bounded_inflight'}

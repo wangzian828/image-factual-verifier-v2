@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--low-window-seconds", type=int, default=90 * 60)
     parser.add_argument("--free-memory-limit-mib", type=int, default=1024)
     parser.add_argument("--model", default="ifv-qwen3.5-9b")
+    parser.add_argument("--models", help="Optional comma-separated model IDs aligned to GPU IDs/ports")
     parser.add_argument("--gpu-ids", default="0,1,2,3")
     parser.add_argument("--vllm-ports", default="8902,8903,8904,8905")
     parser.add_argument("--pulse-tokens", type=int, default=1024)
@@ -43,6 +44,9 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     args.gpu_ids = [int(x) for x in args.gpu_ids.split(',')]
     args.vllm_ports = [int(x) for x in args.vllm_ports.split(',')]
+    args.models = args.models.split(',') if args.models else [args.model] * len(args.gpu_ids)
+    if len(args.models) != len(args.gpu_ids) or not all(args.models):
+        parser.error('Model IDs must be nonempty and aligned with GPU IDs')
     if len(args.gpu_ids) != len(args.vllm_ports) or len(set(args.gpu_ids)) != len(args.gpu_ids):
         parser.error('GPU IDs and vLLM ports must be aligned and unique')
     if args.poll_seconds < 5:
@@ -270,7 +274,8 @@ def protect(
                 executor.submit(
                     pulse_vllm,
                     port=port,
-                    model=args.model,
+                    model=(dict(zip(args.gpu_ids, args.models))[gpu]
+                           if getattr(args, 'models', None) else args.model),
                     tokens=args.pulse_tokens,
                     timeout_seconds=args.pulse_timeout_seconds,
                 ): gpu

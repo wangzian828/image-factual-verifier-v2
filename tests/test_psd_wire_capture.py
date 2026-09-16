@@ -25,11 +25,36 @@ class WireCaptureTests(unittest.TestCase):
 
     def test_limits_reject_before_dispatch_without_eviction(self):
         with TemporaryDirectory() as temp:
-            capture=self.capture(Path(temp)/'wire',max_bytes=4200,max_request_bytes=10,max_response_bytes=100)
+            capture=self.capture(Path(temp)/'wire',max_bytes=17000,max_request_bytes=10,max_response_bytes=100)
             with self.assertRaises(ValueError):capture.begin(b'x'*11)
             ticket=capture.begin(b'abc')
             with self.assertRaises(ValueError):capture.begin(b'abc')
             self.assertTrue((ticket/'request.json.gz').exists())
+
+    def test_finished_reservations_use_actual_bytes_without_eviction(self):
+        with TemporaryDirectory() as temp:
+            capture=self.capture(Path(temp)/'wire',max_bytes=40000,max_response_bytes=10000)
+            tickets=[]
+            for _ in range(12):
+                ticket=capture.begin(b'x'*1000); tickets.append(ticket)
+                capture.response(ticket,b'y'*1000,status_code=200,replica='local')
+            actual=sum(p.stat().st_size for p in capture.root.rglob('*') if p.is_file())
+            self.assertEqual(capture.reserved,actual)
+            self.assertEqual(capture.committed,actual)
+            self.assertEqual(capture.status()['outstanding_requests'],0)
+            self.assertEqual(len(list(capture.root.iterdir())),12)
+            before=capture.reserved
+            capture._settle(tickets[-1])
+            self.assertEqual(capture.reserved,before)
+
+    def test_error_releases_only_unused_allowance(self):
+        with TemporaryDirectory() as temp:
+            capture=self.capture(Path(temp)/'wire',max_bytes=40000,max_response_bytes=10000)
+            ticket=capture.begin(b'x')
+            with self.assertRaises(ValueError):capture.begin(b'x')
+            capture.error(ticket,'transport')
+            self.assertGreater(capture.reserved,0)
+            capture.begin(b'x')
 
     def test_response_limit_and_error_receipts(self):
         with TemporaryDirectory() as temp:

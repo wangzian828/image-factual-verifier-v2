@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -35,6 +36,8 @@ class PSDWorkflow(VerificationWorkflow):
 
 
 def main():
+    from ifv_training.psd_collection import require_token_capture_environment
+    require_token_capture_environment(os.environ)
     from src.eval import run_cases
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--train-cases", type=Path, required=True)
@@ -58,6 +61,7 @@ def main():
     manifest_path = Path(args.output_dir) / "run_manifest.json"
     manifest = load_json(manifest_path)
     manifest["agent"]["psd_sampling"] = {"temperature": 0.7, "rollouts_per_case": 8,
+        "capture_policy_tokens": True, "policy_topk": 20,
         "collector_sha256": sha256_file(Path(__file__)), "stages": ["UNIFIED_REACT", "UNIFIED_JUDGMENT"]}
     write_json(manifest_path, manifest)
     print(json.dumps(summary, ensure_ascii=False, indent=2))

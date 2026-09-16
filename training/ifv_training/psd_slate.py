@@ -160,30 +160,57 @@ def validate_slate_revision(previous, proposed, *, passing_positions, failed_pos
     return dict(proposed)
 
 
+class SlateProposalRejected(ValueError):
+    """A completed proposal violated public format/procedural constraints."""
+    def __init__(self, provenance):
+        super().__init__('invalid_or_nonprocedural_slate')
+        self.provenance = provenance
+
+
+def _parse_slate(value, *, packet, previous, passing_positions, failed_position,
+                 model, private_context):
+    from .psd_repair import build_hint_proposal
+    if not isinstance(value, dict) or set(value) != {"hints"} or not isinstance(value["hints"], list):
+        raise ValueError("invalid PSD slate proposer response")
+    if not value["hints"]:
+        return {}
+    parsed = {}
+    for row in value["hints"]:
+        if (not isinstance(row, dict) or set(row) != {"position", "hint"}
+                or type(row["position"]) is not int or row["position"] in parsed):
+            raise ValueError("malformed or duplicate PSD slate position")
+        parsed[row["position"]] = row["hint"]
+    parsed = validate_slate_revision(previous, parsed, passing_positions=passing_positions,
+        failed_position=failed_position)
+    return {position: build_hint_proposal(text=text, level=1, provider="gemini", model=model,
+        candidate_id="slate-" + _sha({"packet": packet, "position": position}),
+        public_failure_context=packet, private_context=private_context)
+        for position, text in parsed.items()}
+
+
 async def propose_slate(client, *, public_context, previous, passing_positions,
-                        failed_position, model, cache_dir, private_context=None, images=()):
+                        failed_position, model, cache_dir, private_context=None, images=(),
+                        proposal_feedback=None):
     from .psd_gemini_judge import _request
     from .psd_repair import _assert_public_context, build_hint_proposal
     _assert_public_context(public_context)
     packet = {"trace": public_context, "previous_hints": previous,
         "passing_positions": passing_positions, "failed_position": failed_position}
+    if proposal_feedback is not None:
+        # Never put hint-audit private matches or exception text in feedback.
+        if (set(proposal_feedback) != {"rejected_proposals", "reason"}
+                or type(proposal_feedback["rejected_proposals"]) is not int
+                or not 1 <= proposal_feedback["rejected_proposals"] <= 64
+                or proposal_feedback["reason"] != "invalid_or_nonprocedural_slate"):
+            raise ValueError("invalid public proposal feedback")
+        packet["proposal_feedback"] = dict(proposal_feedback)
     value, provenance = await _request(client, packet, prompt=SLATE_PROMPT, schema=SLATE_SCHEMA,
         model=model, images=images, cache_dir=cache_dir)
-    if not isinstance(value, dict) or set(value) != {"hints"} or not isinstance(value["hints"], list):
-        raise ValueError("invalid PSD slate proposer response")
-    if not value["hints"]:
-        return {}, provenance
-    parsed = {}
-    for row in value["hints"]:
-        if not isinstance(row, dict) or set(row) != {"position", "hint"} or row["position"] in parsed:
-            raise ValueError("malformed or duplicate PSD slate position")
-        parsed[row["position"]] = row["hint"]
-    parsed = validate_slate_revision(previous, parsed, passing_positions=passing_positions,
-        failed_position=failed_position)
-    result = {position: build_hint_proposal(text=text, level=1, provider="gemini", model=model,
-        candidate_id="slate-" + _sha({"packet": packet, "position": position}),
-        public_failure_context=packet, private_context=private_context)
-        for position, text in parsed.items()}
+    try:
+        result = _parse_slate(value, packet=packet, previous=previous, passing_positions=passing_positions,
+            failed_position=failed_position, model=model, private_context=private_context)
+    except ValueError as error:
+        raise SlateProposalRejected(provenance) from error
     return result, provenance
 
 

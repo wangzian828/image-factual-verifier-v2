@@ -25,6 +25,8 @@ EXPORT = ROOT/'exports/h20-sft-merged4872-epoch2-step2056-20260915/export.json'
 EXPORT_SHA = '55dfb77f56cb175573c5e966816c8a0a0c384385190ae5b62795963f681fbd28'
 ALIAS = 'ifv-qwen3.5-9b-sft-2056'
 CACHE_FREE = False
+GATEWAY_PORT = 19012
+TOOL_PARSER = 'qwen3_coder'
 
 
 def digest(path):
@@ -136,7 +138,7 @@ def prepare():
     save(policy, load(Path(source['source_access_policy'])))
     release = load_public_release(benchmark)
     save(RUN/'runtime-release/manifest.json', {**release.manifest,
-        'release_id': 'psd-slate-canary4x8-20260916', 'release_stage': 'psd_training_canary',
+        'release_id': RUN.name, 'release_stage': 'psd_training_canary',
         'source_access_policy': {'active': True, 'path': 'evaluator_private/source_access_policy.json',
                                  'sha256': digest(policy)}})
     load_public_release(public_path)
@@ -144,7 +146,7 @@ def prepare():
     snapshot = RUN/'snapshot'
     provenance = snapshot/'sft-provenance.json'
     save(provenance, {'dataset_version': None, 'local_training_performed': True,
-        'source': 'existing full-parameter SFT epoch2 export, not a pretrained base',
+        'source': 'existing full-parameter SFT export, not a pretrained base',
         'dataset_identity': 'not reconstructed here; original source checkpoint retained',
         'source_checkpoint': exported['source_checkpoint'], 'export': str(EXPORT),
         'export_sha256': EXPORT_SHA, 'epoch': exported['epoch'], 'global_step': exported['global_step'],
@@ -156,7 +158,7 @@ def prepare():
         processor_revision='exact exported file hashes authoritative', method='full',
         framework_version='not inferred from the current environment')
     manifest['framework']['version'] = None
-    manifest['checkpoint'].update(global_step=2056, epoch=2.0)
+    manifest['checkpoint'].update(global_step=exported['global_step'], epoch=exported['epoch'])
     manifest['source_export'] = {'path': str(EXPORT), 'sha256': EXPORT_SHA,
         'source_checkpoint': exported['source_checkpoint'], 'full_state_retained_separately': True}
     for item in manifest['artifacts']:
@@ -168,8 +170,8 @@ def prepare():
         'bytes': index.stat().st_size, 'sha256': digest(index)})
     save(manifest_path, manifest)
     build_serving_profile(output_path=snapshot/'serving-profile.json', profile_id=ALIAS,
-        model_path=str(EXPORT.parent/'model'), engine='vllm', port=19012, tensor_parallel_size=1,
-        dtype='bfloat16', context_length=131072, tool_call_parser='qwen3_coder', reasoning_parser='qwen3',
+        model_path=str(EXPORT.parent/'model'), engine='vllm', port=GATEWAY_PORT, tensor_parallel_size=1,
+        dtype='bfloat16', context_length=131072, tool_call_parser=TOOL_PARSER, reasoning_parser='qwen3',
         thinking_enabled=True, checkpoint_manifest_path=manifest_path)
     binding = {**runtime, 'case_ids': ids, 'benchmark': str(public_path),
         'source_access_policy': str(policy), 'train_cases': str(RUN/'evaluator_private/case_split.jsonl'),

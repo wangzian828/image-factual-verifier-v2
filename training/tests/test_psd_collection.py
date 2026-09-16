@@ -3,8 +3,17 @@ from types import SimpleNamespace
 import pytest
 
 from ifv_training.psd_collection import select_task_repair_sources, verify_collection
+from ifv_training.psd_collection import require_token_capture_environment
 from src.eval.rollout import rollout_specs
 from src.eval.result_records import run_result_record
+
+
+def test_native_capture_is_required_before_collection():
+    with pytest.raises(ValueError, match="before dispatch"):
+        require_token_capture_environment({})
+    with pytest.raises(ValueError, match="top-20"):
+        require_token_capture_environment({'IFV_CAPTURE_POLICY_TOKENS':'1','IFV_POLICY_TOPK':'1'})
+    require_token_capture_environment({'IFV_CAPTURE_POLICY_TOKENS':'1','IFV_POLICY_TOPK':'20'})
 
 
 def collection():
