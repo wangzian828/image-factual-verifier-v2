@@ -10,6 +10,38 @@
 
 ## Automatic repair verification and recovery (2026-09-12)
 
+### Full-episode infrastructure recovery (2026-09-16)
+
+PSD collection and full-episode slate repairs now use
+`psd_infrastructure_retry.py`: initial attempt plus at most two reruns, with
+5/10-second backoff and a persistent, hash-bound per-slot attempt ledger.
+Each attempt starts from the original image/initial decision in a new runtime
+namespace. Model, temperature, seed and (for repairs) the exact hint slate stay
+fixed. Ordinary wrong answers, contract/format failures and length limits are
+not resampled by this mechanism. A repair transport failure does not consume a
+new proposal or verifier-feedback round.
+
+Only the policy-model boundary can mark a retryable failure: transient
+408/429/500/502/503/504 responses, network/request timeouts, empty HTTP bodies,
+or non-finite selected-token probabilities / NaN or +Inf in top-k. Grammar
+masked-out -Inf candidates are legal. There is no text/token-0 heuristic and
+no automatic replay of individual gateway POSTs. A marked numerical response
+is quarantined before a returned tool action can execute. Independent frozen
+teacher scoring and all target admission checks remain mandatory.
+
+Artifacts live under `psd-infrastructure-attempts/<slot-hash>/attempt-NNN/`;
+only the first infrastructure-valid outcome is exposed in canonical `traces/`.
+This can still be a wrong answer or normal model failure. Exhausted slots
+remain explicit errors without canonical training traces and block collection
+acceptance. Restarting does not reset the budget. An interrupted in-flight or
+unknown failure is held for inspection, not automatically declared retryable.
+No previously completed test-set evaluation is rewritten by this PSD adapter.
+
+This is fault containment, **not a fix for the underlying vLLM numerical bug**.
+The retry policy cannot detect every finite-but-incorrect distribution or
+guarantee statistically unbiased recovery if failures correlate with content.
+Report infrastructure attempts and unresolved slots separately.
+
 `psd_gemini_judge.py` now implements the training-only semantic localizer and
 PSD repair judge. This is separate from the final-answer evaluation judge.
 It sends actual archived images through native Gemini Interactions, preserves

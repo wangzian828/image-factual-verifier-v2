@@ -132,12 +132,24 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
             directory = root / "slate-rounds" / f"{number:02d}"
             directory.mkdir(parents=True, exist_ok=True)
             async def generate():
-                adapter.runtime_store = CaseRuntimeStore(root, case_id=candidate["case_id"],
-                    attempt_id=f"slate-{number:02d}-{uuid.uuid4().hex[:12]}", resume_from=root)
-                # Replay from the first native decision, not an immutable old
-                # failed suffix. Earlier actions may change under sampling.
-                return await adapter.run_hinted_episode(failure_site=replay_site, hint=None,
-                    base_trace=trace, hints_by_action=hints, capture_local_target=capture)
+                import copy
+                from .psd_infrastructure_retry import retry_episode, guard_policy_backend
+                from .psd_repair_storage import continuation_payload, continuation_from_payload
+                guard_policy_backend(adapter.policy_llm)
+                async def generate_attempt(attempt_directory):
+                    fresh = copy.copy(adapter)
+                    fresh.runtime_store = CaseRuntimeStore(attempt_directory, case_id=candidate["case_id"],
+                        attempt_id=f"slate-{number:02d}-{uuid.uuid4().hex[:12]}", resume_from=None)
+                    fresh.tool_cache = None
+                    # Restart at the first decision with the SAME hint slate.
+                    # Infra failures do not consume another hint/review round.
+                    result = await fresh.run_hinted_episode(failure_site=replay_site, hint=None,
+                        base_trace=trace, hints_by_action=hints, capture_local_target=capture)
+                    return continuation_payload(result)
+                payload = await retry_episode(root=directory / "infrastructure-attempts",
+                    identity={"inputs": _sha(config), "hints": {str(k): h.text for k, h in hints.items()}},
+                    generate=generate_attempt)
+                return continuation_from_payload(payload)
             continuation = await cached_continuation(directory / "continuation.json",
                 identity={"inputs": _sha(config), "hints": {str(k): h.text for k, h in hints.items()}}, generate=generate)
             episode = continuation.teacher_episode_trace

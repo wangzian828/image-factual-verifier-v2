@@ -19,6 +19,10 @@ def verify_collection(rows, *, case_ids, manifest, expected_rollouts):
     if not case_ids or len(set(case_ids)) != len(case_ids):
         raise ValueError("PSD collection case IDs must be nonempty and unique")
     agent = manifest.get("agent", {})
+    recovery = agent.get("psd_sampling", {}).get("infrastructure_retry")
+    if recovery is not None and (recovery.get("unresolved") or recovery.get("slots") != len(rows)
+                                 or recovery.get("selection_by_answer") is not False):
+        raise ValueError("PSD collection has unresolved or unbound infrastructure sampling slots")
     if agent.get("rollouts_per_case") != expected_rollouts:
         raise ValueError("PSD collection sampling budget differs from requested group size")
     if expected_rollouts == 8 and (agent.get("psd_sampling", {}).get("temperature") != .7

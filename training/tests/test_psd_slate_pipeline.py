@@ -149,7 +149,8 @@ def test_rejected_hint_feedback_never_reveals_private_match(monkeypatch):
 def test_psd_child_sampling_is_explicit_and_does_not_change_native_workflow(monkeypatch):
     from scripts.collect_psd_rollouts import PSDWorkflow
     from src.workflow import VerificationWorkflow
-    native = SimpleNamespace(_stage_generation_config=lambda stage: {"temperature": 1.0, "top_p": .95})
+    native = SimpleNamespace(_stage_generation_config=lambda stage: {"temperature": 1.0, "top_p": .95},
+                             llm=SimpleNamespace(get_response=lambda: None, max_retries=0))
     monkeypatch.setattr(VerificationWorkflow, "_get_orchestrator", lambda *a, **kw: native)
     workflow = PSDWorkflow()
     assert isinstance(workflow._new_batch_child(workflow.config), PSDWorkflow)
@@ -160,7 +161,8 @@ def test_psd_child_sampling_is_explicit_and_does_not_change_native_workflow(monk
     assert workflow._get_orchestrator()._stage_generation_config("UNIFIED_JUDGMENT")["temperature"] == .7
 
 
-def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, tmp_path):
+@pytest.mark.parametrize('infrastructure_fault', [False, True])
+def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, tmp_path, infrastructure_fault):
     import httpx
     import src.integrations.gemini as gemini
     import src.orchestrator.runtime_events as runtime
@@ -168,6 +170,13 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
     import ifv_training.psd_slate_search as search
     from ifv_training.psd_repair_runtime import ContinuationResult
     from ifv_training.psd_repair import HintProposal
+    import ifv_training.psd_infrastructure_retry as recovery
+    native_retry = recovery.retry_episode
+    async def no_sleep(_):
+        pass
+    async def fast_retry(**kwargs):
+        return await native_retry(**kwargs, sleep=no_sleep)
+    monkeypatch.setattr(recovery, 'retry_episode', fast_retry)
     class Client:
         async def __aenter__(self):
             return self
@@ -185,12 +194,15 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
         output_dir=tmp_path, trace=source_path, search_seconds=100000, policy_model="frozen",
         hint_constructor_model="judge", judge_model="judge", image=tmp_path / "image",
         round_start_checkpoint="frozen")
-    calls, assemblies = [], []
+    calls, assemblies, infrastructure_attempts = [], [], []
     class Adapter:
-        policy_llm = SimpleNamespace(api_key="")
+        policy_llm = SimpleNamespace(api_key="", get_response=lambda: None, max_retries=0)
         def _initial_runtime_state(self, **kw):
             return SimpleNamespace(action_count=21), []
         async def run_hinted_episode(self, **kw):
+            infrastructure_attempts.append(kw)
+            if infrastructure_fault and len(infrastructure_attempts) == 1:
+                raise recovery.PolicyInfrastructureFailure('model_nonfinite_selected_logprob')
             calls.append(kw)
             targets = make_targets()[:len(kw["hints_by_action"])]
             return ContinuationResult(teacher_steps=[], student_steps=[], teacher_history=[], student_history=[],
@@ -222,6 +234,9 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
     result = asyncio.run(search.run_slate_search(**options))
     assert len(calls) == 2 and len(assemblies) == 2
     assert len(proposal_calls) == 2 and proposal_calls[0]['failed_position'] == 21
+    assert len(infrastructure_attempts) == (3 if infrastructure_fault else 2)
+    if infrastructure_fault:
+        assert infrastructure_attempts[0]['hints_by_action'] == infrastructure_attempts[1]['hints_by_action']
     assert set(calls[0]['hints_by_action']) == {0}
     assert result["accepted_count"] == 2 and result["complete_reruns"] == 2
     assert all(c["hint"] is None and c["failure_site"].step_index == 0 for c in calls)
