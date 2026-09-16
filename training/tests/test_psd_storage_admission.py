@@ -4,19 +4,37 @@ from pathlib import Path
 
 import pytest
 
-from ifv_training.psd_storage_admission import StorageAdmission, measure_run_storage
+from ifv_training.psd_storage_admission import StorageAdmission, measure_run_storage, source_run_paths
 
 
 def test_measure_allows_slow_gpfs_scan(monkeypatch):
     calls = []
     def run(command, **kwargs):
         calls.append(kwargs)
-        return subprocess.CompletedProcess(command, 0, '123\t/run\n', '')
+        return subprocess.CompletedProcess(command, 0, '123\t/run\n123\ttotal\n', '')
     monkeypatch.setattr(subprocess, 'run', run)
     monkeypatch.setattr('ifv_training.psd_storage_admission.shutil.disk_usage',
                         lambda path: type('Usage', (), {'free': 32*1024**3})())
     assert measure_run_storage(Path('/run')) == (123, 32*1024**3)
     assert calls[0]['timeout'] == 180 and calls[0]['check'] is True
+
+
+def test_recovery_lineage_remains_charged_to_the_same_ceiling(tmp_path):
+    import json
+    first, second = tmp_path/'first', tmp_path/'second'
+    first.mkdir(); second.mkdir()
+    (second/'binding.json').write_text(json.dumps({'reuse_run': str(first)}))
+    assert source_run_paths(second) == [second.resolve(), first.resolve()]
+    (first/'binding.json').write_text(json.dumps({'reuse_run': str(second)}))
+    with pytest.raises(ValueError, match='cycle'): source_run_paths(second)
+
+
+def test_recovery_lineage_cannot_escape_its_run_parent(tmp_path):
+    import json
+    run = tmp_path/'runs'/'current'; outside = tmp_path/'outside'
+    run.mkdir(parents=True); outside.mkdir()
+    (run/'binding.json').write_text(json.dumps({'reuse_run': str(outside)}))
+    with pytest.raises(ValueError, match='escaped'): source_run_paths(run)
 
 
 @pytest.mark.parametrize('error', [subprocess.TimeoutExpired(['du'], 180),

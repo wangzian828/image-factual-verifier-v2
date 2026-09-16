@@ -28,8 +28,9 @@ def main():
     parser.add_argument('--completed-recovery', action='store_true')
     parser.add_argument('--final-bank-gate', action='store_true')
     parser.add_argument('--slow-storage', action='store_true')
+    parser.add_argument('--storage-lineage', action='store_true')
     args = parser.parse_args()
-    if sum((args.storage_cache, args.storage_spool, args.completed_recovery, args.final_bank_gate, args.slow_storage)) > 1:
+    if sum((args.storage_cache, args.storage_spool, args.completed_recovery, args.final_bank_gate, args.slow_storage, args.storage_lineage)) > 1:
         parser.error('Choose one immutable snapshot variant')
     if args.storage_cache:
         OUT = ROOT / 'training-artifacts/psd-storage-reader-20260917-v31'
@@ -58,6 +59,11 @@ def main():
         FILES = {'scripts/server': ['run_psd_production_collection.py'],
                  'training/ifv_training': ['psd_collection_recovery.py', 'psd_storage_admission.py'],
                  'training/tests': ['test_psd_collection_recovery.py', 'test_psd_storage_admission.py']}
+    if args.storage_lineage:
+        OUT = ROOT / 'training-artifacts/psd-storage-lineage-20260917-v36'
+        BASE = ROOT / 'training-artifacts/psd-slow-storage-20260917-v35/code'
+        FILES = {'training/ifv_training': ['psd_storage_admission.py'],
+                 'training/tests': ['test_psd_storage_admission.py']}
     os.umask(0o077)
     code = OUT / 'code'
     if code.exists():
