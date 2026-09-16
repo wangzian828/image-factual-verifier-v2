@@ -4,6 +4,12 @@
 
 本节覆盖下文 v2 在途快照；优化器仍 0 step，不把采集称为训练。
 
+**01:14验收更新：**v3首40已齐，四个耗尽槽全部在累计第4次完整尝试恢复，未用第5次。
+`first40-gate.json passed=true`；37完整报告的strict audit全部通过（24个warning，
+0 scheduler/protocol/route rejection），3个普通unusable失败保留，0待解infra。
+`state.json`已进入`collecting_remaining_3160`，观察到四副本各8–9个在途请求。
+当前是正式3200槽采集，不是优化训练已启动。代码提交`3215e0f`已本地push。
+
 - v2 首40结束：36份可进入后续审核的原始结果（33正常报告、3 unusable输出），
   **4槽三次基础设施尝试全部 HTTP400/NaN 耗尽**，controller 已保护退出，未发剩余3160。
   16个原NaN槽中12个恢复；不能说重试已经消除了数值问题。
