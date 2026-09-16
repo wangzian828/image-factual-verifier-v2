@@ -65,7 +65,7 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
         raise ValueError('PSD proposal budget must cover the rerun budget and be at most 64')
     root = args.output_dir
     marker = root / "slate-state.json"
-    identity = {"version": "slate-search-v2", "inputs": _sha(config), 'proposal_budget':proposal_budget}
+    identity = {"version": "slate-search-v3-observed-positions", "inputs": _sha(config), 'proposal_budget':proposal_budget}
     state = load_bound(marker, identity=identity) if marker.exists() else {
         "rounds": [], "elapsed_seconds": 0.0, "status": "repairing"}
     for row in state["rounds"]:

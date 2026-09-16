@@ -89,7 +89,7 @@ def test_proposer_receives_public_feedback_only_and_audits_actual_hint(monkeypat
         packets.append(packet)
         return {"hints": [{"position": 0, "hint": "Check the unresolved relation."}]}, {}
     monkeypatch.setattr(judge, "_request", request)
-    hints, _ = asyncio.run(propose_slate(None, public_context={"observed": "tool error"}, previous={},
+    hints, _ = asyncio.run(propose_slate(None, public_context={"observed": "tool error", "decision_map": {0: 0}}, previous={},
         passing_positions=[], failed_position=0, model="judge", cache_dir=None, private_context={"label": "fake"}))
     assert hints[0].audit["passed"] is True
     assert "fake" not in str(packets) and "label" not in str(packets)
@@ -137,7 +137,7 @@ def test_rejected_hint_feedback_never_reveals_private_match(monkeypatch):
         return {'hints':[{'position':0,'hint':'Use the exact query {secret}.'}]},{'response_sha256':'x'}
     monkeypatch.setattr(judge,'_request',request)
     with pytest.raises(SlateProposalRejected) as e:
-        asyncio.run(propose_slate(None,public_context={'observed':'tool error'},previous={},
+        asyncio.run(propose_slate(None,public_context={'observed':'tool error','decision_map':{0:0}},previous={},
             passing_positions=[],failed_position=0,model='judge',cache_dir=None,
             private_context={'private_reference':'hidden_private_gold'},
             proposal_feedback={'rejected_proposals':1,'reason':'invalid_or_nonprocedural_slate'}))
@@ -177,7 +177,7 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
     monkeypatch.setattr(runtime, "CaseRuntimeStore", lambda *a, **kw: SimpleNamespace(root=tmp_path))
     monkeypatch.setattr(judge, "review_images", lambda *a, **kw: ([], {}))
     trace = {"state": {"all_steps": [{"stage": "unified_react", "action_type": "tool_call",
-        "metadata": {"policy_input": {}, "policy_action": {}}}]}}
+        "metadata": {"policy_input": {}, "policy_action": {}}} for _ in range(22)]}}
     source_path = tmp_path / "source.json"
     source_path.write_text("{}")
     args = SimpleNamespace(max_suffix_actions=None, run_student_diagnostic=False, repair_attempts=6,
@@ -188,15 +188,18 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
     class Adapter:
         policy_llm = SimpleNamespace(api_key="")
         def _initial_runtime_state(self, **kw):
-            return SimpleNamespace(action_count=0), []
+            return SimpleNamespace(action_count=21), []
         async def run_hinted_episode(self, **kw):
             calls.append(kw)
             targets = make_targets()[:len(kw["hints_by_action"])]
             return ContinuationResult(teacher_steps=[], student_steps=[], teacher_history=[], student_history=[],
                 hint="", teacher_complete=True, teacher_episode_trace={**trace, "rerun": len(calls)}, local_targets=targets)
-    async def propose(*a, **kw):
-        n = 2 if kw["previous"] else 1
-        return {t["position"]: HintProposal(**t["hint_record"]) for t in make_targets()[:n]}, {}
+    proposal_calls = []
+    async def request(client, packet, **kw):
+        proposal_calls.append(packet)
+        n = 2 if packet["previous_hints"] else 1
+        return {"hints": [{"position": t["position"], "hint": t["hint"]}
+                          for t in make_targets()[:n]]}, {}
     async def review(*a, **kw):
         n = kw["episode"]["rerun"]
         return {"decision": {"status": "pass" if n == 2 else "fail", "passing_positions": [0, 1] if n == 2 else [0],
@@ -206,7 +209,7 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
         if len(assemblies) == 1:
             raise RuntimeError("simulated CPU materialization crash")
         return [{"candidate_id": "a"}, {"candidate_id": "b"}], [{"accepted": True}, {"accepted": True}]
-    monkeypatch.setattr(search, "propose_slate", propose)
+    monkeypatch.setattr(judge, "_request", request)
     monkeypatch.setattr(search, "review_slate", review)
     monkeypatch.setattr(search, "assemble_slate_attempts", assemble)
     options = dict(args=args, adapter=Adapter(), site=SimpleNamespace(stage="unified_react"),
@@ -217,6 +220,8 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
     assert len(calls) == 2
     result = asyncio.run(search.run_slate_search(**options))
     assert len(calls) == 2 and len(assemblies) == 2
+    assert len(proposal_calls) == 2 and proposal_calls[0]['failed_position'] == 21
+    assert set(calls[0]['hints_by_action']) == {0}
     assert result["accepted_count"] == 2 and result["complete_reruns"] == 2
     assert all(c["hint"] is None and c["failure_site"].step_index == 0 for c in calls)
     assert search.audit_slate_search(tmp_path)["passed"]

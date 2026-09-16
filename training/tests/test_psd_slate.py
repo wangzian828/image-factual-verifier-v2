@@ -15,13 +15,15 @@ def hint(text):
     return HintProposal(text=text, level=1, provider="test", model="test", proposal_id=text, audit={})
 
 
-def test_slate_preserves_working_positions_and_only_changes_the_failed_one():
+def test_slate_preserves_working_positions_but_does_not_lock_the_failed_one():
     previous = {0: "first hint", 4: "old later hint"}
     proposed = {0: "first hint", 4: "revised later hint"}
-    assert validate_slate_revision(previous, proposed, passing_positions=[0], failed_position=4) == proposed
-    for bad in [{4: "new"}, {0: "changed", 4: "new"}, {**proposed, 5: "extra"}, previous]:
+    options = dict(passing_positions=[0], failed_position=4, decision_positions=[0, 1, 4, 5])
+    for valid in [proposed, previous, {**proposed, 1: 'earlier cause', 5: 'independent mistake'}]:
+        assert validate_slate_revision(previous, valid, **options) == valid
+    for bad in [{4: "new"}, {0: "changed", 4: "new"}, {**proposed, 6: "unobserved"}]:
         with pytest.raises(ValueError):
-            validate_slate_revision(previous, bad, passing_positions=[0], failed_position=4)
+            validate_slate_revision(previous, bad, **options)
 
 
 def test_tokenizer_request_keeps_tools_thinking_and_processor_config():

@@ -13,8 +13,12 @@ tool arguments, query, URL, evidence ID, label or case-specific answer.
 Each position is a native decision ordinal in this one-image investigation;
 the terminal judgment is position 24. Do not invent extra user turns. Correct
 the earliest established failure first. Do not hint downstream fallout before
-checking whether correcting its cause resolves it. Keep every already passing
-position's hint VERBATIM. Modify/add only the identified failed position.
+checking whether correcting its cause resolves it. The reported failed position
+is diagnostic feedback, NOT the only permitted intervention site. Choose one or
+a few observed decision positions where the trace supports a corrective hint,
+including an earlier cause or multiple independent mistakes. Keep every already
+passing position's hint VERBATIM; revise other hints only when grounded in the
+observed episode. Do not treat a downstream symptom as proof of an earlier cause.
 Return the complete revised slate as JSON: {"hints":[{"position":0,"hint":"..."}]}.
 Return {"hints":[]} if no grounded intervention can help. A plausible hint is
 not success: only an actual full-task verifier-passing rerun can be admitted.
@@ -25,17 +29,20 @@ SLATE_SCHEMA = {"type": "object", "properties": {"hints": {"type": "array", "ite
     "required": ["hints"], "additionalProperties": False}
 
 
-def bound_slate_schema(previous, failed_position):
-    """Constrain the provider to the same public positions the validator accepts.
+def bound_slate_schema(previous, failed_position, *, decision_positions):
+    """Bound hints to observed native decisions, not one diagnostic anchor.
 
-    Without this, a long trace can distract the proposer into editing another
-    position and consume the entire proposal budget before any repair runs.
-    This does not relax localization or expose private checker explanations.
+    Upstream's first-invalid-turn feedback does not lock the slate to that turn.
+    Our single-image task uses native decision ordinals instead of BFCL user
+    turns; the public decision map supplies the actual available positions.
     """
     from src.orchestrator.react_runtime import MAX_REACT_ACTIONS
-    positions = [*previous, failed_position]
-    if any(type(p) is not int or not 0 <= p <= MAX_REACT_ACTIONS for p in positions):
+    positions = list(decision_positions)
+    if not positions or any(type(p) is not int or not 0 <= p <= MAX_REACT_ACTIONS
+                            for p in [*positions, *previous, failed_position]):
         raise ValueError('invalid public PSD slate positions')
+    if failed_position not in positions:
+        raise ValueError('PSD diagnostic position is absent from the observed decision map')
     schema = copy.deepcopy(SLATE_SCHEMA)
     hints = schema['properties']['hints']
     hints['items']['properties']['position']['enum'] = sorted(set(positions))
@@ -164,22 +171,24 @@ async def capture_target(*, position, hint, steps, unhinted_prefix,
         "student_prefix_kind": "corrected_hint_free_history", "row_weight": 1.0}
 
 
-def validate_slate_revision(previous, proposed, *, passing_positions, failed_position):
-    """Retain working hints verbatim, revise the failing position only."""
+def validate_slate_revision(previous, proposed, *, passing_positions, failed_position,
+                            decision_positions):
+    """Retain verified hints, allowing grounded interventions beyond the anchor."""
     from src.orchestrator.react_runtime import MAX_REACT_ACTIONS
     if type(failed_position) is not int or not 0 <= failed_position <= MAX_REACT_ACTIONS:
         raise ValueError("invalid PSD failing position")
     if not isinstance(proposed, dict) or any(type(p) is not int or not 0 <= p <= MAX_REACT_ACTIONS or not isinstance(h, str)
         or not h.strip() for p, h in proposed.items()):
         raise ValueError("invalid PSD decision slate")
+    allowed = bound_slate_schema(previous, failed_position, decision_positions=decision_positions)[
+        'properties']['hints']['items']['properties']['position']['enum']
+    if not proposed.keys() <= set(allowed):
+        raise ValueError("PSD slate refers to an unobserved decision position")
     for p in passing_positions:
         if p in previous and proposed.get(p) != previous[p]:
             raise ValueError("PSD slate changed an already verified hint")
-    changed = {p for p in previous.keys() | proposed.keys() if previous.get(p) != proposed.get(p)}
-    if changed - {failed_position}:
-        raise ValueError("PSD slate revision changed a non-failing position")
-    if not changed:
-        raise ValueError("PSD slate repeated a completed failed proposal")
+    # An unchanged slate may legitimately be retried under stochastic sampling.
+    # Full rerun/proposal budgets still apply; only a real checker pass admits it.
     return dict(proposed)
 
 
@@ -204,7 +213,7 @@ def _parse_slate(value, *, packet, previous, passing_positions, failed_position,
             raise ValueError("malformed or duplicate PSD slate position")
         parsed[row["position"]] = row["hint"]
     parsed = validate_slate_revision(previous, parsed, passing_positions=passing_positions,
-        failed_position=failed_position)
+        failed_position=failed_position, decision_positions=packet['trace']['decision_map'])
     return {position: build_hint_proposal(text=text, level=1, provider="gemini", model=model,
         candidate_id="slate-" + _sha({"packet": packet, "position": position}),
         public_failure_context=packet, private_context=private_context)
@@ -219,13 +228,12 @@ async def propose_slate(client, *, public_context, previous, passing_positions,
     _assert_public_context(public_context)
     packet = {"trace": public_context, "previous_hints": previous,
         "passing_positions": passing_positions, "failed_position": failed_position}
-    schema = bound_slate_schema(previous, failed_position)
-    # Put the mechanical revision constraint immediately BEFORE the long trace.
-    # The verifier still checks verbatim preservation and procedurality afterward.
-    prompt = (SLATE_PROMPT + '\nFor this request, change only position '
-              + str(failed_position) + '. Retain every existing hint at other positions '
-              + 'verbatim. Allowed output positions: '
-              + json_positions(schema) + '. Use [] if no grounded hint can help.\n')
+    schema = bound_slate_schema(previous, failed_position,
+                                decision_positions=public_context['decision_map'])
+    prompt = (SLATE_PROMPT + '\nDiagnostic failed position: ' + str(failed_position)
+              + '. This is not an exclusive edit boundary. Allowed observed positions: '
+              + json_positions(schema) + '. Preserve hints at passing_positions verbatim. '
+              + 'Use [] to stop if no grounded hint can help.\n')
     if proposal_feedback is not None:
         # Never put hint-audit private matches or exception text in feedback.
         if (set(proposal_feedback) != {"rejected_proposals", "reason"}

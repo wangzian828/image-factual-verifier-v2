@@ -58,6 +58,9 @@ async def run(args):
         identity["task_source_selection"] = task_source_selection
     if getattr(args, "repair_mode", "feedback") != "feedback":
         identity["repair_mode"] = args.repair_mode
+    if getattr(args, "repair_mode", "feedback") == "slate":
+        # A terminal old search must not bypass the child protocol identity check.
+        identity["slate_position_policy"] = "observed-decisions-not-localizer-lock-v1"
     # Keep the default identity byte-compatible with the immutable historical
     # canary; only bind fields that change its execution/materialization policy.
     if proposal_rounds != 12:
