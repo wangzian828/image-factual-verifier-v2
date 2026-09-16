@@ -1,5 +1,15 @@
 # PSD 后续执行授权与交接
 
+## 2026-09-16 11:42 真实runtime和32条源checker均通过技术验收
+
+- `runtime-acceptance-v5.json`：固定4图×8=32槽，448个原生决策捕获完整，59次感知/OCR均cache_hit=false；546个网关请求中536响应和10个保留的感知辅助HTTP中断，422个required调用原始数组均为单调用，最大输出2926token，无截断。runtime gate通过，full PSD gate仍未通过。
+- 源checker首次32条完成，29个有效判定、3个非逐字引用被拒绝：一例将原文70年错引为10年，另两例把概述作为逐字引用。没有放松literal校验或丢弃这些轨迹。
+- `psd_source_review.py`新增**每个无效引用结果最多一次纠错**，两次原始响应和各自packet/prompt/schema/response哈希均保留；只有首轮因非逐字引用无效时允许纠错，已有效的pass/fail/unresolved都不得重采。接受首个完整有效判定，不偏向pass；第二次仍无效则保持pending，恢复也不产生第三次请求。纠错只在私有checker内，不向Agent/proposer传递任何gold或私有解释。
+- 实际三条纠错全部通过：原两个fail仍为fail，原一个pass仍为pass。最终源判定 **12 pass、20 fail、0 unresolved、0 pending**。这是训练源任务验收而非测试指标；20条失败是修复来源，按原分组规则每任务选最长失败源，不代表重跑20×6。
+- 当前控制器：`/volume/ybo/wza/training-artifacts/psd-epoch3-repair-20260916-v6/resume_psd_epoch3_canary.py`（PID1037237仅作线索，以process/state/log核验）。它复用同一个`RUN/psd-round-v5`输出，保留29个有效review和全部32个原响应，新的CODE快照只替换源checker纠错模块。v5控制器已完成并暂停，勿重启或新采源轨迹。
+- 当前继续后处理和多位置修复；仍使用`--defer-topk`，没有正式GPU优化。后续GPU top20、真实更新/最长target、native完整保存恢复和400×8全量目标/五epoch训练仍须完成。
+- 本地100项定向测试通过；最新v6远端既有完整training/tests **389项通过**。原三epoch导出和完整checkpoint未改，新增训练恢复探针仍待真实GPU执行。
+
 ## 2026-09-16 11:27 固定32槽已完成
 
 32/32轨迹完成且无顶层错误，`strict-audit-v4.json`通过。审核脚本起初只把`perceive_scene`识别为辅助VLM请求，实际还有冻结的裁剪、关系、异常检测、参考图比较工具；辅助调用同样使用该本地端点，但不是需要policy logprobs的Agent决策。因此v4审计停止，尚未调源checker或启动repair，没有重采任何槽。

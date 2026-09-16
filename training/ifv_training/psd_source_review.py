@@ -35,6 +35,32 @@ SCHEMA = {"type": "object", "properties": {
         "required": ["trace", "step_index", "quote"], "additionalProperties": False}}},
     "required": ["status", "explanation", "evidence"], "additionalProperties": False}
 
+CORRECTION_PROMPT = PROMPT + """
+Your previous response could not be admitted because at least one evidence
+quote was not literal at its claimed source step. The invalid previous decision
+is supplied as DATA, not ground truth. Recheck the SAME complete material and
+return one corrected decision with exact source quotes and step indices. Do not
+copy paraphrases as quotes, alter numbers, or treat private reference as observed
+evidence. Pass, fail and unresolved are equally acceptable; do not favor pass.
+This is the single allowed corrective response, not a new policy rollout.
+"""
+LITERAL_ERROR = "PSD judge evidence is not a literal observed quote"
+
+
+def _correction_packet(packet, previous):
+    return {**packet, "invalid_previous_decision": previous,
+            "validation_error": "nonliteral_source_evidence"}
+
+
+def _require_nonliteral_decision(value, packet):
+    try:
+        _validate_decision(value, packet)
+    except ValueError as error:
+        if str(error) == LITERAL_ERROR:
+            return
+        raise
+    raise ValueError("valid source decisions must never be resampled")
+
 
 def _packet(trace, gold, media):
     return {"source_steps": trace_steps(trace), "private_reference": gold, "media": media}
@@ -58,11 +84,26 @@ async def judge_source(client, trace, *, gold, image_path, model, cache_dir):
     packet = _packet(trace, gold, media)
     value, provenance = await _request(client, packet, prompt=PROMPT, schema=SCHEMA,
         model=model, images=images, cache_dir=cache_dir)
+    attempts = []
+    try:
+        _validate_decision(value, packet)
+    except ValueError as error:
+        if str(error) != LITERAL_ERROR:
+            raise
+        attempts.append({"decision": value, "provenance": provenance})
+        value, provenance = await _request(client, _correction_packet(packet, value),
+            prompt=CORRECTION_PROMPT, schema=SCHEMA, model=model, images=images, cache_dir=cache_dir)
+        attempts.append({"decision": value, "provenance": provenance})
+    # Both completed responses are cached before validation. An invalid second
+    # response remains pending; resuming never generates a third response.
     _validate_decision(value, packet)
-    return {"schema_version": VERSION, "source_trace_canonical_sha256": _sha(trace),
+    result = {"schema_version": VERSION, "source_trace_canonical_sha256": _sha(trace),
         "private_reference_sha256": _sha(gold), "media": media, "decision": value,
         "verifier": {"kind": "task", "name": "gemini-psd-source", "version": VERSION, "model": model},
         "provenance": provenance}
+    if attempts:
+        result["source_review_attempts"] = attempts
+    return result
 
 
 def validate_source_review(artifact, *, trace, gold=None):
@@ -79,20 +120,33 @@ def validate_source_review(artifact, *, trace, gold=None):
     if (not trace.get("state", {}).get("runtime_case", {}).get("image_sha256")
             or media.get("task_image_sha256") != trace["state"]["runtime_case"]["image_sha256"]):
         raise ValueError("PSD source review task image binding mismatch")
-    binding = artifact.get("provenance", {}).get("request_binding", {})
     if (verifier.get("name") != "gemini-psd-source" or verifier.get("kind") != "task"
-            or verifier.get("version") != VERSION or not verifier.get("model")
-            or binding.get("model") != verifier["model"]
-            or binding.get("prompt_sha256") != _sha(PROMPT)
-            or binding.get("schema_sha256") != _sha(SCHEMA)):
+            or verifier.get("version") != VERSION or not verifier.get("model")):
         raise ValueError("PSD source reviewer identity mismatch")
-    if not artifact.get("provenance", {}).get("response_sha256"):
-        raise ValueError("PSD source review response binding missing")
     packet = _packet(trace, gold, media)
     if gold is not None:
         if artifact.get("private_reference_sha256") != _sha(gold):
             raise ValueError("PSD source private reference changed after review")
-        if binding.get("packet_sha256") != _sha(packet):
+    attempts = artifact.get("source_review_attempts")
+    if attempts is None:
+        checks = [(artifact.get("provenance", {}), packet, PROMPT)]
+    else:
+        if (not isinstance(attempts, list) or len(attempts) != 2
+                or any(not isinstance(row, dict) or set(row) != {"decision", "provenance"} for row in attempts)
+                or attempts[-1]["decision"] != artifact["decision"]
+                or attempts[-1]["provenance"] != artifact["provenance"]):
+            raise ValueError("invalid bounded source-review correction chain")
+        _require_nonliteral_decision(attempts[0]["decision"], packet)
+        checks = [(attempts[0]["provenance"], packet, PROMPT),
+                  (attempts[1]["provenance"], _correction_packet(packet, attempts[0]["decision"]), CORRECTION_PROMPT)]
+    for provenance, request_packet, prompt in checks:
+        binding = provenance.get("request_binding", {})
+        if (binding.get("model") != verifier["model"] or binding.get("prompt_sha256") != _sha(prompt)
+                or binding.get("schema_sha256") != _sha(SCHEMA)):
+            raise ValueError("PSD source reviewer identity mismatch")
+        if not provenance.get("response_sha256"):
+            raise ValueError("PSD source review response binding missing")
+        if gold is not None and binding.get("packet_sha256") != _sha(request_packet):
             raise ValueError("PSD source review packet binding mismatch")
     _validate_decision(artifact.get("decision"), packet)
     return artifact["decision"]["status"]

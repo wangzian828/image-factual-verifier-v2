@@ -44,6 +44,41 @@ class Client:
         return {"status": "completed", "outputs": [{"type": "text", "text": json.dumps(self.decision)}]}
 
 
+def test_corrective_review_accepts_first_valid_fail_and_is_cached(tmp_path, monkeypatch):
+    trace, gold = source_trace(), {"case_id": "a", "factual_status": "supported"}
+    expected = artifact(trace, status="fail", gold=gold)
+    monkeypatch.setattr(source, "review_images", lambda *a, **kw: ([], expected["media"]))
+    invalid = {**expected["decision"], "status": "pass", "evidence": [
+        {"trace": "source", "step_index": 0, "quote": "fabricated quotation"}]}
+    class SequenceClient(Client):
+        async def create(self, **kwargs):
+            self.decision = invalid if self.calls == 0 else expected["decision"]
+            return await super().create(**kwargs)
+    client = SequenceClient(None)
+    args = dict(gold=gold, image_path=tmp_path / "unused", model="test", cache_dir=tmp_path / "cache")
+    value = asyncio.run(source.judge_source(client, trace, **args))
+    assert source.validate_source_review(value, trace=trace, gold=gold) == "fail"
+    assert len(value["source_review_attempts"]) == 2 and client.calls == 2
+    assert asyncio.run(source.judge_source(client, trace, **args)) == value
+    assert client.calls == 2 and len(list((tmp_path / "cache").glob('*.json'))) == 2
+    value['source_review_attempts'][0]['decision'] = expected['decision']
+    with pytest.raises(ValueError, match='never be resampled'):
+        source.validate_source_review(value, trace=trace, gold=gold)
+
+
+def test_corrective_review_stops_after_one_invalid_correction(tmp_path, monkeypatch):
+    trace, gold = source_trace(), {"case_id": "a", "factual_status": "supported"}
+    expected = artifact(trace, gold=gold)
+    monkeypatch.setattr(source, "review_images", lambda *a, **kw: ([], expected["media"]))
+    invalid = {**expected['decision'], 'evidence': [{'trace': 'source', 'step_index': 0, 'quote': 'not observed'}]}
+    client = Client(invalid)
+    args = dict(gold=gold, image_path=tmp_path / 'unused', model='test', cache_dir=tmp_path / 'cache')
+    for _ in range(2):
+        with pytest.raises(ValueError, match='literal observed quote'):
+            asyncio.run(source.judge_source(client, trace, **args))
+    assert client.calls == 2
+
+
 @pytest.mark.parametrize("status", ["pass", "fail", "unresolved"])
 def test_bound_source_review_and_cached_decision(tmp_path, monkeypatch, status):
     trace, gold = source_trace(), {"case_id": "a", "factual_status": "supported"}
