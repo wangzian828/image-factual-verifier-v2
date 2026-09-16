@@ -1,5 +1,6 @@
 """Test an immutable collector recovery snapshot; never launch production here."""
 import hashlib
+import argparse
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,16 @@ FILES = {
 
 
 def main():
+    global OUT, BASE, FILES
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--storage-cache', action='store_true')
+    args = parser.parse_args()
+    if args.storage_cache:
+        OUT = ROOT / 'training-artifacts/psd-storage-reader-20260917-v31'
+        BASE = ROOT / 'training-artifacts/psd-service-recovery-20260917-v30/code'
+        FILES = {'training/ifv_training': ['psd_repair_storage.py'],
+                 'training/tests': ['test_psd_storage_compaction.py'],
+                 'scripts/server': ['compact_psd_completed_storage.py']}
     os.umask(0o077)
     code = OUT / 'code'
     if code.exists():

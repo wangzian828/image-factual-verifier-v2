@@ -1,5 +1,31 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 02:01 存储读取版本更新（不要热改采集进程）
+
+- v3仍由**原v30 controller/PID1225918**持续采集；一次观测201/3200、3普通错误、
+  0待解基础设施槽。当前run新增2次模型超时按预算重试，尚无新增NaN。
+  四卡服务/guard正常。未开始checker或optimizer。
+- 01:51作业约11.3GiB，原样保存的增长有撞128GiB准入上限风险。发现完整native trace与
+  canonical trace字节相同，却各占空间；结果缓存又保存一整份相同payload。
+  共享df仍不是个人配额，机器没有quota/mmlsquota工具，不抬高准入上限掩盖问题。
+- 后续**读取、审核、恢复、目标构建必须用**
+  `/volume/ybo/wza/training-artifacts/psd-storage-reader-20260917-v31/code`或其后继，
+  **514项服务器回归通过**，冻结Agent src未动。v31包含v30全部功能，并使`load_bound`
+  支持`ifv-psd-bound-gzip-v1`结果缓存。不要用v30重新启动/恢复已经压缩的run。
+- 独立`compact_psd_completed_storage.py --follow`只处理v3内**已完成且加锁**的槽：
+  canonical与native trace在SHA与原字节核对后改为硬链接，路径/内容不变；原`result.json`
+  的完整字节保存在同槽`result-original-<SHA>.json.gz`，原路径成为带SHA/长度/identity/
+  payload哈希的小索引。新loader解压验证后返回完全相同的payload，测试确认不会重采。
+  不压缩/删除images、events、contexts、snapshots；不碰v1/v2/旧权重，也不改活动CODE30。
+  gzip不是只存摘要；如需要回退旧reader，可从该gzip无损恢复原result.json字节。
+- 独立进程receipt为`RUN/storage-compaction-process.json`（初始PID1233239仅线索），
+  日志`storage-compaction-controller.log`，每轮结果`storage-compaction/*.json`及
+  `storage-compaction-latest.json`；每300秒继续处理新完成槽，采集结束/离开采集阶段后退出。
+  读取要求写在`storage-reader-requirement.json`。不重复启动，不与新run混用。
+- 活动collector只对未完成槽生成、返回后不再读取该槽cache，最终采集统计只查cache存在及
+  retry-state；所以无需热改或打断它。后续新阶段由接续任务明确改用v31。
+  原始结果全部可恢复，实际节省以每轮receipt为准，不以逻辑文件大小冒充物理占用。
+
 ## 最新接续：2026-09-17 01:07，服务恢复后补四槽
 
 本节覆盖下文 v2 在途快照；优化器仍 0 step，不把采集称为训练。

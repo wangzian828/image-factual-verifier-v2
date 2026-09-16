@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
+import gzip
+import hashlib
+import json
 
 from .io import load_json
 from .psd_gemini_judge import _atomic_json
@@ -15,6 +18,24 @@ def save_bound(path: Path, *, identity, payload):
 
 def load_bound(path: Path, *, identity):
     saved = load_json(path)
+    if saved.get('schema_version') == 'ifv-psd-bound-gzip-v1':
+        name = saved.get('archive', '')
+        size = saved.get('uncompressed_bytes')
+        if (not name or Path(name).name != name or not name.endswith('.json.gz')
+                or type(size) is not int or not 0 < size <= 1024**3):
+            raise ValueError('Invalid compressed PSD cache reference')
+        archive = path.parent/name
+        if archive.is_symlink() or archive.resolve().parent != path.resolve().parent:
+            raise ValueError('Compressed PSD cache escaped its slot')
+        with gzip.open(archive, 'rb') as stream:
+            raw = stream.read(size+1)
+        if len(raw) != size or hashlib.sha256(raw).hexdigest() != saved.get('uncompressed_sha256'):
+            raise ValueError('Compressed PSD cache bytes changed')
+        original = json.loads(raw)
+        if (saved.get('identity') != original.get('identity')
+                or saved.get('payload_sha256') != original.get('payload_sha256')):
+            raise ValueError('Compressed PSD cache binding changed')
+        saved = original
     if saved.get("identity") != identity or saved.get("payload_sha256") != _sha(saved.get("payload")):
         raise ValueError("PSD continuation checkpoint binding changed")
     return saved["payload"]
