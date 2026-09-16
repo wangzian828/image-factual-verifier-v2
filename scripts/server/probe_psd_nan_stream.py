@@ -41,10 +41,10 @@ def invalid_logprobs(payload):
     return bad
 
 
-async def reconstruct():
+async def reconstruct(archive=ARCHIVE, request_id='req-000006'):
     from src.orchestrator.runtime_events import reconstruct_archived_request
     from src.orchestrator.llm_backend import APIBackend
-    request = reconstruct_archived_request(ARCHIVE, 'req-000006')
+    request = reconstruct_archived_request(archive, request_id)
     body = {}
 
     class Captured(BaseException):
@@ -72,16 +72,17 @@ async def reconstruct():
     return body
 
 
-async def execute(out, gpu):
+async def execute(out, gpu, *, archive=ARCHIVE, request_id='req-000006'):
     import httpx
     from tokenizers import Tokenizer
-    body = await reconstruct()
+    body = await reconstruct(archive, request_id)
     raw = json.dumps(body, ensure_ascii=False).encode()
     with gzip.open(out / 'request.json.gz', 'wb') as file:
         file.write(raw)
     model = ROOT / 'exports/h20-sft-merged4872-3epoch-step3084-20260915/model'
     end = Tokenizer.from_file(str(model / 'tokenizer.json')).token_to_id('</think>')
     result = {'not_training_target': True, 'request_sha256': hashlib.sha256(raw).hexdigest(),
+              'source_archive': str(archive), 'source_request_id': request_id,
               'semantic_request_sha256': hashlib.sha256(json.dumps({k:v for k,v in body.items() if k!='cache_salt'},sort_keys=True,ensure_ascii=False).encode()).hexdigest(),
               'stream_only_diagnostic': True, 'archive_reconstruction_not_exact_wire': True,
               'gpu': gpu, 'tokens': 0, 'zero_tokens': 0, 'think_closures': [], 'bytes': 0,

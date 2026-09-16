@@ -55,3 +55,25 @@ def test_execution_matrix_rejects_accidentally_equivalent_modes(gpu):
     validate_mode(gpu,command)
     with pytest.raises(AssertionError):
         validate_mode(gpu,command+['--enforce-eager'] if gpu!=3 else command[:-1])
+
+
+def test_candidate_promotion_preserves_non_execution_arguments():
+    from scripts.server.promote_psd_execution_candidate import candidate_command,ROOT
+    import json
+    base=['python','vllm','serve',str(ROOT/'exports/h20-sft-merged4872-3epoch-step3084-20260915/model'),
+        '--max-model-len','131072','--mm-processor-cache-gb','0','--port','19002']
+    eager=base+['--enforce-eager']
+    decoded=candidate_command(eager,'decode')
+    assert decoded[:-2]==base
+    assert json.loads(decoded[-1])=={'mode':0,'cudagraph_mode':'FULL_DECODE_ONLY'}
+    assert candidate_command(decoded,'eager')==eager
+
+
+def test_candidate_promotion_rejects_a_failed_diagnostic():
+    from scripts.server.promote_psd_execution_candidate import gate
+    class Fake:
+        def load(self,path):
+            rows=[{'gpu':2,'status':'completed','finish_reason':'tool_calls'} for _ in range(50)]
+            rows[0]={'gpu':2,'status':'invalid_logprob_detected'}
+            return {'completed':200,'results':rows}
+    with pytest.raises(AssertionError):gate(Fake(),'decode')
