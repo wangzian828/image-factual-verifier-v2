@@ -3,6 +3,20 @@
 本记录取代 v13 的“把 schema 也限制到 failed_position”部署方案。v13 不应上线。
 用户核对原方法后明确要求纠正。原三轮 SFT 参数、完整 checkpoint、源轨迹、旧修复结果均保留。
 
+## 16:52 持续现场处理（优先于下方定时方案）
+
+用户明确不再依赖定时检查，要求当前任务持续排查到 PSD 可以完整启动。
+因此原自动化 `gemini-3-1-pro-agent` 已设为 **PAUSED**，没有另建定时器；以下每 15 分钟/恢复每小时安排已经被本次指令取代。
+
+- 已缓存完整调查的续跑完成了两轮审核（均因提示给具体文字读法而拒绝），第 3 个提案的实际调查又在 req-000006 触发同一种 vLLM NaN。该 controller 已退出，原审核及完整调查仍保留，不盲重启。
+- `probe_psd_nan_stream.py` 只对原 `main-08596` 失败请求的存档重建作流式诊断，不执行返回工具，不作为训练目标。存档有规范化，**不是原始 wire 字节精确重放**；图片、材料、思考/输出预算和工具配置保留。发现无效概率时立即结束诊断连接，不将 null/NaN 置零后接纳。
+- 单次 GPU2 请求正常；随后 `probe_psd_nan_sweep.py` 的固定 8 请求、总并发 4、GPU2/3 各两个请求的两波诊断，**7 正常、1 在第一个 token 即返回 token0 与全部 null logprob**，尚未到 8192 思考边界。失败产物完整保留在 `SERVICE/nan-stream-sweep-v1/wave1-gpu3-copy0`。
+- 该结果说明单次短 smoke 不足以排除间歇性故障，且故障能在思考关闭或工具 JSON 解码前出现。还不能据此宣称具体内核根因已定位。
+- `psd_eager_diagnostic.py` 核验原进程身份并排空后，仅把 GPU3 加上 `--enforce-eager` 作对照，其他三卡/原 SFT 权重/Agent/128K/多图/top20/budget 不变。原 receipt 保留在 `SERVICE/eager-diagnostic-gpu3-v1/before.json`，当前 GPU3 receipt 仍读 `SERVICE/replica-3.json`。初始化成功后正在进行 32 请求的 GPU2 原配置 vs GPU3 eager 对照，结果在 `SERVICE/nan-stream-eager-ab-v1`，不得提前宣称修复成功。
+- 新诊断检测与限定单卡配置变更 6 项测试通过；与先前恢复测试合计 11 项通过。仍需后续真实完整 repair、9B GPU 更新及保存恢复验证。
+
+16:54 对照续记：32 次全部完成，GPU2 原编译配置 16 次中 1 次首 token 概率异常；GPU3 eager 16 次暂未复现。eager 首波有约 73–77 秒冷启动，其后这些固定请求约 5–11 秒，原配置约 4–6 秒。不能把这组小样当作完整 Agent 耗时估计或永久无故障证明。正在 GPU2 单独验证 `compilation_config={mode:0,cudagraph_mode:FULL_DECODE_ONLY}`，保留 decode graph 但关闭 Inductor/prefill graph，GPU3 eager 作对照；该组合由安装版本配置代码确认支持，不升级 vLLM、不改模型语义。输出 `SERVICE/no-compile-decode-graph-gpu2-v1`；GPU0/1仍原配置，未因暂时通过就统一替换。
+
 ## 16:28 后续：持续监控与复用完整调查
 
 现有 `H20训练与评测流水线监控` 已临时改为 **每 15 分钟**，不是另建重复任务。
