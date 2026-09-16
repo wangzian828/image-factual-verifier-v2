@@ -25,6 +25,24 @@ SLATE_SCHEMA = {"type": "object", "properties": {"hints": {"type": "array", "ite
     "required": ["hints"], "additionalProperties": False}
 
 
+def bound_slate_schema(previous, failed_position):
+    """Constrain the provider to the same public positions the validator accepts.
+
+    Without this, a long trace can distract the proposer into editing another
+    position and consume the entire proposal budget before any repair runs.
+    This does not relax localization or expose private checker explanations.
+    """
+    from src.orchestrator.react_runtime import MAX_REACT_ACTIONS
+    positions = [*previous, failed_position]
+    if any(type(p) is not int or not 0 <= p <= MAX_REACT_ACTIONS for p in positions):
+        raise ValueError('invalid public PSD slate positions')
+    schema = copy.deepcopy(SLATE_SCHEMA)
+    hints = schema['properties']['hints']
+    hints['items']['properties']['position']['enum'] = sorted(set(positions))
+    hints['maxItems'] = len(set(positions))
+    return schema
+
+
 def tokenizer_request(request, *, model, messages=None):
     """Use the same serving chat template/tools/MM processor as the teacher."""
     config = request.get("generation_config", {})
@@ -201,6 +219,13 @@ async def propose_slate(client, *, public_context, previous, passing_positions,
     _assert_public_context(public_context)
     packet = {"trace": public_context, "previous_hints": previous,
         "passing_positions": passing_positions, "failed_position": failed_position}
+    schema = bound_slate_schema(previous, failed_position)
+    # Put the mechanical revision constraint immediately BEFORE the long trace.
+    # The verifier still checks verbatim preservation and procedurality afterward.
+    prompt = (SLATE_PROMPT + '\nFor this request, change only position '
+              + str(failed_position) + '. Retain every existing hint at other positions '
+              + 'verbatim. Allowed output positions: '
+              + json_positions(schema) + '. Use [] if no grounded hint can help.\n')
     if proposal_feedback is not None:
         # Never put hint-audit private matches or exception text in feedback.
         if (set(proposal_feedback) != {"rejected_proposals", "reason"}
@@ -209,7 +234,7 @@ async def propose_slate(client, *, public_context, previous, passing_positions,
                 or proposal_feedback["reason"] != "invalid_or_nonprocedural_slate"):
             raise ValueError("invalid public proposal feedback")
         packet["proposal_feedback"] = dict(proposal_feedback)
-    value, provenance = await _request(client, packet, prompt=SLATE_PROMPT, schema=SLATE_SCHEMA,
+    value, provenance = await _request(client, packet, prompt=prompt, schema=schema,
         model=model, images=images, cache_dir=cache_dir)
     try:
         result = _parse_slate(value, packet=packet, previous=previous, passing_positions=passing_positions,
@@ -217,6 +242,11 @@ async def propose_slate(client, *, public_context, previous, passing_positions,
     except ValueError as error:
         raise SlateProposalRejected(provenance) from error
     return result, provenance
+
+
+def json_positions(schema):
+    import json
+    return json.dumps(schema['properties']['hints']['items']['properties']['position']['enum'])
 
 
 REVIEW_PROMPT = """You are a private PSD full-episode verifier, not a hint writer.

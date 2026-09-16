@@ -1,5 +1,22 @@
 # PSD 后续执行授权与交接
 
+## 2026-09-16 14:50 修复位置约束与新异常（优先于下方历史）
+
+用户要求持续完成所有里程碑；400×8、epoch3起点、五优化epoch和原权重保护均不变。当前仍在真实repair验收，**GPU优化0 step，3200槽尚未开始**。
+
+- v12三任务已结束，`search/progress.json=paused_search_requires_resume`，不是仍在运行。两个任务提案预算耗尽（分别0、2次完整rerun），另一个本地HTTP400暂停，0合格repair。32源及15pass/17fail审核不重采，v12所有产物保留。
+- 只读重放已缓存的28份被拒提案：25份因修改了非指定位置被拒，3份因提示泄漏边界被拒。`main-05485`指定位置21，但12份提案都改其他位置。原schema允许任意整数位置，只有事后validator拦截，导致在长上下文下浪费全部提案预算。
+- 新`bound_slate_schema`将可输出位置限定为原提示位置加当前失败位置，并在材料前明确本轮允许修改的位置。原逐字保留、方法性、完整任务checker和精确token/MM校验不放松，空提示仍允许。`continuation_policy_version`升为v5，不把新协议热接进旧绑定结果。
+- 独立候选部署`/volume/ybo/wza/training-artifacts/psd-position-audit-20260916-v13/code`；**419项目标环境回归通过**（411训练侧+8朋友调度），冻结`src`逐文件hash相同。`state.json=deployment_ready_not_live`，尚未新跑完整repair，不把单测当验收。
+- `main-08596`的v12异常已由runtime事件和backend1日志交叉确认：req-000006返回`Out of range float values are not JSON compliant: nan`。发生在本地vLLM响应JSON序列化阶段，不是外部Gemini503，也不是PSD训练loss。NaN产生于模型、约束mask还是logprob计算仍需实际隔离；不得把NaN置零、关掉所需top20或仅换成null放行。已读上游[非连续logits相关案例](https://github.com/vllm-project/vllm/issues/42684)，其processed-logprobs路径不同，**不能直接认定本例同因或盲套补丁**。
+- 四卡epoch3服务和闲时真实计算guard仍存活，未重启/改参数；原三轮SFT/fullstate不动。
+
+下一步：隔离定位NaN→以新位置约束协议做有预算真实repair验证（新目录、保留旧失败、不按结果重采源）→同策略top20/多图精确目标→真实9B更新及两步native全状态恢复→400×8完整目标→五epoch优化→获批评测。无法通过的门槛如实报告，不用纯preservation冒充完整PSD。
+
+“每题最长失败源”的出处是上游固定提交[`pilot_arms.py` L61–83](https://github.com/essamsleiman/psd/blob/778be78bdac582b51a975ff819046583aad383e0/experiments/bfcl/repair/pilot_arms.py#L61-L83)：未指定rollout index时按`max(failed, key=lambda r:r['n_steps'])`。这是实现默认启发式，不是最长token、论文定理或删除其他数据。我们当前按`all_steps`记录数映射；本次三个任务另用native决策数排序，所选episode均相同（raw/native分别40/20、45/23、39/20）。不能据此宣称两种步数定义对未来所有任务完全等价；源银行全部保留，成功轨迹单独构造preservation。
+
+朋友实验新增Pro与失败补跑见[独立执行记录](friend-generation-campaign-20260916.md)，不混入IFV测试指标。既有小时任务负责继续推进，而非只报状态。
+
 ## 2026-09-16 14:03 全链路审计更新（优先于下方历史）
 
 14:11续记：缓存恢复完成，16/16重复双图请求成功；92项服务/真实tokenizer测试与405项训练测试均通过。新版source checker32/32完成（15pass/17fail），独立派生源银行构建通过且原源文件hash未变。当前唯一完整修复入口为部署下`run_psd_corrected_contract_gate.py`，输出原采集根`psd-corrected-contract-v12`；process/state/run.log/search/progress.json为实况，启动PID1060473仅线索。**不恢复旧v10**。当前仍固定32源验收、没有400×8采样或GPU优化；小时监控已更新。
