@@ -1,5 +1,13 @@
 # 无感知缓存 PSD 小样验收（2026-09-16 07:39 巡检）
 
+## 10:20最终小样验收：单工具解码修复通过，完整PSD尚未验收
+
+`/volume/ybo/wza/runs/psd-single-tool4x2-20260916`已结束：固定4图×2的8条完整真实Agent全部产出报告、0顶层错误；226.29–510.83秒/条，均值406.664秒。这不是正式每图8槽的source bank，未改正式采样预算，也未开始PSD优化器训练。
+
+独立终检入口`finalize_psd_single_tool.py`保存同目录`runtime-acceptance.json`：8/8 strict audit通过；保留2条PROTOCOL_CORRECTION警告（同一轨迹的重复text_search及check_consistency被原runtime拒绝后继续），不声称零警告。14次perception/OCR均cache_hit=false，冻结src全部SHA匹配。155个wire request/response逐字SHA核验齐全，120个tool_calls、35个stop、0length、0归档失败；所有120个required原始token序列解码出的数组长度均为1，不仅是API字段为1。最长输出3,177tokens，最晚think闭合位620；网关在途归零。
+
+结论严格限定为**该单工具serving修复通过真实小样**；`runtime_gate_passed=true`、`full_psd_gate_passed=false`。下一阶段仍需4×8采集/source checker、多位置repair、精确去提示target/top20及GPU loss/梯度/native保存恢复；不把8条报告通过冒充全部PSD流程完成。主修复已从本地提交并推送`c82a551`，原GPU2对照、旧权重/全状态checkpoint/失败记录均保留。
+
 ## 09:52更新：真实原始响应已保留，仍有两条生成失败
 
 ### 10:10：复现工具数组循环，隔离候选已通过精确请求对照

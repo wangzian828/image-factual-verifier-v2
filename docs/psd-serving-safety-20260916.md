@@ -1,5 +1,7 @@
 # PSD 隔离推理安全候选（2026-09-16）
 
+**10:20验收更新：** 单工具候选的4图×2完整Agent已8/8成功并严格审计通过（2条原runtime重复调用纠正警告保留）；155响应完整，120个required原始生成数组全部长度1，0length，最长输出3,177tokens、最晚think结束620。14次感知/OCR无缓存命中。`/runs/psd-single-tool4x2-20260916/runtime-acceptance.json`仅放行该runtime修复，不等于完整PSD的checker、targets、top20或训练保存恢复已通过。详见[最终小样验收](psd-cache-free-canary-20260916.md)。
+
 **10:10候选修复：** 原服务required路径会生成无限长度工具数组，parallel_tool_calls=false仅在返回阶段截断。已用真实失败请求8并发复现（think第459token结束后工具数组循环至32768）；新增可选single-tool parser在解码schema上落实maxItems=1，不修改Agent或工具参数schema。GPU1候选8并发精确回放8/8正常，GPU2原服务保留；完整轨迹仍须验收，不能把短回放称作完整PSD通过。详见[根因与实测](psd-cache-free-canary-20260916.md)。
 
 **09:52更新：** 已补隔离网关原始请求/响应留存并完成新4×2真实Agent诊断，6成功、2 length；两条失败思考很短但无最终工具调用。旧重建回放的`tool_choice=auto`与实际失败`required`不等价，正在用精确wire与token IDs对照。仍未放行完整PSD，详见[最新诊断](psd-cache-free-canary-20260916.md)。
