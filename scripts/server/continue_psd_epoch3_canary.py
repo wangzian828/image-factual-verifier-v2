@@ -18,13 +18,13 @@ import time
 from types import SimpleNamespace
 
 ROOT=Path('/volume/ybo/wza')
-PREVIOUS=ROOT/'training-artifacts/psd-epoch3-repair-20260916-v3'
-DEPLOY=ROOT/'training-artifacts/psd-epoch3-repair-20260916-v4'
+PREVIOUS=ROOT/'training-artifacts/psd-epoch3-repair-20260916-v4'
+DEPLOY=ROOT/'training-artifacts/psd-epoch3-repair-20260916-v5'
 CODE=DEPLOY/'code'
 CAPTURE=ROOT/'training-artifacts/psd-epoch3-capture-20260916-v2'
 RUN=ROOT/'runs/psd-sft3084-captured-canary4x8-20260916'
 SERVICE=ROOT/'inference/psd-sft3084-20260916'
-OUT=RUN/'psd-round-v4'
+OUT=RUN/'psd-round-v5'
 
 
 def owner():
@@ -49,7 +49,7 @@ def audit():
     paths=sorted((RUN/'episodes/traces').glob('*.json'));assert len(paths)==32
     report=_json_summary([audit_trace(p,source_access_policy=SourceAccessPolicy.load(Path(b['source_access_policy'])))
         for p in paths],strict_scheduler=True)
-    o.save(RUN/'strict-audit-v4.json',report);assert report['passed']
+    o.save(RUN/'strict-audit-v5.json',report);assert report['passed']
     counts=Counter();cache=Counter();capture_count=0
     for p in paths:
         trace=o.load(p);assert not trace.get('error') and trace.get('termination')=='success'
@@ -84,9 +84,9 @@ def audit():
     result={'runtime_gate_passed':True,'full_psd_gate_passed':False,'training_started':False,
         'collection':slots,'native_captured_actions':capture_count,'perception_cache_flags':dict(cache),
         'wire':wire,
-        'binding_sha256':o.sha(RUN/'binding.json'),'strict_audit_sha256':o.sha(RUN/'strict-audit-v4.json'),
+        'binding_sha256':o.sha(RUN/'binding.json'),'strict_audit_sha256':o.sha(RUN/'strict-audit-v5.json'),
         'trace_sha256':{p.name:o.sha(p) for p in paths},'time':time.time()}
-    o.save(RUN/'runtime-acceptance-v4.json',result)
+    o.save(RUN/'runtime-acceptance-v5.json',result)
     return b
 
 
@@ -125,11 +125,12 @@ def execute():
 def launch():
     m,o=owner()
     assert not CODE.exists() and not (DEPLOY/'process.json').exists() and not OUT.exists()
-    assert o.load(PREVIOUS/'state.json')['phase']=='waiting_for_fixed32_collection'
-    assert not (RUN/'psd-round-v3').exists(),'Never interrupt active checker or repair'
-    # Replace only the idle continuation controller, not the running collector.
-    prior=o.load(PREVIOUS/'process.json');o.stop(prior)
-    o.save(PREVIOUS/'superseded.json',{'reason':'distinguish auxiliary HTTP retries from native policy failure',
+    assert o.load(PREVIOUS/'state.json')['phase']=='held_requires_inspection'
+    assert not (RUN/'psd-round-v4').exists(),'Never interrupt active checker or repair'
+    # The old auditor has already exited. Never stop or resample the collector.
+    prior=o.load(PREVIOUS/'process.json');stat=Path(f'/proc/{prior["pid"]}/stat')
+    assert not stat.exists() or stat.read_text().split(') ',1)[1][0]=='Z'
+    o.save(PREVIOUS/'superseded.json',{'reason':'bind all frozen vision JSON tools and ignore only validated cache nonce',
                                     'replacement':str(DEPLOY),'time':time.time()})
     shutil.copytree(PREVIOUS/'code',CODE,ignore=shutil.ignore_patterns('__pycache__','.pytest_cache'))
     env,checks=m.capture_environment(o);env['PYTHONPATH']=str(CODE)+':'+str(CODE/'training')

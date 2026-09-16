@@ -3,6 +3,7 @@ from collections import Counter
 import gzip
 import hashlib
 import json
+import re
 
 
 def audit_wire_archive(root, *, tokenizer, perception_prompt):
@@ -28,20 +29,38 @@ def audit_wire_archive(root, *, tokenizer, perception_prompt):
 
         request, _ = body('request')
         messages = request.get('messages', [])
-        auxiliary = bool(messages and messages[0] == {'role': 'system', 'content': perception_prompt}
+        # Frozen OpenAIVisionClient also serves crop/relation/anomaly/reference
+        # tools. Their two-message JSON/non-thinking envelope is distinct from
+        # every captured native ReAct/Judgment decision (checked in the trace).
+        auxiliary = bool(len(messages) == 2 and messages[0].get('role') == 'system'
+                         and isinstance(messages[0].get('content'), str)
+                         and messages[1].get('role') == 'user'
+                         and isinstance(messages[1].get('content'), list)
+                         and any(p.get('type') == 'image_url' for p in messages[1]['content'])
+                         and request.get('chat_template_kwargs') == {'enable_thinking': False}
+                         and request.get('response_format', {}).get('type') in ('json_schema', 'json_object')
+                         and request.get('temperature') == 0
                          and not request.get('tools') and not request.get('logprobs')
                          and not request.get('tool_choice'))
         if not auxiliary and (request.get('logprobs') is not True or request.get('top_logprobs') != 20):
             raise ValueError('Unknown or uncaptured request in policy archive')
-        digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+        # The gateway deliberately injects a fresh APC-isolation nonce. It is
+        # not model input. Ignore ONLY that validated field when matching the
+        # same generation payload; temperature/tools/images/etc. stay bound.
+        comparable = dict(request)
+        salt = comparable.pop('cache_salt', None)
+        if salt is not None and not re.fullmatch(r'ifv-psd-isolated-[0-9a-f]{32}', salt):
+            raise ValueError('Unknown cache isolation nonce')
+        digest = hashlib.sha256(json.dumps(comparable, sort_keys=True).encode()).hexdigest()
         counts['requests'] += 1
         error_path = ticket / 'error.json'
         if error_path.exists():
             error = json.loads(error_path.read_text())
-            if (not auxiliary or error.get('kind') != 'request_cancelled_or_transport_failed'
+            if (not auxiliary or messages[0]['content'] != perception_prompt
+                    or error.get('kind') != 'request_cancelled_or_transport_failed'
                     or (ticket / 'response-meta.json').exists()):
                 raise ValueError('Native policy or capture failure requires inspection')
-            auxiliary_failures.append({'ticket': ticket.name, 'request_sha256': digest,
+            auxiliary_failures.append({'ticket': ticket.name, 'request_fingerprint_without_cache_salt': digest,
                                        'error': error})
             counts['auxiliary_transport_failures'] += 1
             continue
@@ -62,9 +81,10 @@ def audit_wire_archive(root, *, tokenizer, perception_prompt):
                 counts['required_single_calls'] += 1
         counts['responses'] += 1
         if auxiliary:
+            counts['auxiliary_json_responses'] += 1
             successes.setdefault(digest, []).append(ticket.name)
     for failure in auxiliary_failures:
-        peers = successes.get(failure['request_sha256'], [])
+        peers = successes.get(failure['request_fingerprint_without_cache_salt'], [])
         if not peers:
             raise ValueError('Auxiliary failure has no successful identical request; inspect tool outcomes')
         failure['identical_request_successes'] = peers

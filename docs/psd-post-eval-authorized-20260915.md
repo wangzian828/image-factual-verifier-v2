@@ -1,5 +1,13 @@
 # PSD 后续执行授权与交接
 
+## 2026-09-16 11:27 固定32槽已完成
+
+32/32轨迹完成且无顶层错误，`strict-audit-v4.json`通过。审核脚本起初只把`perceive_scene`识别为辅助VLM请求，实际还有冻结的裁剪、关系、异常检测、参考图比较工具；辅助调用同样使用该本地端点，但不是需要policy logprobs的Agent决策。因此v4审计停止，尚未调源checker或启动repair，没有重采任何槽。
+
+继续入口已改为`/volume/ybo/wza/training-artifacts/psd-epoch3-repair-20260916-v5`（process/state/run.log），输出新RUN/`psd-round-v5`。v3/v4和所有证据保留。新审计依据冻结`OpenAIVisionClient`实际的双消息、带图片、temperature0、禁思考、JSON schema请求结构区分辅助响应；原生Agent每个决策仍须完整top20 capture。只有**确认为感知工具的已知HTTP中断**可进入逐条单独核对，其他辅助错误和所有native/capture失败仍暂停。
+
+比较重试请求只排除网关生成、格式已验证的`cache_salt=ifv-psd-isolated-<32hex>`，其他全部生成字段（模型、图片、prompt、schema、温度等）保持匹配。对应成功请求仅是旁证，不把它冒称为同一次逻辑重试。原始wire包含完整salt和哈希，不改写。此前“相同完整请求”应理解为“除隔离nonce外相同生成请求”。新增wire审核测试15项通过；正式目标构建和GPU训练仍未完成。
+
 ## 2026-09-16 11:20 实际执行更新（原始32槽诊断不混入新bank）
 
 - 用户已明确选定 **400张×8**，授权完成全部目标构建和首轮五个优化epoch；原epoch3参数及全状态checkpoint保留，PSD独立LoRA输出。

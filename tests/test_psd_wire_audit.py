@@ -75,7 +75,10 @@ def ticket(root, name, request, *, error=None, finish='stop'):
 
 
 def aux():
-    return {'messages': [{'role': 'system', 'content': 'frozen perception'}]}
+    return {'messages': [{'role': 'system', 'content': 'frozen perception'},
+                         {'role': 'user', 'content': [{'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,a'}}]}],
+            'chat_template_kwargs': {'enable_thinking': False},
+            'response_format': {'type': 'json_object'}, 'temperature': 0}
 
 
 def run(root):
@@ -108,7 +111,22 @@ def test_auxiliary_capture_error_is_not_a_transport_retry(tmp_path):
 
 def test_unknown_prompt_or_missing_success_cannot_pass(tmp_path):
     ticket(tmp_path, 'failed', aux(), error='request_cancelled_or_transport_failed')
-    with pytest.raises(ValueError, match='no successful identical'):
+    with pytest.raises(ValueError, match='Unknown|no successful identical'):
+        run(tmp_path)
+
+
+def test_auxiliary_nonperception_success_is_not_uncaptured_policy(tmp_path):
+    request = aux()
+    request['messages'][0]['content'] = 'Other frozen vision tool prompt'
+    ticket(tmp_path, 'vision', request)
+    assert run(tmp_path)['auxiliary_json_responses'] == 1
+
+
+def test_other_auxiliary_failures_still_require_inspection(tmp_path):
+    request = aux()
+    request['messages'][0]['content'] = 'Other frozen vision tool prompt'
+    ticket(tmp_path, 'vision', request, error='request_cancelled_or_transport_failed')
+    with pytest.raises(ValueError, match='policy or capture'):
         run(tmp_path)
     ticket(tmp_path, 'other', {'messages': [{'role': 'system', 'content': 'different'}]})
     with pytest.raises(ValueError, match='Unknown'):
@@ -118,3 +136,17 @@ def test_unknown_prompt_or_missing_success_cannot_pass(tmp_path):
 def test_required_policy_action_keeps_raw_single_call_check(tmp_path):
     ticket(tmp_path, 'policy', {'logprobs': True, 'top_logprobs': 20, 'tool_choice': 'required'}, finish='tool_calls')
     assert run(tmp_path)['required_single_calls'] == 1
+
+
+def test_only_validated_gateway_cache_nonce_is_excluded_from_matching(tmp_path):
+    ticket(tmp_path, 'failed', {**aux(), 'cache_salt': 'ifv-psd-isolated-' + 'a' * 32},
+           error='request_cancelled_or_transport_failed')
+    ticket(tmp_path, 'success', {**aux(), 'cache_salt': 'ifv-psd-isolated-' + 'b' * 32})
+    assert run(tmp_path)['auxiliary_transport_failures'] == 1
+
+
+def test_sampling_changes_are_not_ignored_as_cache_nonces(tmp_path):
+    ticket(tmp_path, 'failed', {**aux(), 'temperature': 0}, error='request_cancelled_or_transport_failed')
+    ticket(tmp_path, 'success', {**aux(), 'temperature': 0.7})
+    with pytest.raises(ValueError, match='Unknown|no successful identical'):
+        run(tmp_path)
