@@ -1,5 +1,41 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 最新接续状态：2026-09-17 零点巡检后的恢复
+
+以下覆盖后文首次启动的路径/状态，不重启 v1：
+
+- v1 首40最终全部落盘，其中22份正常报告、2份 unusable policy output、16份
+  **HTTP400/NaN serialization**。原 v1 controller 已在40份结果全部缓存后停止；
+  `drain-watch.json` 证明原40槽全部落盘，没有开启剩余3160槽。
+- 重试缺口不是泛指400：旧分类器遗漏了 vLLM 的精确
+  `BadRequestError/code400/Out of range float values are not JSON compliant: nan`。
+  修复版本 v2 同时在原生响应解析之前检查非有限概率；普通400、空工具动作、答案错误
+  不会仅因此重试。旧 NaN 的每份 native context error receipt 已独立核对。
+- 本地修复提交 `74cacfd` 已推送。采集使用独立不可变
+  `/volume/ybo/wza/training-artifacts/psd-numerical-recovery-20260917-v25/code`，481回归通过。
+  活动控制器是其父目录的 `run_psd_production_collection.py`。
+- **当前正式输出为 `/volume/ybo/wza/runs/psd-production400x8-20260917-v2`**，初始PID1220105
+  只作线索，查 `process.json` 及当前命令。复用原24份完整结果，16份 NaN 仅使用剩余
+  两次预算；`slot-recovery.json` 绑定所有原记录哈希，原 v1 没有被改写。
+- 恢复后一次观察32/40已落盘（含复用24），3份 unusable output、0耗尽基础设施槽；
+  余8份在运行。不能把这解释为3200完成，优化仍0step。首40通过后自动接3160，
+  仍并发40、同图/seed/生成参数，不换服务/不缩减预算。
+- 下游独立代码为
+  `/volume/ybo/wza/training-artifacts/psd-completion-admission-20260917-v27/code`，**493回归通过**。
+  v26仅因测试夹具依赖不齐而失败，保留作为历史，不使用它，也未热改活动collector。
+  修正 review/postprocess/round 对 completed_with_errors 的拒绝：仅当完整8槽覆盖、
+  每槽持久化ledger/result/canonical一致、无未解决基础设施错误时承认采集已结束；
+  原manifest及失败结果不改。已核对真实3份 unusable output 的 native错误receipt和
+  有限capture前缀，可作为待修复源；这不是preservation准入，也不是宣称根因已查明。
+  未知错误、NaN、缺轨迹仍拒绝/隔离，不用宽泛“任何RuntimeError都正常”规则。
+- source checker/repair/raw teacher/最终DP4batch32及5epoch仍在采集之后，尚未开始。
+  准备阶段使用v27，指向v2完整episodes及v2 snapshot，不能误用v1 running manifest。
+- 朋友Flash组已436/436结构成功；不重复运行这组、不将结构通过当视觉质量验收。
+  Pro组仍继续，曾观测12成功/18失败/wave0，不以这个旧快照替代最新状态。
+
+未知个人配额及128GiB新run准入上限仍保持。原v1约2.2GiB，恢复没有复制旧runtime图片树；
+新旧源结果都保留，后续按实际增长评估存储，不能用共享df当个人额度。
+
 用户已授权离开后自主推进到完整 PSD 优化训练启动。固定 400 张 × 8，
 基于三 epoch SFT step3084；不扩大到 4,000 张，不覆盖原权重。
 

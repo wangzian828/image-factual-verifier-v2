@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .io import sha256_file, write_json
+from .psd_collection import require_completed_collection
 
 
 PSD_ROLLOUT_GATE_SCHEMA_VERSION = "ifv-psd-round-rollout-gate-v1"
@@ -85,8 +86,13 @@ def verify_psd_round_rollout(
     benchmark = _mapping(run_manifest.get("benchmark"))
     checkpoint_record = _mapping(checkpoint.get("checkpoint"))
     checkpoint_sha = sha256_file(round_start_checkpoint_manifest_path)
+    try:
+        completion_check = require_completed_collection(run_dir, run_manifest)
+    except (ValueError, OSError, KeyError) as error:
+        completion_check = {'passed': False, 'native_status': run_manifest.get('status'),
+                            'reason': str(error)}
     checks: dict[str, dict[str, Any]] = {
-        "run_completed": _check(run_manifest.get("status"), "completed"),
+        "run_completed": completion_check,
         "run_id_present": {"passed": bool(_text(run_manifest.get("run_id")))},
         "run_completion_timestamp_present": {
             "passed": bool(_text(run_manifest.get("completed_at")))

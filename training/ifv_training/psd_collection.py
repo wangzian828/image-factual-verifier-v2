@@ -5,6 +5,111 @@ from types import SimpleNamespace
 from src.eval.rollout import rollout_specs
 
 
+def repairable_terminal_model_failure(trace):
+    """Recognize a recorded unusable model action, not a transport failure.
+
+    It is only a repair SEED: preservation still needs full task success. The
+    native error receipt must agree, and an intact finite captured prefix must
+    exist. This does not claim to have diagnosed the parser/model root cause.
+    """
+    import math
+    import re
+    from pathlib import Path
+    from .io import load_json
+    error = str(trace.get('error') or '')
+    if (trace.get('termination') != 'error' or not re.fullmatch(
+            r'RuntimeError: Chat Completions returned an unusable response: '
+            r'choices=1, finish_reason=(?:tool_calls|stop|length), content_chars=0, '
+            r'reasoning_chars=\d+, reasoning_fallback_requested=False', error)):
+        return None
+    state = trace.get('state', {})
+    runtime_name = state.get('runtime_store', {}).get('runtime_path')
+    if not runtime_name:
+        return None
+    receipts = [load_json(path) for path in (Path(runtime_name)/'context').glob('*.json')]
+    if not any(r.get('error') == error and r.get('status') == 'error'
+            and str(r.get('stage', '')).lower() in {'unified_react', 'unified_judgment'} for r in receipts):
+        return None
+    captures = 0
+    for step in state.get('all_steps', []):
+        metadata = step.get('metadata', {})
+        if metadata.get('deterministic_segment_boundary'):
+            continue
+        cap = metadata.get('policy_token_capture')
+        if cap is None:
+            continue
+        values = cap.get('completion_logprobs', [])
+        if (cap.get('status') != 'complete' or not values
+                or len(values) != len(cap.get('completion_token_ids', []))
+                or any(not math.isfinite(value) for value in values)):
+            return None
+        captures += 1
+    return 'unusable_policy_output_with_captured_prefix' if captures else None
+
+
+def require_completed_collection(run_dir, manifest):
+    """Finished sampling is not the same as every policy outcome succeeding.
+
+    Legacy successful banks keep their existing contract. A bank ending with
+    errors is admissible only with full published slot coverage and a durable
+    completed retry ledger/result for every slot. Per-trace candidate quality
+    gates remain independent; this does NOT admit failed traces to preservation.
+    """
+    from pathlib import Path
+    import hashlib
+    from .io import load_json, load_jsonl
+    from .psd_repair_storage import load_bound
+    status = manifest.get('status')
+    if status == 'completed':
+        recovery = manifest.get('agent', {}).get('psd_sampling', {}).get('infrastructure_retry')
+        if recovery is not None and recovery.get('unresolved'):
+            raise ValueError('Completed manifest still has unresolved infrastructure slots')
+        return {'passed': True, 'native_status': status}
+    if status != 'completed_with_errors':
+        raise ValueError('PSD source collection is not completed')
+    run_dir = Path(run_dir).resolve()
+    rows = load_jsonl(run_dir/'run_results.jsonl')
+    recovery = manifest.get('agent', {}).get('psd_sampling', {}).get('infrastructure_retry')
+    if not recovery or not rows:
+        raise ValueError('Error-bearing collection lacks durable infrastructure attestation')
+    ids = list(dict.fromkeys(row['case_id'] for row in rows))
+    verify_collection(rows, case_ids=ids, manifest=manifest, expected_rollouts=8)
+    benchmark = manifest.get('benchmark', {})
+    if benchmark.get('sample_count') != len(ids) or benchmark.get('episode_count') != len(rows):
+        raise ValueError('Error-bearing collection has incomplete declared coverage')
+    for row in rows:
+        slot = run_dir/'psd-infrastructure-attempts'/hashlib.sha256(row['episode_id'].encode()).hexdigest()
+        saved = load_json(slot/'retry-state.json')
+        identity = saved['identity']
+        state = load_bound(slot/'retry-state.json', identity=identity)
+        inputs = identity.get('inputs', {})
+        if (inputs.get('episode_id') != row['episode_id'] or inputs.get('case_id') != row['case_id']
+                or inputs.get('sampling_seed') != row['sampling_seed']
+                or inputs.get('model') != manifest['agent']['model']
+                or not state.get('attempts') or state['attempts'][-1]['status'] != 'completed'):
+            raise ValueError('Error-bearing collection contains unbound or unresolved slots')
+        result = load_bound(slot/'result.json', identity=identity)
+        trace_path = (run_dir/str(row.get('trace_path') or '')).resolve()
+        trace_path.relative_to(run_dir)
+        if not trace_path.is_file() or load_json(trace_path) != result:
+            raise ValueError('Error-bearing collection has missing or inconsistent canonical trace')
+        # Never grandfather the v1 HTTP400/NaN misclassification as a normal
+        # model failure. These old results require the explicit recovery tool.
+        prefix = 'RuntimeError: HTTP 400 Bad Request for ' + str(inputs.get('base_url', '')).rstrip('/') + '/chat/completions: '
+        error = str(result.get('error') or '')
+        if error.startswith(prefix):
+            import json
+            from .psd_infrastructure_retry import is_nonfinite_serialization_response
+            try:
+                payload = json.loads(error[len(prefix):])
+            except ValueError:
+                payload = None
+            if is_nonfinite_serialization_response(400, payload):
+                raise ValueError('Misclassified numerical failure requires infrastructure recovery')
+    return {'passed': True, 'native_status': status, 'episodes': len(rows),
+            'model_failures_retained': sum(row.get('status') == 'error' for row in rows)}
+
+
 def require_token_capture_environment(environ):
     if str(environ.get("IFV_CAPTURE_POLICY_TOKENS", "")).strip().lower() not in {"1", "true", "yes", "on"}:
         raise ValueError("PSD source collection requires native policy token/logprob capture before dispatch")

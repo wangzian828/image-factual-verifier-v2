@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "training")]
 from ifv_training.io import load_json, load_jsonl, sha256_file, write_json, write_jsonl
 from ifv_training.psd_candidates import _load_train_case_allowlist, _trace_case_id
+from ifv_training.psd_collection import require_completed_collection, repairable_terminal_model_failure
 from scripts.audit_real_trace import audit_trace
 from src.eval.postprocess_run import _trace_path
 from src.orchestrator.source_access import SourceAccessPolicy
@@ -21,7 +22,8 @@ from src.trajectory.scoring import score_process_trace
 def postprocess(*, run_dir, train_cases, private_gold, source_access_policy, source_reviews=None):
     run_dir = run_dir.resolve()
     manifest = load_json(run_dir / "run_manifest.json")
-    if manifest.get("status") != "completed" or manifest.get("benchmark", {}).get("training_prohibited"):
+    require_completed_collection(run_dir, manifest)
+    if manifest.get("benchmark", {}).get("training_prohibited"):
         raise ValueError("PSD requires a completed training-only rollout")
     allowed = _load_train_case_allowlist(train_cases)
     rows = load_jsonl(run_dir / "run_results.jsonl")
@@ -62,6 +64,7 @@ def postprocess(*, run_dir, train_cases, private_gold, source_access_policy, sou
             if _trace_case_id(trace) != case:
                 raise ValueError("PSD trace case identity mismatch")
             metrics, score = score_process_trace(trace, gold[case])
+            policy_failure = repairable_terminal_model_failure(trace)
             audit = audit_trace(path, source_access_policy=policy)
             failures = [asdict(item) for item in audit.failures(strict_scheduler=True)]
             report = {"case_id": case, "episode_id": episode, "source_trace_sha256": sha256_file(path),
@@ -73,7 +76,9 @@ def postprocess(*, run_dir, train_cases, private_gold, source_access_policy, sou
             audits.append({"episode_id": episode, "path": str(audit_path), "sha256": sha256_file(audit_path)})
             reward["source_audit"] = {"path": str(audit_path.resolve()), "sha256": sha256_file(audit_path)}
             reward.update(classification_correct=bool(metrics.get("result_correct")),
-                fatal_engineering_error=bool(metrics.get("engineering_error")),
+                fatal_engineering_error=bool(metrics.get("engineering_error")) and not bool(policy_failure),
+                source_policy_failure_kind=policy_failure,
+                legacy_process_engineering_flag=bool(metrics.get("engineering_error")),
                 strict_trace_audit_pass=not failures,
                 strict_trace_audit_failure_codes=[item["code"] for item in failures],
                 step_ids=trajectory_policy_step_ids(trace, episode_id=episode),

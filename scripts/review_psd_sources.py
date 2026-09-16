@@ -17,6 +17,7 @@ from ifv_training.psd_gemini_judge import _atomic_json
 from ifv_training.psd_repair import _sha
 from ifv_training.psd_repair_storage import load_bound, save_bound
 from ifv_training.psd_source_review import VERSION, TRACE_PROJECTION, PROMPT, SCHEMA, judge_source, validate_source_review
+from ifv_training.psd_collection import require_completed_collection
 
 
 def review_path(root, episode):
@@ -27,8 +28,8 @@ async def review_sources(*, run_dir, benchmark, train_cases, private_gold, outpu
                          model, concurrency=4, client=None):
     run_dir, output = run_dir.resolve(), output.resolve()
     manifest = load_json(run_dir / "run_manifest.json")
-    if (manifest.get("status") != "completed"
-            or manifest.get("benchmark", {}).get("training_prohibited")):
+    require_completed_collection(run_dir, manifest)
+    if manifest.get("benchmark", {}).get("training_prohibited"):
         raise ValueError("PSD source review requires completed training-only rollouts")
     public_rows, gold_rows = load_jsonl(benchmark), load_jsonl(private_gold)
     public, gold = {r["case_id"]: r for r in public_rows}, {r["case_id"]: r for r in gold_rows}
