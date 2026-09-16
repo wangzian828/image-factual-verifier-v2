@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 
 from scripts.server import qwen_replica_gateway as base
+from scripts.server.psd_wire_capture import WireCapture
 
 
 def public_alias():
@@ -94,6 +96,10 @@ def normalize_payload(payload):
     # first decoding step even with the budget disabled. Unique cache domains
     # bypass that unsafe reuse without changing images, messages, or sampling.
     parsed['cache_salt'] = 'ifv-psd-isolated-' + uuid.uuid4().hex
+    if os.environ.get('PSD_DIAGNOSTIC_RETURN_TOKEN_IDS') == '1':
+        if not os.environ.get('PSD_WIRE_CAPTURE_DIR'):
+            raise ValueError('Diagnostic token IDs require an explicit wire archive')
+        parsed['return_token_ids'] = True  # Observation only, not a sampling change.
     return json.dumps(parsed, ensure_ascii=False, separators=(',', ':')).encode()
 
 
@@ -103,6 +109,7 @@ async def lifespan(app):
     app.state.deadline = gateway
     app.state.timeout_contract = {'gateway': gateway, 'model_client': client, 'stage': stage}
     app.state.post_dispatches = 0
+    app.state.wire_capture = WireCapture.from_env()
     app.state.http = httpx.AsyncClient(
         transport=httpx.AsyncHTTPTransport(retries=0),
         timeout=httpx.Timeout(gateway, connect=10.0), trust_env=False)
@@ -121,6 +128,13 @@ async def disconnected(request):
 
 
 async def request_once(request, path, payload):
+    capture = getattr(request.app.state, 'wire_capture', None)
+    ticket = None
+    if capture is not None and request.method == 'POST' and path == 'v1/chat/completions':
+        try:
+            ticket = capture.begin(payload)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(507, 'Diagnostic capture unavailable before dispatch') from exc
     index, replica = base._acquire_replica()
     if request.method == 'POST':
         request.app.state.post_dispatches = getattr(request.app.state, 'post_dispatches', 0) + 1
@@ -134,6 +148,13 @@ async def request_once(request, path, payload):
             return_when=asyncio.FIRST_COMPLETED)
         if upstream in done:
             response = upstream.result()
+            if ticket is not None:
+                try:
+                    capture.response(ticket, response.content, status_code=response.status_code, replica=replica)
+                    response.headers['x-ifv-capture-id'] = ticket.name
+                except OSError:
+                    # Preserve generation result even when diagnostic disk writing fails.
+                    logging.exception('PSD raw response capture failed; generation response preserved')
             response.headers['x-ifv-qwen-replica'] = replica
             return response
         if watcher in done:
@@ -152,6 +173,11 @@ async def request_once(request, path, payload):
             await asyncio.gather(upstream, watcher, return_exceptions=True)
         finally:
             base._release_replica(index)
+            if ticket is not None and not (ticket/'response-meta.json').exists() and not (ticket/'error.json').exists():
+                try:
+                    capture.error(ticket, 'request_cancelled_or_transport_failed', replica=replica)
+                except OSError:
+                    logging.exception('PSD diagnostic failure receipt could not be written')
 
 
 @app.get('/health')
@@ -163,7 +189,10 @@ async def health(request: Request):
                   prefix_cache_policy='unique_salt_per_request',
                   public_model_alias=public_alias() or None,
                   tokenizer_endpoint='/tokenize',
+                  diagnostic_token_ids=os.environ.get('PSD_DIAGNOSTIC_RETURN_TOKEN_IDS') == '1',
                   post_dispatches=request.app.state.post_dispatches)
+    capture = getattr(request.app.state, 'wire_capture', None)
+    result['wire_capture'] = capture.status() if capture else {'enabled':False}
     return result
 
 

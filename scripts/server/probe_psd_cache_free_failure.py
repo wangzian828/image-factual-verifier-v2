@@ -89,7 +89,9 @@ def prepare():
     save(OUT/'request.json', body)
     save(OUT/'binding.json', {'source_archive': str(ARCHIVE), 'request_id': REQUEST_ID,
         'context_sha256': sha(ARCHIVE/'context'/f'{REQUEST_ID}.json'), 'image_count': context['image_count'],
-        'exact_original_wire_attested': False, 'purpose': 'same reconstructed context with budget on/off',
+        'exact_original_wire_attested': False, 'purpose': 'reconstructed context with budget on/off',
+        'tool_choice': 'auto', 'tool_choice_matches_original_wire': False,
+        'limitation': 'Cannot rule out required/structured-output failures; use captured-wire probes',
         'not_training_or_evaluation': True, 'backend_pid': backend['pid'], 'backend_command': args})
 
 

@@ -1,5 +1,33 @@
 # 无感知缓存 PSD 小样验收（2026-09-16 07:39 巡检）
 
+## 09:52更新：真实原始响应已保留，仍有两条生成失败
+
+### 10:10：复现工具数组循环，隔离候选已通过精确请求对照
+
+`SERVICE/exact-wire-tool-choice-v1`的4次串行对照均有调用；不能由此宣称正常。接着`exact-wire-tool-choice-concurrent-v1`固定8并发（两原请求×required/auto×两份）复现1条length：`1-required-1`在token459已经`</think>`，之后反复生成完整`finish_investigation`对象并继续数组，最终32,768tokens、0个token0、无可解析完整数组，耗时301.26秒。另一条required生成了5个工具对象，API却只返回第一个。因此这次复现不是思考超8192，也不是全token0/NaN；不要推成旧11条错误均已同因确诊。
+
+现场vLLM0.18.1源码证实：`tool_parsers/utils.py::_get_json_schema_from_tools`只设置`minItems=1`，没有上限；`entrypoints/openai/utils.py::maybe_filter_parallel_tool_calls`直到生成完成后才在`parallel_tool_calls=false`时截取第一条。若数组循环到length，required解析器会抑制完整JSON解析错误并清空content，表现就是客户端“无答案”。这是所见故障的具体机制，不是仅凭相似上游issue归因。
+
+新增可选`psd_single_tool_parser.py`继承原Qwen3CoderToolParser，只在**required且明确parallel_tool_calls=false**时给原工具数组加`maxItems=1`；名称/参数schema、prompt、images、采样温度、8192/32768及auto/named/parallel模式不变。不把正式required偷偷换成auto，也不升级或原地patch安装包。使用官方[tool parser plugin入口](https://docs.vllm.ai/en/v0.18.1/features/tool_calling/#how-to-write-a-tool-parser-plugin)。9项真实vLLM请求对象/xgrammar编译与schema测试通过。
+
+GPU1/19003以同epoch2 BF16/128K、多图、APC-off配置加载候选，原GPU2/19004保留对照。原GPU1启动receipt保存在`SERVICE/single-tool-backend-v1/backend-before.json`，新receipt在`SERVICE/replica-1.json`；guard995299只在排空切换时短暂暂停，随后恢复，没停其他后端、改权重或执行服务器Git。
+
+候选`single-tool-backend-v1/exact-wire`的8并发对照全部tool_calls，295–729tokens、46.37–52.69秒、0 token0。启动完整轨迹前还会解码原始token序列，检查每条required确实仅有1个JSON对象，而非只看经截断的API字段。该结果支持修复这一复现故障，但不代表完整PSD已验收，也不是严谨吞吐量基准。
+
+两组旧judge已于09:35收尾，不再按下方07:57快照重试；见[主表](evaluation-comparison-20260909.md)及[普通接口最终合并](judge-realtime-switch-20260915.md)。
+
+新增独立诊断`/volume/ybo/wza/runs/psd-wire-diagnostic4x2-20260916`：固定原4图各2条、共8条完整Agent（这是诊断，不是把正式每图8条采样预算改为2）。同epoch2权重、T0.7/think8192/out32768/128K、多图及工具保持。09:49结束，6条完整报告、2条length错误；6条严格结构审计通过，1条重复visit纠正警告保留。未启动source checker、top20或PSD训练，不能挑6条视为整体验收。
+
+捕获目录`/volume/ybo/wza/inference/psd-sft2056-safety-20260916/wire-diagnostic-v1/wire`保存全部131次请求/响应原文gzip与SHA，0归档失败、0未决，压缩body约146MiB。其中97个tool_calls、32个stop、2个length。两个异常分别为prompt27,575/30,395tokens，均生成满32,768tokens、content为空、tool_calls为空；返回思考仅1,487/2,096字符。由此**不能再仅归因思考过长**，也不能仅凭API解析后的响应认定NaN/token0。上下文、工具参数和图片原字节均有原始请求可查，不是事后重建。
+
+发现上一节07:54回放的明确局限：旧`probe_psd_cache_free_failure.py`重建时写死`tool_choice=auto`；新捕获的两条真实失败均为`required`。旧回放虽然保留历史/图片/采样预算，但不是该工具选择路径的等价对照。旧成功结果仍保留，不能据此排除required/结构化输出路径。
+
+下一组仅4次GPU诊断：两份精确失败请求，各required/auto一次，均加`return_token_ids=true`观测；仅auto是诊断对照，**不修改正式Agent的required策略**。图片、messages、tools、seed、T0.7、8192/32768全部不变，串行一次派发、不自动重试、不执行返回工具、无PSD目标。入口`training-artifacts/psd-serving-safety-20260916/probe_psd_exact_wire_v1.py`，输出`SERVICE/exact-wire-tool-choice-v1`；09:53已启动PID1023190（只作定位，状态应重新读真实文件）。原8条失败/成功均不重写，不与本回放混作新训练样本。
+
+新增`audit_psd_wire_capture.py`只读验证已提交receipt的解压字节及SHA、区分在途/归档失败/length/不可用response/工具参数JSON语法；不把此检查当完整tool schema、checker或PSD门槛。39项原定向回归＋4项wire audit＋5项精确请求差异测试通过；服务器38项serving/capture检查通过。
+
+另外核对上游[H20动态LoRA问题](https://github.com/vllm-project/vllm/issues/52568)和[required与投机解码问题](https://github.com/vllm-project/vllm/issues/38106)：本机是全量BF16权重且未启用动态LoRA/投机解码，不直接套用这些故障结论，也不据此升级vLLM。
+
 ## 结论：尚未通过，不能启动 400×8
 
 固定4图×8共32槽全部结束，21条有最终报告，11条顶层错误：8条`finish_reason=length`且无可用content，2条ReadTimeout，1条最终fact-check报告契约失败。所有原轨迹、错误和runtime archive保留，不挑21条当整组通过、不修改模型或Agent，也未启动checker、修复目标、top20或PSD优化器。

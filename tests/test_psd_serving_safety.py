@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import importlib
 import json
 from types import SimpleNamespace as NS
@@ -264,6 +265,79 @@ def test_gateway_success_returns_original_body(gateway):
             return httpx.Response(200, content=b'{"exact":true}')
     result = asyncio.run(gateway.request_once(Request(Http()), 'v1/chat/completions', b'{}'))
     assert result.content == b'{"exact":true}'
+    assert gateway.base._inflight == [0, 0]
+
+
+def test_wire_capture_retains_empty_length_response_without_replay(gateway, tmp_path):
+    class Http:
+        calls = 0
+
+        async def request(self, *args, **kwargs):
+            self.calls += 1
+            return httpx.Response(200, content=b'{"choices":[{"finish_reason":"length","message":{"content":null}}]}')
+
+    http = Http()
+    request = Request(http)
+    capture = gateway.WireCapture(tmp_path/'wire', min_free_bytes=0)
+    request.app.state.wire_capture = capture
+    result = asyncio.run(gateway.request_once(request, 'v1/chat/completions', b'{ "exact": 1 }'))
+    ticket = capture.root/result.headers['x-ifv-capture-id']
+    assert gzip.decompress((ticket/'request.json.gz').read_bytes()) == b'{ "exact": 1 }'
+    assert gzip.decompress((ticket/'response.json.gz').read_bytes()) == result.content
+    assert http.calls == 1 and capture.completed == 1
+    assert gateway.base._inflight == [0, 0]
+
+
+def test_diagnostic_token_ids_only_with_explicit_archive(gateway, monkeypatch):
+    body={'model':'same','messages':[{'role':'user','content':'exact'}],
+          'max_tokens':32768,'thinking_token_budget':8192,'temperature':.7}
+    monkeypatch.delenv('PSD_DIAGNOSTIC_RETURN_TOKEN_IDS',raising=False)
+    ordinary=json.loads(gateway.normalize_payload(json.dumps(body).encode()))
+    assert 'return_token_ids' not in ordinary
+    monkeypatch.setenv('PSD_DIAGNOSTIC_RETURN_TOKEN_IDS','1')
+    monkeypatch.delenv('PSD_WIRE_CAPTURE_DIR',raising=False)
+    with pytest.raises(ValueError):gateway.normalize_payload(json.dumps(body).encode())
+    monkeypatch.setenv('PSD_WIRE_CAPTURE_DIR','/volume/ybo/wza/diagnostic')
+    observed=json.loads(gateway.normalize_payload(json.dumps(body).encode()))
+    assert observed.pop('return_token_ids') is True
+    observed.pop('cache_salt');ordinary.pop('cache_salt')
+    assert observed == ordinary
+
+
+def test_wire_capture_budget_refuses_before_post(gateway, tmp_path):
+    class Http:
+        calls = 0
+
+        async def request(self, *args, **kwargs):
+            self.calls += 1
+            raise AssertionError('Must not dispatch')
+
+    http = Http()
+    request = Request(http)
+    request.app.state.wire_capture = gateway.WireCapture(tmp_path/'wire', max_bytes=1, min_free_bytes=0)
+    with pytest.raises(gateway.HTTPException) as error:
+        asyncio.run(gateway.request_once(request, 'v1/chat/completions', b'{}'))
+    assert error.value.status_code == 507 and http.calls == 0
+    assert gateway.base._inflight == [0, 0]
+
+
+def test_wire_capture_transport_failure_has_receipt(gateway, tmp_path):
+    class Http:
+        calls = 0
+
+        async def request(self, *args, **kwargs):
+            self.calls += 1
+            raise httpx.ReadTimeout('diagnostic test')
+
+    http = Http()
+    request = Request(http)
+    capture = gateway.WireCapture(tmp_path/'wire', min_free_bytes=0)
+    request.app.state.wire_capture = capture
+    with pytest.raises(gateway.HTTPException):
+        asyncio.run(gateway.request_once(request, 'v1/chat/completions', b'{}'))
+    tickets = list(capture.root.iterdir())
+    assert len(tickets) == 1 and (tickets[0]/'error.json').is_file()
+    assert http.calls == 1 and capture.failed == 1
     assert gateway.base._inflight == [0, 0]
 
 

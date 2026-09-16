@@ -1,5 +1,15 @@
 # 两组 Agent judge 切换普通接口
 
+**2026-09-16 09:35最终状态：两组已收尾。** 每组1,525有效judge＋1终态输入失败，仍按1,527分母；Qwen epoch3严格证据充分682（44.66%），Gemini3.1Pro为499（32.68%）。下面原“不取消Batch”“GIF等待配额”和“必须1,526有效才能报分”的运行阶段规则，已由用户后续授权及下方最终处置替代。
+
+用户要求清理停滞Batch后，对26个仍在运行的任务逐个保存取消前状态、intent、API确认及取消后快照。最终全部28个checkpoint落盘；保留62条有效Batch答案，仅把87条逐项明确`Request was cancelled because the batch was cancelled`的请求转普通API。部分job整体显示SUCCEEDED而item被取消，因此不按job状态推断逐项成功。24条已耗尽6次的明确503尾项仅追加第7/8次；所有旧receipt、失败和请求身份不变。111个补跑全部成功，未重采任何有效答案。
+
+取消证据：原工作包`batch-cancellation-20260916`。补跑不可变计划、绑定SHA、过程与最终汇总：同工作包`tail-repair-20260916-v1`，入口`/volume/ybo/wza/training-artifacts/judge-tail-repair-20260916-v1/repair_agent_judge_tail.py`。最终`progress.json`为`pass_finished`、`completed_this_run=111`、`in_flight=0`。每源`finished=true`表示有效与终态失败齐全；`complete=false`如实表示不是1,526条全部有效，不将二者混淆。
+
+依照用户最终要求，共用GIF对应的每源1条直接计审核失败，不删除图片/测试集、不换格式或继续调用。原阻塞发生在本地内联体积检查，不能声称已观测到API拒绝GIF。没有为此另建对比表。混合结果仍在原输出目录，主实验表已更新；epoch2独立judge的已有data-quality-hold未解除。
+
+新合并必须使用上述tail-repair入口，旧ordinary/merge脚本不了解追加所有权和终态失败，禁止重新启动以免覆盖新汇总。judge模型、low/32768、v3完整材料与输出schema没有变化。新增取消/尾项恢复测试连同原15项共24项通过；实际111条成功另外验收，不能由单测替代。
+
 2026-09-15 晚用户授权：Batch 持续 429，未提交部分改用普通 API，接受普通计费。只改传输及调度，不改 judge 协议，不影响 H20 epoch2 Agent 推理、GPU 服务或朋友的实验。
 
 ## 唯一所有权

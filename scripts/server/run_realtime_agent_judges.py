@@ -77,9 +77,9 @@ def valid_output(value, schema):
     return True
 
 
-def retry_delay(attempt, code):
+def retry_delay(attempt, code, *, limit=6):
     # Only explicit transient provider rejections; ambiguous transport errors pause.
-    if code not in {408, 429, 500, 502, 503, 504} or attempt >= 6:
+    if code not in {408, 429, 500, 502, 503, 504} or attempt >= limit:
         return None
     return min(300, 15 * 2 ** (attempt - 1)) + random.uniform(0, 5)
 
@@ -126,10 +126,15 @@ def final_phase(stage, held_for_errors):
 
 
 class Runner:
-    def __init__(self, frozen, client, types, record, candidates, ownership, schema, prompt):
+    def __init__(self, frozen, client, types, record, candidates, ownership, schema, prompt,
+                 *, attempt_limits=None, terminal_failed_cases=None):
         self.f, self.client, self.types = frozen, client, types
         self.record, self.candidates, self.ownership = record, candidates, ownership
         self.schema, self.prompt = schema, prompt
+        self.attempt_limits = attempt_limits or {}
+        if any(not 1 <= limit <= 8 for limit in self.attempt_limits.values()):
+            raise ValueError('Retry extension must remain bounded by eight total attempts')
+        self.terminal_failed_cases = terminal_failed_cases or {}
         self.root = frozen.ROOT / 'runs/eval/sft3084-gemini31pro-hybrid-judge-v3-low32k-20260915'
         self.cases = {row['case_id']: row for row in frozen.rows(frozen.CASES)}
         self.indexes = {case: index for index, case in enumerate(self.cases, 1)}
@@ -163,6 +168,9 @@ class Runner:
     def run_one(self, name, case):
         if case not in self.ownership['sources'][name]['realtime']:
             raise ValueError('Attempt to steal Batch-owned case')
+        if case in self.terminal_failed_cases.get(name, set()):
+            return 'terminal_input_failure'
+        limit = self.attempt_limits.get((name, case), 6)
         directory = self.directory(name, case)
         directory.mkdir(parents=True, exist_ok=True)
         result_path = directory / 'result.json'
@@ -218,10 +226,10 @@ class Runner:
         else:
             image = self.types.Part.from_bytes(data=raw, mime_type=mime)
         contents = [self.types.Content(role='user', parts=[image, self.types.Part.from_text(text=text)])]
-        for attempt in range(len(attempts) + 1, 7):
+        for attempt in range(len(attempts) + 1, limit + 1):
             if attempts:
                 previous = json.loads(attempts[-1].read_text())
-                if retry_delay(previous['attempt'], previous.get('http_code')) is None:
+                if retry_delay(previous['attempt'], previous.get('http_code'), limit=limit) is None:
                     return 'retry_exhausted'
             receipt_path = directory / f'attempt-{attempt:02d}.json'
             receipt = {'state': 'in_flight', 'attempt': attempt,
@@ -239,7 +247,7 @@ class Runner:
                 receipt.update(state='provider_rejected' if code else 'ambiguous_transport',
                                http_code=code, error_type=type(error).__name__, ended_at=time.time())
                 self.f.save(receipt_path, receipt)
-                delay = retry_delay(attempt, code)
+                delay = retry_delay(attempt, code, limit=limit)
                 self.f.save(directory / 'status.json', {**receipt, 'retry_in_seconds': delay})
                 if delay is None:
                     return receipt['state']
@@ -282,6 +290,11 @@ class Runner:
             for case in members['realtime']:
                 directory = self.directory(name, case)
                 result_path = directory / 'result.json'
+                if case in self.terminal_failed_cases.get(name, set()):
+                    if result_path.exists():
+                        raise ValueError('Cannot relabel an existing judge result as input failure')
+                    statuses['terminal_input_failure'] += 1
+                    continue
                 if result_path.exists():
                     row = json.loads(result_path.read_text())
                     if (row['case_id'] != case or row['source_name'] != name or
@@ -300,7 +313,10 @@ class Runner:
             categories = Counter(self.collect._category(row) or 'uncategorized' for row in ordered)
             strict = categories['correct_point_with_strong_evidence']
             complete = len(ordered) == len(self.candidates[name])
+            failed = statuses['terminal_input_failure']
+            finished = len(ordered) + failed == len(self.candidates[name])
             summary = {'source_name': name, 'complete': complete, 'valid_judges': len(ordered),
+                       'finished': finished, 'terminal_failed_judges': failed,
                        'batch_reserved': len(members['batch']),
                        'batch_valid': len(ordered) - statuses['completed'],
                        'realtime_statuses': dict(statuses), 'available_cases': 1526,
@@ -308,7 +324,7 @@ class Runner:
                        'thinking_level': 'low', 'max_output_tokens': 32768,
                        'private_gold_categories': dict(categories),
                        'strict_evidence_sufficient_count': strict,
-                       'sesr_reported_percent': 100 * strict / 1527 if complete else None,
+                       'sesr_reported_percent': 100 * strict / 1527 if finished else None,
                        'time': time.time()}
             self.collect._write_gzip_jsonl(self.root / name / 'audit-results.jsonl.gz', ordered)
             self.f.save(self.root / name / 'summary.json', summary)
