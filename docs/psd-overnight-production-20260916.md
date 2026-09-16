@@ -1,5 +1,29 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 02:14 存储助手已换 v32，正式采集未中断
+
+- 当前 v3 249/3200 canonical；3 普通模型错误保留，0 待解基础设施槽，另40槽在途。
+  v3 内累计4次模型请求超时已按预算重试，尚无新增 NaN；历史 v1/v2 NaN 不混计。
+  GPU 单次观测100/99/100/100%，四后端均健康。正式 optimizer 仍0，不冒充训练启动。
+- **后续 reader 改用 `/volume/ybo/wza/training-artifacts/psd-storage-spool-20260917-v32/code`**，
+  515项服务器回归通过、冻结 Agent 未变；本地14项存储/恢复测试通过。
+  v32完整继承 v31 压缩缓存读取语义；原 v30 collector/PID1225918完全未改、未停。
+- v31存储助手在一轮完成后的休眠窗口正常停止，原receipt保存在
+  `RUN/storage-compaction-v31-process.json`。新v32已真实完成一轮、进程身份已核对；
+  权威receipt仍为`RUN/storage-compaction-process.json`（初始PID1234814仅线索），
+  另留`storage-compaction-v32-process.json`；新日志`storage-compaction-v32-controller.log`。
+  不要照旧段落重启v31，也不要同时运行两个存储助手。
+- 两轮累计无损回收估计8,436,441,881 bytes（约7.86GiB）。每轮明细/回收量在
+  `storage-compaction/*.json`；`storage-compaction-latest.json`仅表示最近一轮，不是累计值。
+  02:13空间准入检查约10.91GiB、准入开放，128GiB上限不变；不是个人剩余配额。
+- 存储助手的gzip/硬链接/JSON临时文件全部移到经边界及同文件系统检查的
+  `/volume/ybo/wza/tmp/psd-compact-*`专属目录，再原子发布到持久目标路径。
+  这避免助手临时文件消失导致collector的`du`扫描ENOENT；已用测试覆盖临时源位于RUN外。
+  不声称消除了原collector自身并发写临时文件的一切扫描竞争，也未观察到因此停采。
+  已压缩且native/canonical同inode的槽不重复解压扫描，真正消费者仍逐次校验缓存SHA。
+- 完整原缓存字节、图片、工具/请求历史、各代run和原权重均保留。
+  当前阶段完成后按新reader接checker/repair/raw teacher/最终四卡global32恢复验收和5epoch。
+
 ## 2026-09-17 02:01 存储读取版本更新（不要热改采集进程）
 
 - v3仍由**原v30 controller/PID1225918**持续采集；一次观测201/3200、3普通错误、

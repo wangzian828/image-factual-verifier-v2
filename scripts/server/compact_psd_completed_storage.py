@@ -15,6 +15,21 @@ import os
 from pathlib import Path
 import time
 import uuid
+import tempfile
+
+
+def atomic_json(path, value, *, staging=None):
+    """Publish without a disappearing temporary name inside the measured run."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = path.parent if staging is None else staging
+    staging.mkdir(parents=True, exist_ok=True)
+    if staging.stat().st_dev != path.parent.stat().st_dev:
+        raise ValueError('Atomic storage publication requires the same filesystem')
+    temporary = staging/('.psd-json-'+uuid.uuid4().hex)
+    with temporary.open('x', encoding='utf-8') as f:
+        json.dump(value, f, ensure_ascii=False, indent=2)
+        f.write('\n'); f.flush(); os.fsync(f.fileno())
+    os.replace(temporary, path)
 
 
 def signature(path):
@@ -29,9 +44,8 @@ def digest(path):
     return value.hexdigest()
 
 
-def pack_cache(cache, *, identity):
+def pack_cache(cache, *, identity, staging=None):
     from ifv_training.psd_repair_storage import load_bound
-    from ifv_training.psd_gemini_judge import _atomic_json
     original = json.loads(cache.read_text())
     if original.get('schema_version') == 'ifv-psd-bound-gzip-v1':
         load_bound(cache, identity=identity)
@@ -48,24 +62,30 @@ def pack_cache(cache, *, identity):
         with gzip.open(archive, 'rb') as f:
             if f.read(len(raw)+1) != raw: raise ValueError('Existing compressed original differs')
     else:
-        with archive.open('xb') as fd:
+        stage = cache.parent if staging is None else staging
+        stage.mkdir(parents=True, exist_ok=True)
+        if stage.stat().st_dev != cache.parent.stat().st_dev:
+            raise ValueError('Gzip publication requires same filesystem')
+        temporary = stage/('.psd-gzip-'+uuid.uuid4().hex)
+        with temporary.open('xb') as fd:
             with gzip.GzipFile(fileobj=fd, mode='wb', compresslevel=1, mtime=0) as stream:
                 stream.write(raw)
             fd.flush(); os.fsync(fd.fileno())
-        with gzip.open(archive, 'rb') as f:
+        with gzip.open(temporary, 'rb') as f:
             if f.read(len(raw)+1) != raw: raise ValueError('Compression round-trip mismatch')
+        os.replace(temporary, archive)
     if signature(cache) != before:
         raise ValueError('Cache changed during compaction; original path untouched')
     descriptor = {'schema_version': 'ifv-psd-bound-gzip-v1', 'archive': archive.name,
         'identity': original['identity'], 'payload_sha256': original['payload_sha256'],
         'uncompressed_bytes': len(raw), 'uncompressed_sha256': sha}
-    _atomic_json(cache, descriptor)
+    atomic_json(cache, descriptor, staging=staging)
     load_bound(cache, identity=identity)
     return {'already_packed': False, 'saved_bytes': len(raw)-archive.stat().st_size-cache.stat().st_size,
             'original_sha256': sha, 'archive': archive.name}
 
 
-def link_identical(source, target, *, root):
+def link_identical(source, target, *, root, staging=None):
     root = root.resolve()
     for p in (source, target):
         if p.is_symlink(): raise ValueError('Refuse symlink trace')
@@ -74,7 +94,11 @@ def link_identical(source, target, *, root):
     if a[:2] == b[:2]: return 0
     if a[0] != b[0] or a[2] != b[2] or digest(source) != digest(target):
         raise ValueError('Only byte-identical, same-filesystem traces may share storage')
-    temporary = target.with_name('.psd-link-'+uuid.uuid4().hex)
+    stage = target.parent if staging is None else staging
+    stage.mkdir(parents=True, exist_ok=True)
+    if stage.stat().st_dev != target.parent.stat().st_dev:
+        raise ValueError('Hardlink publication requires same filesystem')
+    temporary = stage/('.psd-link-'+uuid.uuid4().hex)
     os.link(source, temporary)
     try:
         if signature(source) != a or signature(target) != b:
@@ -88,7 +112,7 @@ def link_identical(source, target, *, root):
     return reclaimed
 
 
-def compact_run(run):
+def compact_run(run, *, staging=None):
     from ifv_training.psd_repair_search import search_lock
     from ifv_training.psd_repair_storage import load_bound
     run = run.resolve()
@@ -121,8 +145,8 @@ def compact_run(run):
                 continue
             if load_bound(cache, identity=identity) != json.loads(canonical.read_text()):
                 raise ValueError('Canonical result/cache mismatch')
-            linked = link_identical(native, canonical, root=run)
-            packed = pack_cache(cache, identity=identity)
+            linked = link_identical(native, canonical, root=run, staging=staging)
+            packed = pack_cache(cache, identity=identity, staging=staging)
             records.append({'episode_id': episode, 'trace_bytes_saved': linked, **packed})
     return {'time': time.time(), 'slots_checked': len(records), 'records': records,
             'bytes_reclaimed_estimate': sum(r['trace_bytes_saved']+r['saved_bytes'] for r in records),
@@ -130,7 +154,6 @@ def compact_run(run):
 
 
 def main():
-    from ifv_training.psd_gemini_judge import _atomic_json
     from ifv_training.psd_repair_search import search_lock
     os.umask(0o077)
     p = argparse.ArgumentParser(description=__doc__)
@@ -151,15 +174,19 @@ def main():
     for relative, sha in binding.items():
         if digest(code/relative) != sha: raise ValueError('Immutable reader snapshot changed')
     with search_lock(run/'storage-compaction-lock'):
-        _atomic_json(run/'storage-reader-requirement.json', {
+        temporary_base = (root/'tmp').resolve()
+        temporary_base.relative_to(root)
+        staging = Path(tempfile.mkdtemp(prefix='psd-compact-', dir=temporary_base))
+        staging.resolve().relative_to(temporary_base)
+        atomic_json(run/'storage-reader-requirement.json', {
             'reader_snapshot': str(code), 'minimum_feature': 'ifv-psd-bound-gzip-v1',
-            'old_reader_not_restartable': True, 'raw_traces_unchanged': True})
+            'old_reader_not_restartable': True, 'raw_traces_unchanged': True}, staging=staging)
         while True:
             output = run/'storage-compaction'/f'{time.time_ns()}.json'
-            result = compact_run(run)
-            _atomic_json(output, result)
+            result = compact_run(run, staging=staging)
+            atomic_json(output, result, staging=staging)
             summary = {k:v for k,v in result.items() if k!='records'}
-            _atomic_json(run/'storage-compaction-latest.json', summary)
+            atomic_json(run/'storage-compaction-latest.json', summary, staging=staging)
             print(json.dumps(summary), flush=True)
             state = json.loads((run/'state.json').read_text())
             if not args.follow or state.get('phase') != 'collecting_remaining_3160': break

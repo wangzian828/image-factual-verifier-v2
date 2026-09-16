@@ -24,12 +24,20 @@ def main():
     global OUT, BASE, FILES
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--storage-cache', action='store_true')
+    parser.add_argument('--storage-spool', action='store_true')
     args = parser.parse_args()
+    if args.storage_cache and args.storage_spool:
+        parser.error('Choose one immutable snapshot variant')
     if args.storage_cache:
         OUT = ROOT / 'training-artifacts/psd-storage-reader-20260917-v31'
         BASE = ROOT / 'training-artifacts/psd-service-recovery-20260917-v30/code'
         FILES = {'training/ifv_training': ['psd_repair_storage.py'],
                  'training/tests': ['test_psd_storage_compaction.py'],
+                 'scripts/server': ['compact_psd_completed_storage.py']}
+    if args.storage_spool:
+        OUT = ROOT / 'training-artifacts/psd-storage-spool-20260917-v32'
+        BASE = ROOT / 'training-artifacts/psd-storage-reader-20260917-v31/code'
+        FILES = {'training/tests': ['test_psd_storage_compaction.py'],
                  'scripts/server': ['compact_psd_completed_storage.py']}
     os.umask(0o077)
     code = OUT / 'code'

@@ -92,3 +92,21 @@ def test_retry_reuses_packed_result_without_new_model_call(tmp_path):
     async def never_generate(directory):
         raise AssertionError('A completed packed result must not be resampled')
     assert asyncio.run(retry_episode(root=tmp_path,identity=identity['inputs'],generate=never_generate)) == payload
+
+
+def test_temporary_publication_stays_outside_scanned_run(tmp_path,monkeypatch):
+    run = tmp_path/'run';run.mkdir()
+    staging = tmp_path/'staging';staging.mkdir()
+    slot,native,canonical,identity,payload = make_slot(run)
+    original = os.replace; seen = []
+    def checked_replace(source,target):
+        from pathlib import Path
+        assert Path(source).parent == staging
+        seen.append(Path(target).name)
+        return original(source,target)
+    monkeypatch.setattr(os,'replace',checked_replace)
+    compact_run(run,staging=staging)
+    assert 'case.json' in seen and 'result.json' in seen
+    assert any(p.endswith('.json.gz') for p in seen)
+    assert list(staging.iterdir()) == []
+    assert load_bound(slot/'result.json',identity=identity) == payload
