@@ -1,5 +1,22 @@
 # PSD 后续执行授权与交接
 
+## 2026-09-16 12:02 四卡同策略、40路服务检查通过；修复门槛仍暂停
+
+用户明确要求四卡利用起来、正常并发达到40。已实际完成服务迁移，不是只改计划：
+
+- GPU0/2/3原epoch2服务逐个核验receipt/完整命令后排空并正常停止，均换成受保护的epoch3/step3084导出；GPU1原服务PID1029711未重启。四卡读取同一个模型目录，不复制或覆盖权重。
+- 三个新副本PID1039119/1039120/1039121仅作线索；当前权威receipt在`/volume/ybo/wza/inference/psd-sft3084-20260916/replica-{0,1,2,3}.json`。旧`psd-sft2056-safety-20260916/replica-{0,2,3}.json`是历史receipt，不再是活服务。
+- 新全量网关`http://127.0.0.1:19019`，four-gpu-v7/gateway.json为receipt；后端19002/19003/19004/19005均为`ifv-psd-sft3084`，public alias仍`ifv-qwen3.5-9b-sft-3084`。按**最少在途请求**分配，不是盲目轮询；每卡max-num-seqs16，gpu-memory-utilization0.94。128K、多图32、think8192/out32768、单调用parser、APCoff/mamba none、1200<1230<1260及POST重试0均不变。
+- **40路服务smoke实际40/40成功，每副本各10请求**，完整prompt/completion token IDs及top20都返回。原始40响应和smoke-summary.json保留在`SERVICE/four-gpu-v7/smoke/`及其父目录。这是短合成请求的服务/采集检查，不是40条完整Agent验收，更不是全量PSD已开始或吞吐倍数证明。
+- 新全量阶段参数保存在`SERVICE/four-gpu-v7/full-stage-options.json`：400×8=3200，采样并发40、跨样本修复并发40；同题最多6次修复仍顺序执行。**以后启动collector明确传--concurrency40，repair明确传--case-concurrency40并使用新19019 serving profile**，不能沿用小样硬编码2/8。训练有效batch32、5epoch不改。当前只完成配置和服务smoke，尚未启动全量采样/优化。
+- 新网关关闭额外重复wire档案，**不关闭原生capture**：已核对冻结APIBackend在capture_policy_tokens开启时本身发return_token_ids/return_tokens_as_token_ids/logprobs/top20，且上述40请求真实返回。原19018单卡canary网关、全部旧wire/轨迹/源审核保持不变，不能热改历史绑定。
+- 新guard在`SERVICE/four-gpu-v7/guard.json`并同步至`SERVICE/guard.json`，PID1042313仅线索；四个model映射都epoch3，state/log在four-gpu-v7/idle-guard。原1029775已正常停止。它仅在对应引擎idle时发真实计算脉冲，不能将显存占用或某瞬间0%误称满负载；GPU训练/teacher交接仍先排空停止所属服务/guard。
+- 部署控制器`/volume/ybo/wza/training-artifacts/psd-four-gpu-20260916-v7/psd_four_gpu_serving.py`，controller receipt/state/log齐全，阶段`four_gpu_ready_40_smoke_passed`。10项新单测本地通过；目标Python3.12上与现有case pool合计**17项通过**。本地3.9扩展测试曾因旧测试用anext失败，目标运行时验证通过，没有为本地旧Python改业务实现。
+
+**当前修复阻塞（不要误报正在训练）**：v6控制器已于11:50结束，`RUN/psd-round-v5/search/progress.json`为`paused_search_requires_resume`，3个独立任务分别2个ValueError、1个RuntimeError，0完成repair continuation；32源槽/12源checker pass及20fail仍保留，不新采源。旧case pool只记录异常类型，缺实际异常堆栈，不能把猜测当根因。
+
+新增`diagnose_psd_slate_capture.py`只读旧wire和runtime、仅调用/tokenize，没有新生成/外部API。两份带提示请求实际原生prompt长度15000、17497，用**原始wire消息及工具字段顺序**重建时token逐个相同；仅用canonical化的archive工具顺序会少5/6token且从85位置起不同，恢复原工具顺序后相同。现有capture_target已尝试使用live snapshot恢复工具顺序，所以这个离线差异**不能直接证明两个ValueError的真实原因**，下一步应保留异常堆栈并定位prefix/schema/capture现场，不能盲目降级匹配或按成功结果重采。RuntimeError同样需要原始错误定位。新部署使用独立不可变CODE；修复+真实GPU目标/保存恢复验收通过后才以40路开始400×8。
+
 ## 2026-09-16 11:42 真实runtime和32条源checker均通过技术验收
 
 - `runtime-acceptance-v5.json`：固定4图×8=32槽，448个原生决策捕获完整，59次感知/OCR均cache_hit=false；546个网关请求中536响应和10个保留的感知辅助HTTP中断，422个required调用原始数组均为单调用，最大输出2926token，无截断。runtime gate通过，full PSD gate仍未通过。
