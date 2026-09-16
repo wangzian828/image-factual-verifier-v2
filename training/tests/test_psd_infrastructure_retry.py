@@ -65,7 +65,7 @@ def test_http_boundary_checks_before_unusable_response_parser(mode):
     assert isinstance(caught.value, PolicyInfrastructureFailure) == (mode != 'ordinary_empty')
 
 
-@pytest.mark.parametrize("value", [float('nan'), float('inf'), -float('inf'), 'NaN'])
+@pytest.mark.parametrize("value", [None, float('nan'), float('inf'), -float('inf'), 'NaN'])
 def test_nonfinite_selected_tokens_never_execute(value):
     with pytest.raises(PolicyInfrastructureFailure):
         validate_generated_probabilities(response(value).raw)
@@ -73,7 +73,7 @@ def test_nonfinite_selected_tokens_never_execute(value):
 
 def test_topk_negative_infinity_is_a_legal_grammar_mask():
     validate_generated_probabilities(response(candidate=-float('inf')).raw)
-    for value in [float('inf'), float('nan')]:
+    for value in [None, float('inf'), float('nan')]:
         with pytest.raises(PolicyInfrastructureFailure):
             validate_generated_probabilities(response(candidate=value).raw)
     validate_generated_probabilities({'choices': [{'message': {'content': 'NaN ! ! !'}}]})

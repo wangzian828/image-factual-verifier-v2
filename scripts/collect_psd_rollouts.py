@@ -126,8 +126,14 @@ def main():
     from ifv_training.psd_infrastructure_retry import VERSION, MAX_ATTEMPTS
     slots = list((Path(args.output_dir) / "psd-infrastructure-attempts").glob("*/retry-state.json"))
     unresolved = [str(p.parent) for p in slots if not (p.parent / "result.json").is_file()]
+    extended = [{'episode_id': load_json(p)['identity']['inputs']['episode_id'],
+                 'max_attempts': load_json(p)['identity']['max_attempts'],
+                 'allowance': str(p.parent/'recovery-allowance.json')}
+                for p in slots if load_json(p)['identity']['max_attempts'] != MAX_ATTEMPTS]
     manifest["agent"]["psd_sampling"]["infrastructure_retry"] = {
-        "version": VERSION, "max_attempts": MAX_ATTEMPTS, "slots": len(slots),
+        "version": VERSION, "default_max_attempts": MAX_ATTEMPTS,
+        "max_attempts": max([MAX_ATTEMPTS, *(r['max_attempts'] for r in extended)]),
+        "budget_extensions": extended, "slots": len(slots),
         "unresolved": unresolved, "selection_by_answer": False}
     write_json(manifest_path, manifest)
     print(json.dumps(summary, ensure_ascii=False, indent=2))

@@ -1,5 +1,40 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 最新接续：2026-09-17 01:07，服务恢复后补四槽
+
+本节覆盖下文 v2 在途快照；优化器仍 0 step，不把采集称为训练。
+
+- v2 首40结束：36份可进入后续审核的原始结果（33正常报告、3 unusable输出），
+  **4槽三次基础设施尝试全部 HTTP400/NaN 耗尽**，controller 已保护退出，未发剩余3160。
+  16个原NaN槽中12个恢复；不能说重试已经消除了数值问题。
+- 全量后端日志中0/2号无同类错误；1/3号分别14/13个序列化错误，且两者遗留
+  `VLLM_COMPUTE_NANS_IN_LOGITS=1`，另外两者没有。这只是关联。
+  安装版源码显示此开关在采样后计数，并非数值修复；统计位置不是原始层级logits证据。
+- `SERVICE/nan-exhausted-before-v1`：四个耗尽槽的最后失败请求，分别在四卡重建完整
+  请求并流式诊断，共16次；两次在首token即token0/null概率（GPU1/3）。没有执行返回动作，
+  没有把诊断输出当作训练源；不是原始wire逐字节回放，不裁剪图像/上下文/预算。
+- `SERVICE/nan-metric-restart-ab-v1`只重启身份确认的GPU1/3：GPU1将NaN统计关为0，
+  GPU3保留1作为重启对照；原命令、模型、JIT缓存位置不变，GPU0/2未动。
+  重启后`SERVICE/nan-exhausted-metric-ab-v1`四请求×四GPU×四轮 **64/64完成**，
+  所以**不能证明开关导致异常，更不能声称永久根治**；当前只是有真实验收的恢复措施。
+- 新快照`/volume/ybo/wza/training-artifacts/psd-service-recovery-20260917-v30/code`，
+  **505项服务器回归通过**，包含v27全部下游准入修复，冻结src未改。
+  同时拒绝选中/候选概率null（合法top-k负无穷仍允许）；旧活动快照不热改。
+- 当前输出 **`/volume/ybo/wza/runs/psd-production400x8-20260917-v3`**；控制器是v30父目录
+  `run_psd_production_collection.py`，初始PID1225918仅线索，核process.json及准确命令。
+  新run保留旧36份结果，只给4个耗尽数值槽各额外最多两次，**总上限5、旧三次仍记账**。
+  每槽`recovery-allowance.json`绑定原ledger SHA及重启/64次回放证据；不能对5次预算再次扩展。
+  其余3196槽仍默认3次。正常模型错误不重采挑成功。v1/v2所有原文件未改。
+  01:07控制器已启动，仍须核首40真实产出/strict audit，不能据启动宣称首批通过。
+- 首40验收通过自动并发40接剩余3160；完整3200后继续source checker/slate修复/
+  preservation/raw teacher/最终DP4 global32短步和恢复门槛，再独立5epoch优化。
+  下游用v30与最终完整v3，不误用v1/v2残缺manifest。原SFT权重全保留。
+
+诊断和恢复代码：`probe_psd_failed_slots.py`、`psd_nan_metric_ab.py`；诊断部署v29，
+v28在选取native错误receipt时已拒绝、未发请求。服务/守护的权威receipt仍在SERVICE，
+不能照抄历史PID。朋友Flash已436/436结构成功；Pro最近12成功/19失败/405未尝试，
+继续串行流程，不把这个快照当最新完成量。旧judge均已结束，不重交。
+
 ## 最新接续状态：2026-09-17 零点巡检后的恢复
 
 以下覆盖后文首次启动的路径/状态，不重启 v1：

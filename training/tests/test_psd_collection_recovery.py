@@ -7,6 +7,8 @@ import pytest
 from ifv_training.psd_collection_recovery import import_prior_slots
 from ifv_training.psd_repair_storage import save_bound, load_bound
 from ifv_training.psd_infrastructure_retry import VERSION
+from ifv_training.psd_infrastructure_retry import recovery_attempt_budget, retry_episode
+from ifv_training.io import sha256_file, write_json
 
 
 def source(tmp_path, *, nan=False, receipt=True):
@@ -66,3 +68,58 @@ def test_recovery_does_not_change_seed_or_reuse_destination(tmp_path):
     import_prior_slots(**args)
     with pytest.raises(ValueError, match='empty destination'):
         import_prior_slots(**args)
+
+
+def exhausted_source_with_gate(tmp_path):
+    old, slot, result, identity = source(tmp_path)
+    identity['version'] = VERSION
+    attempts = [{'index': i, 'directory': str(slot/f'attempt-{i:03d}'),
+        'status': 'infrastructure_failed', 'reason': 'model_http_400_nonfinite_serialization'}
+        for i in range(1, 4)]
+    save_bound(slot/'retry-state.json', identity=identity, payload={'attempts': attempts})
+    (slot/'result.json').unlink()
+    (old/'traces/c--r000.json').unlink()
+    intervention = tmp_path/'intervention.json'; write_json(intervention, {'phase': 'ready_for_replay'})
+    replay = tmp_path/'replay.json'
+    rows = [{'gpu': g, 'source_index': s, 'repetition': r, 'status': 'completed',
+             'finish_reason': 'tool_calls'} for g in range(4) for s in range(4) for r in range(4)]
+    write_json(replay, {'diagnostic_only': True, 'completed': 64, 'results': rows})
+    gate = {'episode_ids': ['c--r000'], 'evidence': {k: {'path': str(p), 'sha256': sha256_file(p)}
+            for k, p in [('intervention', intervention), ('replay', replay)]}}
+    return old, slot, identity, gate
+
+
+def test_recovery_charges_original_failures_and_only_allows_two_more(tmp_path):
+    import asyncio
+    old, slot, identity, gate = exhausted_source_with_gate(tmp_path)
+    original = (slot/'retry-state.json').read_bytes()
+    dest = tmp_path/'new'
+    report = import_prior_slots(source=old, destination=dest, episode_ids=['c--r000'], seeds=[7], numerical_recovery=gate)
+    assert report['explicit_budget_extensions'] == 1
+    target = dest/'psd-infrastructure-attempts'/slot.name
+    assert recovery_attempt_budget(target, identity['inputs']) == 5
+    calls = []
+    async def generate(directory):
+        calls.append(directory.name)
+        return {'wrong_answer_is_still_accepted': True}
+    async def no_sleep(_): pass
+    asyncio.run(retry_episode(root=target, identity=identity['inputs'], generate=generate, sleep=no_sleep))
+    assert calls == ['attempt-004']
+    assert (slot/'retry-state.json').read_bytes() == original
+    assert len(load_bound(target/'retry-state.json', identity={**identity,'max_attempts':5})['attempts']) == 4
+
+
+@pytest.mark.parametrize('problem', ['incomplete', 'failed', 'wrong_case', 'changed_receipt'])
+def test_invalid_recovery_gate_is_rejected_before_writes(tmp_path, problem):
+    old, slot, identity, gate = exhausted_source_with_gate(tmp_path)
+    replay = Path(gate['evidence']['replay']['path'])
+    data = json.loads(replay.read_text())
+    if problem == 'incomplete': data['results'].pop()
+    elif problem == 'failed': data['results'][0]['status'] = 'invalid_logprob_detected'
+    elif problem == 'wrong_case': gate['episode_ids'] = []
+    else: data['changed'] = True
+    write_json(replay, data)
+    if problem != 'changed_receipt': gate['evidence']['replay']['sha256'] = sha256_file(replay)
+    with pytest.raises(ValueError):
+        import_prior_slots(source=old, destination=tmp_path/'new', episode_ids=['c--r000'], seeds=[7], numerical_recovery=gate)
+    assert not (tmp_path/'new/psd-infrastructure-attempts').exists()

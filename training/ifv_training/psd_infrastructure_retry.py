@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 
 from .psd_repair_storage import load_bound, save_bound
+from .io import load_json, sha256_file
 
 VERSION = "ifv-psd-infrastructure-retry-v2"
 MAX_ATTEMPTS = 3  # Initial attempt plus at most two complete reruns.
@@ -37,6 +38,56 @@ class PolicyInfrastructureFailure(RuntimeError):
 
 class InfrastructureRetriesExhausted(RuntimeError):
     pass
+
+
+def recovery_attempt_budget(root, inputs, default=MAX_ATTEMPTS, *, allowance=None):
+    """A one-time, evidence-bound extension after an actual service intervention.
+
+    Only a new ledger bank may carry this receipt. The original three failures
+    stay charged, and a five-attempt bank can never authorize another extension.
+    No checker/answer quality enters this decision.
+    """
+    path = Path(root) / 'recovery-allowance.json'
+    if allowance is None and not path.exists():
+        return default
+    receipt = load_json(path) if allowance is None else allowance
+    if (default != 3 or receipt.get('schema_version') != 'ifv-psd-numerical-recovery-allowance-v1'
+            or receipt.get('max_attempts') != 5 or receipt.get('inputs') != inputs):
+        raise ValueError('Invalid explicit numerical recovery allowance')
+    source = Path(receipt['source_ledger'])
+    if source.resolve() == (Path(root) / 'retry-state.json').resolve():
+        raise ValueError('Recovery must preserve a separate original ledger')
+    if sha256_file(source) != receipt['source_ledger_sha256']:
+        raise ValueError('Original retry ledger changed')
+    old = load_json(source)
+    old_identity = old['identity']
+    state = load_bound(source, identity=old_identity)
+    if old_identity['inputs'] != inputs or old_identity['max_attempts'] != 3:
+        raise ValueError('Cannot extend another recovery budget')
+    attempts = state['attempts']
+    if len(attempts) != 3 or any(a['status'] != 'infrastructure_failed' for a in attempts):
+        raise ValueError('Recovery requires three documented infrastructure failures')
+    if any(a.get('reason') != 'model_http_400_nonfinite_serialization' for a in attempts):
+        raise ValueError('This recovery receipt only covers the diagnosed numerical error')
+    evidence = receipt.get('evidence', {})
+    if set(evidence) != {'intervention', 'replay'}:
+        raise ValueError('Need both intervention and post-intervention replay evidence')
+    for item in evidence.values():
+        if sha256_file(Path(item['path'])) != item['sha256']:
+            raise ValueError('Recovery evidence changed')
+    intervention = load_json(Path(evidence['intervention']['path']))
+    replay = load_json(Path(evidence['replay']['path']))
+    if intervention.get('phase') != 'ready_for_replay' or not replay.get('diagnostic_only'):
+        raise ValueError('Intervention has not passed readiness/replay')
+    rows = replay.get('results', [])
+    expected = {(gpu, source_index, repetition) for gpu in range(4)
+                for source_index in range(4) for repetition in range(4)}
+    actual = {(r.get('gpu'), r.get('source_index'), r.get('repetition')) for r in rows}
+    if (replay.get('completed') != 64 or len(rows) != 64 or actual != expected
+            or any(r.get('status') != 'completed'
+                   or r.get('finish_reason') not in {'stop', 'tool_calls'} for r in rows)):
+        raise ValueError('Four-replica post-intervention replay gate is incomplete or failed')
+    return 5
 
 
 def _transport_reason(error):
@@ -74,14 +125,14 @@ def validate_generated_probabilities(payload):
             continue
         for entry in logprobs.get("content", []):
             value = entry.get("logprob")
-            if value is not None and not math.isfinite(float(value)):
+            if value is None or not math.isfinite(float(value)):
                 raise PolicyInfrastructureFailure("model_nonfinite_selected_logprob")
             for candidate in entry.get("top_logprobs", []):
                 value = candidate.get("logprob")
-                if value is not None and (math.isnan(float(value)) or float(value) == math.inf):
+                if value is None or math.isnan(float(value)) or float(value) == math.inf:
                     raise PolicyInfrastructureFailure("model_nonfinite_candidate_logprob")
         for value in logprobs.get("token_logprobs", []):
-            if value is not None and not math.isfinite(float(value)):
+            if value is None or not math.isfinite(float(value)):
                 raise PolicyInfrastructureFailure("model_nonfinite_selected_logprob")
 
 
@@ -168,6 +219,7 @@ async def retry_episode(*, root, identity, generate, max_attempts=MAX_ATTEMPTS,
     if type(max_attempts) is not int or not 1 <= max_attempts <= 5:
         raise ValueError("PSD infrastructure max_attempts must be 1..5")
     root = Path(root)
+    max_attempts = recovery_attempt_budget(root, identity, max_attempts)
     binding = {"version": VERSION, "inputs": identity, "max_attempts": max_attempts}
     marker, result_path = root / "retry-state.json", root / "result.json"
     with search_lock(root):

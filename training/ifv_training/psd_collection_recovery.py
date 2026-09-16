@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from .io import load_json, sha256_file
-from .psd_infrastructure_retry import VERSION, MAX_ATTEMPTS, is_nonfinite_serialization_response
+from .psd_infrastructure_retry import VERSION, MAX_ATTEMPTS, is_nonfinite_serialization_response, recovery_attempt_budget
 from .psd_repair_storage import load_bound, save_bound
 
 
@@ -40,7 +40,7 @@ def numerical_failure_evidence(trace, *, inputs, source_slot):
     return {'reason': 'model_http_400_nonfinite_serialization', 'request_receipts': receipts}
 
 
-def import_prior_slots(*, source, destination, episode_ids, seeds):
+def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_recovery=None):
     source, destination = Path(source).resolve(), Path(destination).resolve()
     if len(episode_ids) != len(seeds) or len(set(episode_ids)) != len(episode_ids):
         raise ValueError('Invalid destination slot identities')
@@ -63,6 +63,17 @@ def import_prior_slots(*, source, destination, episode_ids, seeds):
         if marker.parent.name != hashlib.sha256(episode.encode()).hexdigest():
             raise ValueError('Original retry directory has wrong slot identity')
         result_path = marker.parent/'result.json'
+        if (not result_path.exists() and numerical_recovery is not None
+                and len(state.get('attempts', [])) == 3
+                and all(a['status'] == 'infrastructure_failed' for a in state['attempts'])):
+            if episode not in numerical_recovery['episode_ids']:
+                raise ValueError('Exhausted slot is not bound to this recovery gate')
+            allowance = {'schema_version': 'ifv-psd-numerical-recovery-allowance-v1',
+                'max_attempts': 5, 'inputs': inputs, 'source_ledger': str(marker),
+                'source_ledger_sha256': sha256_file(marker), 'evidence': numerical_recovery['evidence']}
+            recovery_attempt_budget(output/marker.parent.name, inputs, allowance=allowance)
+            work.append((marker, None, None, identity, state, None, allowance))
+            continue
         if not result_path.is_file() or not state.get('attempts') or state['attempts'][-1]['status'] != 'completed':
             raise ValueError('In-flight or interrupted slot requires explicit diagnosis before recovery')
         result = load_bound(result_path, identity=identity)
@@ -79,6 +90,16 @@ def import_prior_slots(*, source, destination, episode_ids, seeds):
         target = output/marker.parent.name
         binding = {**identity, 'version': VERSION}
         payload = copy.deepcopy(state)
+        if result_path is None:
+            from .io import write_json
+            write_json(target/'recovery-allowance.json', evidence)
+            binding['max_attempts'] = recovery_attempt_budget(target, identity['inputs'])
+            save_bound(target/'retry-state.json', identity=binding, payload=payload)
+            records.append({'episode_id': identity['inputs']['episode_id'],
+                'action': 'two_attempts_after_verified_service_intervention',
+                'spent_attempts': 3, 'maximum_attempts': 5,
+                'originals': {str(marker): sha256_file(marker)}, 'recovery_allowance': evidence})
+            continue
         if evidence is not None:
             payload['attempts'][-1].update(status='infrastructure_failed', reason=evidence['reason'])
         save_bound(target/'retry-state.json', identity=binding, payload=payload)
@@ -92,4 +113,5 @@ def import_prior_slots(*, source, destination, episode_ids, seeds):
     return {'schema_version': 'ifv-psd-slot-recovery-v1', 'slots': len(records),
         'reused': sum(r['action'] == 'reuse_exact_outcome' for r in records),
         'retry_remaining': sum(r['action'] == 'retry_remaining_budget' for r in records),
+        'explicit_budget_extensions': sum(r['maximum_attempts'] == 5 for r in records),
         'source_unmodified': True, 'selection_by_answer': False, 'records': records}

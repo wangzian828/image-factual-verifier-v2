@@ -29,6 +29,7 @@ GIB = 1024**3
 # An admission ceiling, NOT an assertion about the user's unknown GPFS quota.
 STORAGE_CEILING = 128 * GIB
 REUSE_RUN = None
+NUMERICAL_RECOVERY = None
 
 
 def owner():
@@ -131,6 +132,7 @@ def launch(o):
         storage_ceiling_bytes=STORAGE_CEILING, personal_quota_known=False,
         controller_sha256=o.sha(Path(__file__)),
         reuse_run=str(REUSE_RUN) if REUSE_RUN else None,
+        numerical_recovery=o.load(NUMERICAL_RECOVERY) if NUMERICAL_RECOVERY else None,
         files={str(Path(source[key])): o.sha(Path(source[key])) for key in
             ('benchmark', 'train_cases', 'private_gold', 'source_access_policy')})
     o.save(RUN/'binding.json', binding)
@@ -143,6 +145,8 @@ def launch(o):
                '--run-name', RUN.name, '--code-directory', str(CODE)]
     if REUSE_RUN is not None:
         command += ['--reuse-run', str(REUSE_RUN)]
+    if NUMERICAL_RECOVERY is not None:
+        command += ['--numerical-recovery', str(NUMERICAL_RECOVERY)]
     receipt = o.spawn(command, env, RUN/'controller.log')
     o.save(RUN/'process.json', receipt)
     print(json.dumps({'pid': receipt['pid'], 'run': str(RUN), 'slots': 3200, 'concurrency': 40}))
@@ -208,7 +212,8 @@ def execute(o):
             if binding.get('reuse_run'):
                 from ifv_training.psd_collection_recovery import import_prior_slots
                 imported = import_prior_slots(source=Path(binding['reuse_run'])/'episodes',
-                    destination=RUN/'episodes', episode_ids=image_ids, seeds=sampling_seeds)
+                    destination=RUN/'episodes', episode_ids=image_ids, seeds=sampling_seeds,
+                    numerical_recovery=binding.get('numerical_recovery'))
                 o.save(RUN/'slot-recovery.json', imported)
             first = await super().run_batch(**{k: v[:40] for k, v in arrays.items()}, concurrency=40)
             paths = []
@@ -275,6 +280,7 @@ if __name__ == '__main__':
     parser.add_argument('--run-name', default=RUN.name)
     parser.add_argument('--code-directory', type=Path, default=CODE)
     parser.add_argument('--reuse-run', type=Path)
+    parser.add_argument('--numerical-recovery', type=Path)
     arguments = parser.parse_args()
     if Path(arguments.run_name).name != arguments.run_name or not arguments.run_name.startswith('psd-production400x8-'):
         parser.error('Invalid formal run name')
@@ -288,4 +294,9 @@ if __name__ == '__main__':
         REUSE_RUN.relative_to(ROOT/'runs')
         if REUSE_RUN == RUN:
             parser.error('Recovery must preserve the original run')
+    if arguments.numerical_recovery:
+        if REUSE_RUN is None:
+            parser.error('A numerical recovery gate requires --reuse-run')
+        NUMERICAL_RECOVERY = arguments.numerical_recovery.resolve()
+        NUMERICAL_RECOVERY.relative_to(SERVICE)
     {'launch': launch, 'execute': execute}[arguments.mode](owner())
