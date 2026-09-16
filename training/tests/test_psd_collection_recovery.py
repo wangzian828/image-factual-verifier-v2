@@ -123,3 +123,64 @@ def test_invalid_recovery_gate_is_rejected_before_writes(tmp_path, problem):
     with pytest.raises(ValueError):
         import_prior_slots(source=old, destination=tmp_path/'new', episode_ids=['c--r000'], seeds=[7], numerical_recovery=gate)
     assert not (tmp_path/'new/psd-infrastructure-attempts').exists()
+
+
+def completed_extended_source(tmp_path, *, packed=False):
+    import asyncio
+    old, slot, identity, gate = exhausted_source_with_gate(tmp_path)
+    recovered = tmp_path/'recovered'
+    import_prior_slots(source=old, destination=recovered, episode_ids=['c--r000'], seeds=[7], numerical_recovery=gate)
+    target = recovered/'psd-infrastructure-attempts'/slot.name
+    result = {'image_id': 'c--r000', 'ordinary_wrong_answer': True}
+    async def generate(directory): return result
+    async def no_sleep(_): pass
+    asyncio.run(retry_episode(root=target, identity=identity['inputs'], generate=generate, sleep=no_sleep))
+    write_json(recovered/'traces/c--r000.json', result)
+    if packed:
+        from scripts.server.compact_psd_completed_storage import pack_cache
+        pack_cache(target/'result.json', identity={**identity, 'max_attempts': 5})
+    return recovered, target, identity, result
+
+
+@pytest.mark.parametrize('packed', [False, True])
+def test_completed_extended_bank_survives_repeated_import_without_resampling(tmp_path, packed):
+    import asyncio
+    source_run, source_slot, identity, result = completed_extended_source(tmp_path, packed=packed)
+    original = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    for name in ('next', 'next_again'):
+        dest = tmp_path/name
+        report = import_prior_slots(source=source_run, destination=dest, episode_ids=['c--r000'], seeds=[7])
+        assert report['explicit_budget_extensions'] == 0
+        assert report['preserved_recovery_allowances'] == report['reused'] == 1
+        assert report['records'][0]['spent_attempts'] == 4
+        assert report['records'][0]['maximum_attempts'] == 5
+        if packed and name == 'next':
+            assert any(p.endswith('.json.gz') for p in report['records'][0]['originals'])
+        target = dest/'psd-infrastructure-attempts'/source_slot.name
+        assert recovery_attempt_budget(target, identity['inputs']) == 5
+        assert load_bound(target/'retry-state.json', identity={**identity, 'max_attempts':5})['attempts'] == load_bound(source_slot/'retry-state.json', identity={**identity,'max_attempts':5})['attempts']
+        async def forbidden(directory): raise AssertionError('Completed result must not generate again')
+        assert asyncio.run(retry_episode(root=target, identity=identity['inputs'], generate=forbidden)) == result
+        write_json(dest/'traces/c--r000.json', result)
+        source_run, source_slot = dest, target
+    assert all(p.read_bytes() == raw for p, raw in original.items())
+
+
+@pytest.mark.parametrize('problem', ['missing_allowance', 'changed_evidence', 'erased_old_attempt', 'running', 'exhausted'])
+def test_extended_bank_invalid_history_rejected_without_destination_writes(tmp_path, problem):
+    recovered, slot, identity, result = completed_extended_source(tmp_path)
+    binding = {**identity, 'max_attempts':5}
+    state = load_bound(slot/'retry-state.json', identity=binding)
+    if problem == 'missing_allowance':
+        (slot/'recovery-allowance.json').unlink()
+    elif problem == 'changed_evidence':
+        allowance = json.loads((slot/'recovery-allowance.json').read_text())
+        write_json(Path(allowance['evidence']['replay']['path']), {'changed':True})
+    else:
+        if problem == 'erased_old_attempt': state['attempts'][0]['reason'] = 'changed'
+        elif problem == 'running': state['attempts'][-1]['status'] = 'running'
+        else: state['attempts'][-1]['status'] = 'infrastructure_failed'
+        save_bound(slot/'retry-state.json', identity=binding, payload=state)
+    with pytest.raises(ValueError):
+        import_prior_slots(source=recovered, destination=tmp_path/'new', episode_ids=['c--r000'], seeds=[7])
+    assert not (tmp_path/'new').exists()

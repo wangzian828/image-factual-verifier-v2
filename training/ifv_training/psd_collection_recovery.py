@@ -3,7 +3,8 @@
 Never alter the original run. Successful and ordinary failed policy outcomes
 are reused exactly. Only the exact provider numerical error, independently
 present in the native request receipt, is reclassified for remaining retries.
-The already spent attempt remains charged to the same three-attempt budget.
+Already spent attempts remain charged. Completed evidence-bound five-attempt
+slots may be carried forward, but this never creates another budget extension.
 """
 import copy
 import hashlib
@@ -53,7 +54,7 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
     for marker in sorted((source/'psd-infrastructure-attempts').glob('*/retry-state.json')):
         saved = load_json(marker)
         identity = saved['identity']
-        if identity.get('max_attempts') != MAX_ATTEMPTS:
+        if type(identity.get('max_attempts')) is not int or identity['max_attempts'] not in (MAX_ATTEMPTS, 5):
             raise ValueError('Retry budget differs; cannot reset it during recovery')
         state = load_bound(marker, identity=identity)
         inputs = identity['inputs']
@@ -62,6 +63,23 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
             raise ValueError('Recovered episode/seed differs from formal sampling plan')
         if marker.parent.name != hashlib.sha256(episode.encode()).hexdigest():
             raise ValueError('Original retry directory has wrong slot identity')
+        carried_allowance = None
+        if identity['max_attempts'] == 5:
+            # An already resolved extended bank is a cached outcome, not a new
+            # service intervention. Preserve its original evidence and budget.
+            allowance_path = marker.parent/'recovery-allowance.json'
+            if not allowance_path.is_file() or recovery_attempt_budget(marker.parent, inputs) != 5:
+                raise ValueError('Extended retry bank lacks a valid original recovery allowance')
+            carried_allowance = load_json(allowance_path)
+            original = Path(carried_allowance['source_ledger'])
+            original_identity = load_json(original)['identity']
+            original_attempts = load_bound(original, identity=original_identity)['attempts']
+            attempts = state.get('attempts', [])
+            if (len(attempts) not in (4, 5) or attempts[:3] != original_attempts
+                    or [a.get('index') for a in attempts] != list(range(1, len(attempts)+1))
+                    or attempts[-1].get('status') != 'completed'
+                    or any(a.get('status') != 'infrastructure_failed' for a in attempts[:-1])):
+                raise ValueError('Extended bank must be completed with all original attempts charged')
         result_path = marker.parent/'result.json'
         if (not result_path.exists() and numerical_recovery is not None
                 and len(state.get('attempts', [])) == 3
@@ -72,7 +90,7 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
                 'max_attempts': 5, 'inputs': inputs, 'source_ledger': str(marker),
                 'source_ledger_sha256': sha256_file(marker), 'evidence': numerical_recovery['evidence']}
             recovery_attempt_budget(output/marker.parent.name, inputs, allowance=allowance)
-            work.append((marker, None, None, identity, state, None, allowance))
+            work.append((marker, None, None, identity, state, None, allowance, None))
             continue
         if not result_path.is_file() or not state.get('attempts') or state['attempts'][-1]['status'] != 'completed':
             raise ValueError('In-flight or interrupted slot requires explicit diagnosis before recovery')
@@ -82,11 +100,13 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
         if not trace_path.is_file() or load_json(trace_path) != result:
             raise ValueError('Canonical trace differs from durable result')
         evidence = numerical_failure_evidence(result, inputs=inputs, source_slot=marker.parent)
-        work.append((marker, result_path, trace_path, identity, state, result, evidence))
+        if carried_allowance is not None and evidence is not None:
+            raise ValueError('Completed extended bank has unresolved numerical failure; no further extension')
+        work.append((marker, result_path, trace_path, identity, state, result, evidence, carried_allowance))
     if not work:
         raise ValueError('No completed prior slots to recover')
     records = []
-    for marker, result_path, trace_path, identity, state, result, evidence in work:
+    for marker, result_path, trace_path, identity, state, result, evidence, carried_allowance in work:
         target = output/marker.parent.name
         binding = {**identity, 'version': VERSION}
         payload = copy.deepcopy(state)
@@ -102,16 +122,27 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
             continue
         if evidence is not None:
             payload['attempts'][-1].update(status='infrastructure_failed', reason=evidence['reason'])
+        originals = [marker, result_path, trace_path]
+        if carried_allowance is not None:
+            from .io import write_json
+            write_json(target/'recovery-allowance.json', carried_allowance)
+            originals.append(marker.parent/'recovery-allowance.json')
+        cache_header = load_json(result_path)
+        if cache_header.get('schema_version') == 'ifv-psd-bound-gzip-v1':
+            # load_bound above already validated the relative archive and SHA.
+            originals.append(result_path.parent/cache_header['archive'])
         save_bound(target/'retry-state.json', identity=binding, payload=payload)
         if evidence is None:
             save_bound(target/'result.json', identity=binding, payload=result)
         records.append({'episode_id': identity['inputs']['episode_id'],
             'action': 'retry_remaining_budget' if evidence else 'reuse_exact_outcome',
-            'spent_attempts': len(state['attempts']), 'maximum_attempts': MAX_ATTEMPTS,
-            'originals': {str(p): sha256_file(p) for p in (marker, result_path, trace_path)},
+            'spent_attempts': len(state['attempts']), 'maximum_attempts': binding['max_attempts'],
+            'originals': {str(p): sha256_file(p) for p in originals},
+            'carried_recovery_allowance': carried_allowance is not None,
             'numerical_failure_evidence': evidence})
     return {'schema_version': 'ifv-psd-slot-recovery-v1', 'slots': len(records),
         'reused': sum(r['action'] == 'reuse_exact_outcome' for r in records),
         'retry_remaining': sum(r['action'] == 'retry_remaining_budget' for r in records),
-        'explicit_budget_extensions': sum(r['maximum_attempts'] == 5 for r in records),
+        'explicit_budget_extensions': sum(r['action'] == 'two_attempts_after_verified_service_intervention' for r in records),
+        'preserved_recovery_allowances': sum(r.get('carried_recovery_allowance', False) for r in records),
         'source_unmodified': True, 'selection_by_answer': False, 'records': records}
