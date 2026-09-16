@@ -110,7 +110,12 @@ async def capture_target(*, position, hint, steps, unhinted_prefix,
             raise ValueError("PSD slate tool schema differs from archived request")
         request["tool_schema"] = copy.deepcopy(snapshot_tools)
     messages = request.get("input_payload")
-    prefix = [{"role": "system", "content": system_instruction}, *copy.deepcopy(unhinted_prefix)]
+    # The frozen runtime renders current tool availability into the system
+    # message. It can legitimately differ from the original source decision.
+    # Use the LIVE snapshot only after binding it to the actual archived request
+    # above; teacher token equality below remains mandatory and unchanged.
+    actual_system = snapshot.get("system_instruction", system_instruction)
+    prefix = [{"role": "system", "content": actual_system}, *copy.deepcopy(unhinted_prefix)]
     hint_index = len(prefix)
     if not isinstance(messages, list) or messages[:hint_index] != prefix:
         raise ValueError("PSD slate actual teacher prefix differs from corrected history")
@@ -221,7 +226,12 @@ images and report. The private reference establishes truth, NOT observed evidenc
 A correct verdict alone does not pass. Claims and evidence attribution must be
 supported by actual observations. External outages alone are not policy faults.
 Inspect every hinted position for whether its action is locally valid, grounded
-and appropriate. Return passing_positions only for actions you can verify.
+and appropriate. The exact injected hints are supplied in hints. Also audit
+each hint semantically: no answer, verdict, exact query, URL, evidence ID,
+tool arguments, or case-specific solution may be supplied as advice. String
+filters are not proof of procedurality. Return passing_positions only when
+BOTH that hint and the resulting action pass. If a hint leaks a solution,
+fail at that position even when the resulting report is correct.
 Find the EARLIEST concrete policy failure, not downstream consequences. Positions
 refer to the supplied native-decision map; 24 is judgment, not a fictitious turn.
 Return status pass only if the complete episode and ALL hinted actions pass;
@@ -304,18 +314,34 @@ def validate_slate_review(value, *, packet):
     return value
 
 
-async def review_slate(client, *, source, episode, gold, image_path, model, cache_dir):
+async def review_slate(client, *, source, episode, gold, image_path, model, cache_dir, targets):
     from .psd_gemini_judge import _request, review_images, trace_steps
     slate = episode["psd_repair"]["slate"]
+    used = set(slate["used_positions"])
+    if (len(targets) != len(used) or {row["position"] for row in targets} != used
+            or any(not isinstance(row.get("hint"), str) or not row["hint"].strip()
+                   or row.get("hint_record", {}).get("text") != row["hint"] for row in targets)):
+        raise ValueError("PSD slate review lacks exact hints for every used target")
+    hints = {str(row["position"]): row["hint"] for row in targets}
     images, media = review_images({"source": source, "repaired": episode}, image_path=image_path)
-    packet = {"source_steps": trace_steps(source), "repaired_steps": trace_steps(episode),
-        "decision_map": decision_map(episode), "hinted_positions": slate["used_positions"],
+    positions = decision_map(episode)
+    repaired_steps = trace_steps(episode)
+    for row in targets:
+        if row["position"] not in positions:
+            raise ValueError("PSD hinted target has no native decision")
+        # Review-only annotation lets a negative hint audit cite the exact
+        # injected words at their decision. Never mutate the policy archive.
+        repaired_steps[positions[row["position"]]]["injected_procedural_hint"] = row["hint"]
+    packet = {"source_steps": trace_steps(source), "repaired_steps": repaired_steps,
+        "decision_map": positions, "hinted_positions": slate["used_positions"],
+        "hints": hints,
         "episode_complete": episode.get("termination") == "success" and 24 in decision_map(episode),
         "private_reference": gold, "media": media}
     value, provenance = await _request(client, packet, prompt=REVIEW_PROMPT,
         schema=REVIEW_SCHEMA, model=model, images=images, cache_dir=cache_dir)
     validate_slate_review(value, packet=packet)
-    return {"schema_version": "ifv-psd-slate-review-v1", "decision": value,
+    return {"schema_version": "ifv-psd-slate-review-v2", "decision": value,
+        "hints_sha256": _sha(hints),
         "episode_sha256": _sha(episode), "private_reference_sha256": _sha(gold),
         "provenance": provenance, "media": media, "packet_sha256": _sha(packet)}
 
@@ -337,6 +363,9 @@ def assemble_slate_attempts(*, seed, source, source_hash, episode, targets, revi
     if (len(targets) != len(expected) or {t["position"] for t in targets} != expected
             or set(review["decision"]["passing_positions"]) != expected):
         raise ValueError("PSD slate target/review coverage mismatch")
+    if (review.get("schema_version") != "ifv-psd-slate-review-v2"
+            or review.get("hints_sha256") != _sha({str(t["position"]): t["hint"] for t in targets})):
+        raise ValueError("PSD slate pass was not bound to the actual procedural hints")
     # A previous intervention can shorten the investigation. Hints at positions
     # never reached remain audited but generate NO target (there is no action
     # distribution there). Never invent an extra turn merely to consume a hint.

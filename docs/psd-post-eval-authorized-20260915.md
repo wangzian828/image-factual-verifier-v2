@@ -1,5 +1,15 @@
 # PSD 后续执行授权与交接
 
+## 2026-09-16 14:03 全链路审计更新（优先于下方历史）
+
+14:11续记：缓存恢复完成，16/16重复双图请求成功；92项服务/真实tokenizer测试与405项训练测试均通过。新版source checker32/32完成（15pass/17fail），独立派生源银行构建通过且原源文件hash未变。当前唯一完整修复入口为部署下`run_psd_corrected_contract_gate.py`，输出原采集根`psd-corrected-contract-v12`；process/state/run.log/search/progress.json为实况，启动PID1060473仅线索。**不恢复旧v10**。当前仍固定32源验收、没有400×8采样或GPU优化；小时监控已更新。
+
+详见 [本次审计与待放行门槛](psd-full-contract-audit-20260916.md)。已修 PSD 重复 system、当前 system/token 绑定、观察 ID reader、checker ID 投影、实际 hint 语义审核、被拒 Judgment 保留、slate 单写者锁和 source 审核材料版本。405 项训练侧回归通过，但正式 PSD 优化仍 **0 step**。
+
+v10 三例真实诊断已结束：1 例无可修复位置、2 例本地 HTTP500，未准入目标。backend0 实际 traceback 是 vLLM 多模态缓存缺项。现在只滚动重启本任务所属四卡副本关闭 processor/IPC cache，不改图片/思考/动作预算；服务当前 receipt 始终读 `/volume/ybo/wza/inference/psd-sft3084-20260916/replica-{0,1,2,3}.json`，旧 PID 已过时。
+
+部署 `/volume/ybo/wza/training-artifacts/psd-contract-audit-20260916-v10`：`mm-recovery-process.json` 跟踪缓存恢复，状态在服务根 `mm-cache-recovery-v11/state.json`；`source-review-v2-process.json`/`source-review-v2-state.json` 跟踪相同32源轨迹的材料版本修正审核，结果在原采集根 `source-reviews-transport-v2`。不重新采 Agent 源轨迹、不重跑主实验 judge、不动三轮 SFT/fullstate。新版 checker、真实修复及 9B GPU 更新/保存恢复通过后才能推进400×8和五epoch。旧源银行、旧审核及其派生文件保持不变。
+
 ## 2026-09-16 12:02 四卡同策略、40路服务检查通过；修复门槛仍暂停
 
 用户明确要求四卡利用起来、正常并发达到40。已实际完成服务迁移，不是只改计划：

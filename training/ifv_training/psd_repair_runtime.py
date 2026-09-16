@@ -33,7 +33,7 @@ from src.orchestrator.react_runtime import (
 )
 from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.orchestrator.tool_cache import ToolResultCache
-from src.orchestrator.unified_prompts import UNIFIED_JUDGMENT_SYSTEM_PROMPT
+from src.orchestrator.unified_prompts import UNIFIED_JUDGMENT_SYSTEM_PROMPT, UNIFIED_REACT_SYSTEM_PROMPT
 from src.tools.base import BaseTool
 
 from .psd_repair import (
@@ -85,6 +85,7 @@ class QwenContinuationAdapter:
         generation_config: Mapping[str, Any] | None = None,
         judgment_generation_config: Mapping[str, Any] | None = None,
         judgment_system_prompt: str = "",
+        react_system_prompt: str = "",
         request_timeout_seconds: float | None = None,
         tool_timeout_seconds: float | None = None,
         require_runtime_archive: bool = True,
@@ -140,6 +141,7 @@ class QwenContinuationAdapter:
         self.judgment_system_prompt = str(
             judgment_system_prompt or UNIFIED_JUDGMENT_SYSTEM_PROMPT
         )
+        self.react_system_prompt = str(react_system_prompt or UNIFIED_REACT_SYSTEM_PROMPT)
         self.request_timeout_seconds = request_timeout_seconds
         self.tool_timeout_seconds = tool_timeout_seconds
         self.require_runtime_archive = bool(require_runtime_archive)
@@ -188,7 +190,10 @@ class QwenContinuationAdapter:
     ) -> StageRunner:
         return StageRunner(
             llm=self.policy_llm,
-            system_prompt=_text(site.policy_input.get("system_instruction")),
+            # Archived system_instruction is ALREADY rendered by StageRunner.
+            # Reusing it as the base prompt duplicates schema/availability blocks.
+            # Use the same unrendered prompt as the frozen Orchestrator instead.
+            system_prompt=self.react_system_prompt,
             tools=list(tools if tools is not None else self.tools),
             output_schema=InvestigationSegmentOutput,
             max_rounds=1,
@@ -353,6 +358,15 @@ class QwenContinuationAdapter:
             if counts.get(name, 0) >= int(limit)
         ]
 
+    @staticmethod
+    def _judgment_basis(runtime_state, steps):
+        # The frozen locator accepts unified_react only. PSD's archive stage
+        # names are diagnostic names, not a reason to drop genuine observations.
+        # Normalize copies for this reader; preserve original steps/IDs/errors.
+        normalized = [replace(step, stage_name="unified_react")
+                      if step.stage_name == "psd_teacher_repair" else step for step in steps]
+        return compile_react_judgment_basis(runtime_state, normalized)
+
     def _judgment_runner(
         self,
         *,
@@ -374,7 +388,9 @@ class QwenContinuationAdapter:
                 return False, "verdict observation IDs must be unique"
             return True, ""
 
-        instruction = self.judgment_system_prompt if system_instruction is None else system_instruction
+        # system_instruction, when supplied, is the archived rendered copy used
+        # to strip the leading transport system message, not a base prompt.
+        instruction = self.judgment_system_prompt
         return StageRunner(
             llm=self.policy_llm,
             system_prompt=instruction,
@@ -392,7 +408,7 @@ class QwenContinuationAdapter:
             request_timeout_seconds=self.request_timeout_seconds,
             capture_policy_tokens=True,
             policy_topk=self.policy_topk,
-            native_history=self._native_history(history, instruction),
+            native_history=self._native_history(history, system_instruction or instruction),
             native_system_instruction=instruction,
             native_history_includes_pending_user=include_pending_user,
         )
@@ -793,7 +809,7 @@ class QwenContinuationAdapter:
                     "hard_budget_exhausted" if runtime_state.action_count >= MAX_REACT_ACTIONS
                     else "psd_suffix_action_limit")
 
-        basis = compile_react_judgment_basis(
+        basis = self._judgment_basis(
             runtime_state,
             [*source_prefix, *teacher_steps],
         )

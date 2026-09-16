@@ -144,7 +144,8 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
             episode_path = directory / "episode.json"
             write_json(episode_path, episode)
             review = await review_slate(judge, source=trace, episode=episode, gold=gold,
-                image_path=args.image, model=args.judge_model, cache_dir=root / "judge-cache")
+                image_path=args.image, model=args.judge_model, cache_dir=root / "judge-cache",
+                targets=continuation.local_targets)
             write_json(directory / "review.json", review)
             round_state = {"hints": {k: h.text for k, h in hints.items()}, "review": review,
                 "proposal": provenance, "episode_path": str(episode_path),

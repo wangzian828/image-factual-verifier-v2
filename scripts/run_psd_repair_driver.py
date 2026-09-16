@@ -21,7 +21,7 @@ if str(TRAINING_ROOT) not in sys.path:
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.llm_backend import APIBackend
 from src.orchestrator.runtime_events import CaseRuntimeStore
-from src.orchestrator.unified_prompts import UNIFIED_JUDGMENT_SYSTEM_PROMPT
+from src.orchestrator.unified_prompts import UNIFIED_JUDGMENT_SYSTEM_PROMPT, UNIFIED_REACT_SYSTEM_PROMPT
 from ifv_training.io import load_json, load_jsonl, sha256_file, write_json, write_jsonl
 from ifv_training.psd_repair import (
     PSDModelRoles,
@@ -239,7 +239,15 @@ def _parser() -> argparse.ArgumentParser:
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
     if args.search_mode == "slate" and (args.skip_auto_judge or args.verification_bundle):
         raise ValueError("slate search requires full-episode live/cached verification")
-    if args.search_mode in {"single", "slate"}:
+    if args.search_mode == "slate":
+        from ifv_training.psd_repair_search import search_lock
+        root = args.output_dir.resolve()
+        # Acquire before localization/input writes/provider calls. The lock
+        # lives next to the output because a new driver requires a new root.
+        # Process-owned advisory locks release on crash without PID guessing.
+        with search_lock(root.parent / ('.' + root.name + '-writer')):
+            return await _run_single(args)
+    if args.search_mode == "single":
         return await _run_single(args)
     if args.skip_auto_judge or args.verification_bundle:
         raise ValueError("feedback search requires live/cached per-attempt verification; use single mode for offline bundles")
@@ -326,7 +334,7 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("generation retries must be between 0 and 3")
     config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()
               if key not in {"resume", "skip_auto_judge", "generation_retries"}}
-    config["continuation_policy_version"] = "local-hint-fold-native-budgets-v2"
+    config["continuation_policy_version"] = "native-contract-and-complete-slate-review-v4"
     for key in ("trace", "candidate", "audit", "gold", "public_context", "private_context",
                 "image", "train_cases", "policy_serving_profile", "round_start_checkpoint_manifest",
                 "semantic_verification", "verification_bundle", "source_access_policy", "search_media"):
@@ -443,6 +451,7 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
         judgment_system_prompt=policy_orchestrator._sp(
             UNIFIED_JUDGMENT_SYSTEM_PROMPT
         ),
+        react_system_prompt=policy_orchestrator._sp(UNIFIED_REACT_SYSTEM_PROMPT),
         request_timeout_seconds=policy_orchestrator.stage_request_timeout_seconds,
         tool_timeout_seconds=policy_orchestrator.tool_action_timeout_seconds,
     )

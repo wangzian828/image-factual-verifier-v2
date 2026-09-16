@@ -198,7 +198,7 @@ async def judge_repair(client, packet, *, model="gemini-3.1-pro-preview", images
             "anchor_matches": anchor, "episode_complete": complete, **provenance}
 
 
-def trace_steps(trace):
+def trace_steps(trace, *, include_transport_ids=True):
     """Keep raw actions, failed/empty observations and thoughts, never token dumps."""
     result = []
     steps = trace.get("state", {}).get("all_steps")
@@ -211,6 +211,14 @@ def trace_steps(trace):
             "stage", "action_type", "tool_name", "tool_args", "tool_result", "thought", "output") if key in step}
         projected["index"] = index
         projected["policy_action"] = step.get("metadata", {}).get("policy_action", {})
+        # The native tool-call ID is often ONLY in metadata, while final
+        # reports cite it. Omitting it prevents the reviewer from checking the
+        # report -> observation relation. Do not copy unrelated metadata,
+        # token captures, private diagnostics or provider credentials.
+        if include_transport_ids:
+            call_id = step.get("metadata", {}).get("function_call_id")
+            if isinstance(call_id, str) and call_id.strip():
+                projected["function_call_id"] = call_id
         result.append(projected)
     return result
 

@@ -58,6 +58,8 @@ def test_two_verified_local_targets_assemble_with_explicit_corrected_lineage(mon
     monkeypatch.setattr(verifier, "verify_causal_episode", lambda *a, **kw: verified)
     episode = {"psd_repair": {"slate": {"used_positions": [0, 1], "unused_positions": []}}}
     review = {"episode_sha256": _sha(episode), "private_reference_sha256": _sha({}),
+        "schema_version": "ifv-psd-slate-review-v2",
+        "hints_sha256": _sha({str(t["position"]): t["hint"] for t in make_targets()}),
         "decision": {"status": "pass", "passing_positions": [0, 1], "evidence": [{"quote": "observed"}]},
         "provenance": {"request_binding": {"model": "judge"}}}
     role_record = _attempt("x", hint="Check the unresolved relation.", hint_level=1)["model_roles"]

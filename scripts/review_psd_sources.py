@@ -16,7 +16,7 @@ from ifv_training.psd_case_pool import completed_cases
 from ifv_training.psd_gemini_judge import _atomic_json
 from ifv_training.psd_repair import _sha
 from ifv_training.psd_repair_storage import load_bound, save_bound
-from ifv_training.psd_source_review import VERSION, PROMPT, SCHEMA, judge_source, validate_source_review
+from ifv_training.psd_source_review import VERSION, TRACE_PROJECTION, PROMPT, SCHEMA, judge_source, validate_source_review
 
 
 def review_path(root, episode):
@@ -40,7 +40,8 @@ async def review_sources(*, run_dir, benchmark, train_cases, private_gold, outpu
             or any(allowed.get(c) != "train" or c not in gold for c in public)):
         raise ValueError("PSD source review membership/coverage is invalid")
     paths = [run_dir / "run_manifest.json", run_dir / "run_results.jsonl", benchmark, train_cases, private_gold]
-    identity = {"version": VERSION, "model": model, "prompt": _sha(PROMPT), "schema": _sha(SCHEMA),
+    identity = {"version": VERSION, "trace_projection": TRACE_PROJECTION,
+                "model": model, "prompt": _sha(PROMPT), "schema": _sha(SCHEMA),
                 "inputs": {str(p.resolve()): sha256_file(p) for p in paths}}
     marker = output / "inputs.json"
     if marker.exists():
@@ -72,6 +73,8 @@ async def review_sources(*, run_dir, benchmark, train_cases, private_gold, outpu
             artifact = await judge_source(client, trace, gold=gold[case], image_path=image,
                 model=model, cache_dir=output / "judge-cache")
             save_bound(saved_path, identity=binding, payload=artifact)
+        if artifact.get("trace_projection") != TRACE_PROJECTION:
+            raise ValueError("source review projection is stale; use a new versioned output")
         status = validate_source_review(artifact, trace=trace, gold=gold[case])
         return {"case_id": case, "episode_id": episode, "status": status,
                 "path": str(saved_path), "sha256": sha256_file(saved_path)}

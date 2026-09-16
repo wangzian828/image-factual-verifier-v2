@@ -213,7 +213,11 @@ def test_review_run_resume_keeps_decisions_and_does_not_label_transport_failure(
         calls.append(1)
         if len(calls) == 1:
             raise TimeoutError("secret-free synthetic transport error")
-        return artifact(trace, status="fail", gold=gold)
+        result = artifact(trace, status="fail", gold=gold)
+        result['trace_projection'] = source.TRACE_PROJECTION
+        result['provenance']['request_binding']['packet_sha256'] = _sha(
+            source._packet(trace, gold, result['media'], include_transport_ids=True))
+        return result
     monkeypatch.setattr(script, "judge_source", provider)
     args = dict(run_dir=run, benchmark=tmp_path / "public.jsonl", train_cases=tmp_path / "split.jsonl",
         private_gold=tmp_path / "gold.jsonl", output=tmp_path / "review", model="test", client=object())
@@ -222,6 +226,17 @@ def test_review_run_resume_keeps_decisions_and_does_not_label_transport_failure(
     second = asyncio.run(script.review_sources(**args))
     assert second["counts"]["fail"] == 1 and second["pending"] == 0
     assert asyncio.run(script.review_sources(**args)) == second
+    assert len(calls) == 2
+    # A valid old review remains readable as history but must not be silently
+    # reused by the new driver under an unchanged prompt/schema hash.
+    from ifv_training.io import load_json
+    marker = args['output'] / 'inputs.json'
+    saved = load_json(marker)
+    assert saved['identity']['trace_projection'] == source.TRACE_PROJECTION
+    legacy_identity = {k: v for k, v in saved['identity'].items() if k != 'trace_projection'}
+    save_bound(marker, identity=legacy_identity, payload=saved['payload'])
+    with pytest.raises(ValueError, match='binding changed'):
+        asyncio.run(script.review_sources(**args))
     assert len(calls) == 2
     write_jsonl(tmp_path / "split.jsonl", [{"case_id": "a", "split": "test"}])
     with pytest.raises(ValueError, match="membership"):

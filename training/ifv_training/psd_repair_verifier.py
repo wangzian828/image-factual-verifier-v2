@@ -260,11 +260,11 @@ def build_complete_hinted_episode_trace(
         if step.stage_name != "psd_teacher_judgment"
         and not _mapping(step.metadata).get("deterministic_segment_boundary")
     ]
-    canonical_judgment = _step_row(
-        judgment_steps[0],
-        stage="unified_judgment",
-        role="teacher",
-    )
+    # Keep actual rejected/format-correction judgment decisions as well as the
+    # accepted report. The reviewer must not see an artificially clean suffix.
+    canonical_judgments = [_step_row(step, stage="unified_judgment", role="teacher")
+        for step in teacher_steps if step.stage_name == "psd_teacher_judgment"
+        and not _mapping(step.metadata).get("deterministic_segment_boundary")]
     all_steps: list[dict[str, Any]] = [
         copy.deepcopy(dict(step))
         for step in source_steps[:source_index]
@@ -328,7 +328,7 @@ def build_complete_hinted_episode_trace(
     }
     if judgment["verdict"] not in {"real", "fake"}:
         raise ValueError("teacher judgment verdict is invalid")
-    all_steps.append(canonical_judgment)
+    all_steps.extend(canonical_judgments)
     totals = _runtime_totals(all_steps)
     state.update(
         {
