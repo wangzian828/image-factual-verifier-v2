@@ -20,14 +20,21 @@ SNAPSHOT=ROOT/'training-artifacts/psd-contract-audit-20260916-v10/snapshot'
 
 
 def main():
-    global OUT
+    global OUT, DEPLOY, CODE, RUN
     os.umask(0o077)
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode',choices=('launch','execute'))
     parser.add_argument('--output-name',default='gpu-update-gate-v1')
     parser.add_argument('--probe-script',default='psd_real_datum_gpu_smoke.py')
     parser.add_argument('--deterministic-attention',action='store_true')
+    parser.add_argument('--deployment',default=DEPLOY.name)
+    parser.add_argument('--run-name',default=RUN.name)
     args=parser.parse_args()
+    assert Path(args.deployment).name==args.deployment and args.deployment.startswith('psd-')
+    assert Path(args.run_name).name==args.run_name and args.run_name.startswith('psd-')
+    DEPLOY=ROOT/'training-artifacts'/args.deployment
+    CODE=DEPLOY/'code'
+    RUN=RUN.parent/args.run_name
     assert Path(args.output_name).name==args.output_name and args.output_name.startswith('gpu-update-gate-')
     assert Path(args.probe_script).name==args.probe_script and args.probe_script.endswith('.py')
     OUT=RUN/args.output_name
@@ -37,11 +44,15 @@ def main():
         assert owner.load(RUN/'state.json')['phase']=='ready_for_trainer'
         OUT.mkdir(exist_ok=False)
         command=[sys.executable,'-u',str(Path(__file__).resolve()),'execute',
-            '--output-name',args.output_name,'--probe-script',args.probe_script]
+            '--output-name',args.output_name,'--probe-script',args.probe_script,
+            '--deployment',args.deployment,'--run-name',args.run_name]
         if args.deterministic_attention:command+=['--deterministic-attention']
         receipt=owner.spawn(command,os.environ.copy(),OUT/'run.log')
         owner.save(OUT/'process.json',receipt);print(json.dumps({'pid':receipt['pid'],'output':str(OUT)}));return
     owner.verify_export()
+    assert owner.load(DEPLOY/'state.json')['deployment_ready_not_live']
+    for relative,digest in owner.load(DEPLOY/'code-binding.json').items():
+        assert owner.sha(CODE/relative)==digest,'Immutable training source changed'
     guard=owner.load(SERVICE/'guard.json');owner.checked(guard)
     backend=owner.load(SERVICE/'replica-3.json');original_env=owner.checked(backend)
     assert original_env['CUDA_VISIBLE_DEVICES']=='3'

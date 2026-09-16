@@ -5,7 +5,7 @@
 以下更新、checkpoint 和压测都是独立工程验收，不是正式训练结果。
 原三轮 SFT 模型和完整 checkpoint 保持只读，冻结 Agent `src` 未改。
 
-## 新确认的两类训练问题
+## 已确认并修复的训练问题
 
 ### 1. 语法屏蔽后的概率不能当成原始 teacher 分布
 
@@ -56,13 +56,34 @@ trainable 参数，不影响其他 SFT/普通 PEFT 路径。**代码和定向测
 
 - 已审核真实工程银行：1 repair + 198 preservation targets，最长输入 49,546 token，完整图片和 token 无删减。
 - 旧银行：`runs/psd-sft3084-captured-canary4x8-20260916/psd-grounded-review-canary-v15`。
-- 新独立银行：同采集根下 `psd-raw-teacher-canary-v18`，199/199 待原模型重新评分，0 样本拒绝。
+- 新独立银行：同采集根下 `psd-raw-teacher-canary-v18`，199/199 已按原 token/图片重新评分，0 样本拒绝，数据 gate 通过。
 - 模型服务：`inference/psd-sft3084-20260916/raw-teacher-noasync-v1`；逐卡当前 PID 必须读取服务根 `replica-*.json`。
 - 40 并发证据：服务根 `nan-raw-teacher-concurrency40-v1/summary.json`。
-- 全量修复候选代码：`training-artifacts/psd-raw-teacher-resume-20260916-v20/code`。
+- 全量修复候选代码：`training-artifacts/psd-capture-callsite-20260916-v21/code`。
 - `psd-fsdp-resume-bridge-20260916-v19` 仅用于同旧银行的机械恢复对照，不能启动正式采样/训练。
 - v18 的 434 项训练测试通过；安装的真实 vLLM 环境下，50 项网关/协议/概率检查通过。
   v20 新增 4 项 FSDP bridge 测试。真实恢复及新银行 GPU 更新不得用这些单测替代。
+
+### 后续实机结果（19:53 CST 更新）
+
+- 新 raw 银行单卡真实更新通过：loss `169.9499359 -> 162.9988403`，视觉分支梯度非零；
+  第二步原地恢复与连续执行的 loss、梯度范数、所有 adapter 参数逐位相同，最大参数差 0。
+  证据：新银行 `gpu-update-gate-raw-v1/probe/result.json`。这是完整两条真实目标，不是全局 batch32 验收。
+- 旧四卡 DCP checkpoint 的 PEFT 导出通过：716 张量、102,530,048 adapter 元素；原 checkpoint 未改。
+- v21 修复 Python 导入绑定问题：`stage_runner` 提前 `from ... import extract_policy_token_capture`，
+  只替换 llm_backend 定义处不能保证覆盖 collector/repair 的实际调用处。现同步替换该 PSD 进程的已导入别名；
+  冻结 `src` 不改。真实 import 顺序检查通过，442 项训练测试通过。
+- **完整 Agent runtime gate 失败，不能放行正式源采集。** 两条固定工程轨迹的前四个请求正常，
+  第五个请求都含 5 张历史图片，返回 `Out of range float values are not JSON compliant: nan`。
+  原始 runtime/错误保留于 `runs/psd-raw-runtime-gate-20260916-v1`，不加入训练目标。
+- 从已落盘 started-event/artifact 重建第五请求，未更改原轨迹；诊断副本位于服务根
+  `raw-multimage-failure-v1`。它不是原 wire 字节副本，不能声称 nonce/序列化逐字节相同。
+  对两个重建请求各测 3 次首 token（仅此诊断缩为 1 输出 token 并移除未来 think-budget closure），
+  6/6 有限，不能当作完整请求或稳定性的通过证据。正式预算仍为 think8192/out32768。
+- 四卡 native resume 对照已启动：旧工程银行 `dp4-resume-gate-v2`，仅复现机械恢复，绝不冒充正式训练。
+
+新的定位线索包括动态 kernel/状态复用。官方 [vLLM #52413](https://github.com/vllm-project/vllm/issues/52413)
+报告过共享 Triton 编译缓存与首步 NaN，但模型/版本/硬件不同；尚未证明我们具有相同根因，不据此声称修复。
 
 所有上述服务器路径均以 `/volume/ybo/wza/` 为根，不在服务器提交 Git。
 早期 FlashInfer 诊断曾触及其默认 `/root/.cache`，已告知用户并停止该分支；未删除或改动该根外目录。
@@ -70,7 +91,7 @@ trainable 参数，不影响其他 SFT/普通 PEFT 路径。**代码和定向测
 
 ## 尚需现场完成
 
-1. 199 个旧目标完成原 token 多模态 frozen-teacher 补算，重新验证并做真实 GPU 更新。
+1. 199 个旧目标的补算、数据验证和单卡真实 GPU 更新已通过。
 2. 修复后的四卡 native DCP 恢复，与同一 horizon 不间断第二步比较参数/梯度/训练数据顺序。
 3. 新 raw gateway 的完整 Agent capture 链路验收；保留原修复预算、完整轨迹，不用有利重采结果遮蔽失败。
 4. 门槛通过后启动已授权 400×8、T0.7、并发40的正式源采集、全部目标构建、5 epoch PSD。

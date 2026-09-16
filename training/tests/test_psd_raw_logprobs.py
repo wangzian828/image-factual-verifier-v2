@@ -22,13 +22,35 @@ def test_old_complete_target_cannot_skip_teacher_semantics_gate():
 
 
 def test_capture_semantics_requires_explicit_response_marker(monkeypatch):
+    import sys
     from src.orchestrator import llm_backend
     from ifv_training.psd_capture_semantics import install_capture_semantics
-    monkeypatch.setattr(llm_backend, 'extract_policy_token_capture', lambda payload, **kwargs: {'status': 'complete'})
+    original = lambda payload, **kwargs: {'status': 'complete'}
+    monkeypatch.setattr(llm_backend, 'extract_policy_token_capture', original)
+    stage = SimpleNamespace(extract_policy_token_capture=original)
+    monkeypatch.setitem(sys.modules, 'src.orchestrator.stage_runner', stage)
     install_capture_semantics()
     assert 'teacher_logprob_semantics' not in llm_backend.extract_policy_token_capture({})
     assert llm_backend.extract_policy_token_capture({'ifv_policy_logprobs': RAW_POLICY_LOGPROBS})[
         'teacher_logprob_semantics'] == RAW_POLICY_LOGPROBS
+    assert stage.extract_policy_token_capture is llm_backend.extract_policy_token_capture
+    assert stage.extract_policy_token_capture({'ifv_policy_logprobs': RAW_POLICY_LOGPROBS})[
+        'teacher_logprob_semantics'] == RAW_POLICY_LOGPROBS
+    install_capture_semantics()
+    assert stage.extract_policy_token_capture is llm_backend.extract_policy_token_capture
+
+
+def test_capture_installed_before_stage_import_is_idempotent(monkeypatch):
+    import sys
+    from src.orchestrator import llm_backend
+    from ifv_training.psd_capture_semantics import install_capture_semantics
+    monkeypatch.delitem(sys.modules, 'src.orchestrator.stage_runner', raising=False)
+    monkeypatch.setattr(llm_backend, 'extract_policy_token_capture', lambda payload, **kwargs: {})
+    install_capture_semantics()
+    captured = llm_backend.extract_policy_token_capture
+    monkeypatch.setitem(sys.modules, 'src.orchestrator.stage_runner', SimpleNamespace(extract_policy_token_capture=captured))
+    install_capture_semantics()
+    assert llm_backend.extract_policy_token_capture is captured
 
 
 def test_candidate_projection_preserves_probability_provenance():
