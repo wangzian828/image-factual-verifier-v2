@@ -335,6 +335,9 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()
               if key not in {"resume", "skip_auto_judge", "generation_retries"}}
     config["continuation_policy_version"] = "native-contract-and-observed-slate-positions-v6"
+    if args.search_mode == 'slate':
+        from ifv_training.psd_slate import SLATE_REVIEW_POLICY
+        config['slate_review_policy'] = SLATE_REVIEW_POLICY
     for key in ("trace", "candidate", "audit", "gold", "public_context", "private_context",
                 "image", "train_cases", "policy_serving_profile", "round_start_checkpoint_manifest",
                 "semantic_verification", "verification_bundle", "source_access_policy", "search_media"):

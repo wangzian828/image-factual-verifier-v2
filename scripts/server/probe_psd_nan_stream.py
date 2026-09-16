@@ -72,19 +72,38 @@ async def reconstruct(archive=ARCHIVE, request_id='req-000006'):
     return body
 
 
-async def execute(out, gpu, *, archive=ARCHIVE, request_id='req-000006'):
+def captured_wire_body(ticket):
+    """Retain original serialized message/tool ordering, unlike archive rebuild."""
+    meta = json.loads((ticket / 'request-meta.json').read_text())
+    raw = gzip.decompress((ticket / 'request.json.gz').read_bytes())
+    if len(raw) != meta['bytes'] or hashlib.sha256(raw).hexdigest() != meta['sha256']:
+        raise ValueError('Wire request receipt does not match captured bytes')
+    body = json.loads(raw)
+    if body.get('model') != 'ifv-psd-sft3084' or body.get('top_logprobs') != 20:
+        raise ValueError('Expected the protected PSD model with native top20')
+    body.update(stream=True, stream_options={'include_usage': True},
+                cache_salt='psd-nan-diagnostic-'+uuid.uuid4().hex)
+    return body
+
+
+async def execute(out, gpu, *, archive=ARCHIVE, request_id='req-000006', wire_ticket=None):
     import httpx
     from tokenizers import Tokenizer
-    body = await reconstruct(archive, request_id)
+    body = (captured_wire_body(wire_ticket) if wire_ticket is not None else
+            await reconstruct(archive, request_id))
     raw = json.dumps(body, ensure_ascii=False).encode()
     with gzip.open(out / 'request.json.gz', 'wb') as file:
         file.write(raw)
     model = ROOT / 'exports/h20-sft-merged4872-3epoch-step3084-20260915/model'
     end = Tokenizer.from_file(str(model / 'tokenizer.json')).token_to_id('</think>')
     result = {'not_training_target': True, 'request_sha256': hashlib.sha256(raw).hexdigest(),
-              'source_archive': str(archive), 'source_request_id': request_id,
+              'source_archive': str(archive) if wire_ticket is None else None,
+              'source_request_id': request_id if wire_ticket is None else None,
+              'source_wire_ticket': str(wire_ticket) if wire_ticket is not None else None,
               'semantic_request_sha256': hashlib.sha256(json.dumps({k:v for k,v in body.items() if k!='cache_salt'},sort_keys=True,ensure_ascii=False).encode()).hexdigest(),
-              'stream_only_diagnostic': True, 'archive_reconstruction_not_exact_wire': True,
+              'stream_only_diagnostic': True,
+              'archive_reconstruction_not_exact_wire': wire_ticket is None,
+              'changed_wire_fields': ['stream', 'stream_options', 'cache_salt'],
               'gpu': gpu, 'tokens': 0, 'zero_tokens': 0, 'think_closures': [], 'bytes': 0,
               'status': 'running', 'first_tokens': []}
     save(out / 'state.json', result)
@@ -151,19 +170,34 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=['launch', 'execute'])
     parser.add_argument('--gpu', type=int, choices=range(4), default=2)
+    parser.add_argument('--wire-ticket', type=Path)
+    parser.add_argument('--output-name')
     args = parser.parse_args()
-    out = SERVICE / f'nan-stream-gpu{args.gpu}-v1'
+    if args.wire_ticket is not None:
+        args.wire_ticket = args.wire_ticket.resolve()
+        args.wire_ticket.relative_to(SERVICE.resolve())
+        captured_wire_body(args.wire_ticket)
+    name = args.output_name or f'nan-stream-gpu{args.gpu}-v1'
+    if Path(name).name != name or name in ('.', '..'):
+        raise ValueError('Diagnostic output must be a new direct child name')
+    out = SERVICE / name
     receipt = json.loads((SERVICE / f'replica-{args.gpu}.json').read_text())
     command = [s.decode() for s in Path(f'/proc/{receipt["pid"]}/cmdline').read_bytes().split(b'\0') if s]
     assert command == receipt['command'] and 'ifv-psd-sft3084' in command
     if args.mode == 'execute':
-        asyncio.run(execute(out, args.gpu))
+        asyncio.run(execute(out, args.gpu, wire_ticket=args.wire_ticket))
         return
     out.mkdir(exist_ok=False)
-    save(out / 'binding.json', {'backend': receipt, 'archive': str(ARCHIVE),
+    source = (args.wire_ticket / 'request-meta.json' if args.wire_ticket is not None else
+              ARCHIVE / 'context/req-000006.json')
+    save(out / 'binding.json', {'backend': receipt, 'archive': str(ARCHIVE) if args.wire_ticket is None else None,
+        'wire_ticket': str(args.wire_ticket) if args.wire_ticket is not None else None,
         'requests': 1, 'retries': 0, 'never_execute_actions': True,
-        'archive_manifest_sha256': hashlib.sha256((ARCHIVE / 'context/req-000006.json').read_bytes()).hexdigest()})
+        'source_manifest_sha256': hashlib.sha256(source.read_bytes()).hexdigest()})
     command = [sys.executable, '-u', str(Path(__file__).resolve()), 'execute', '--gpu', str(args.gpu)]
+    command += ['--output-name', name]
+    if args.wire_ticket is not None:
+        command += ['--wire-ticket', str(args.wire_ticket)]
     env = os.environ.copy()
     env.update(PYTHONDONTWRITEBYTECODE='1', TMPDIR=str(ROOT / 'tmp'))
     with (out / 'run.log').open('x') as log:

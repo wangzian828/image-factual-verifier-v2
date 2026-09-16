@@ -77,3 +77,35 @@ def test_candidate_promotion_rejects_a_failed_diagnostic():
             rows[0]={'gpu':2,'status':'invalid_logprob_detected'}
             return {'completed':200,'results':rows}
     with pytest.raises(AssertionError):gate(Fake(),'decode')
+
+
+def wire_request(tmp_path):
+    import gzip, hashlib, json
+    body = {'model': 'ifv-psd-sft3084', 'top_logprobs': 20, 'max_tokens': 32768,
+            'messages': [{'content': 'unchanged', 'role': 'user'}],
+            'tools': [{'z': 1, 'a': 2}], 'cache_salt': 'original',
+            'vllm_xargs': {'ifv_thinking_budget': 8192}}
+    raw = json.dumps(body).encode()
+    (tmp_path / 'request.json.gz').write_bytes(gzip.compress(raw))
+    (tmp_path / 'request-meta.json').write_text(json.dumps({
+        'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}))
+    return body
+
+
+def test_wire_diagnostic_preserves_actual_messages_and_order(tmp_path):
+    from scripts.server.probe_psd_nan_stream import captured_wire_body
+    original = wire_request(tmp_path)
+    body = captured_wire_body(tmp_path)
+    assert body['stream'] is True
+    assert body['cache_salt'] != original['cache_salt']
+    assert list(body['tools'][0]) == ['z', 'a']
+    assert {k: v for k, v in body.items() if k not in ('stream', 'stream_options', 'cache_salt')} == {
+        k: v for k, v in original.items() if k != 'cache_salt'}
+
+
+def test_wire_diagnostic_refuses_unbound_bytes(tmp_path):
+    from scripts.server.probe_psd_nan_stream import captured_wire_body
+    wire_request(tmp_path)
+    (tmp_path / 'request-meta.json').write_text('{"bytes":0,"sha256":"bad"}')
+    with pytest.raises(ValueError, match='receipt'):
+        captured_wire_body(tmp_path)

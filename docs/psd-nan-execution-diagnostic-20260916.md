@@ -3,6 +3,16 @@
 这是推理工程诊断，不是 PSD 优化 loss 异常。测试返回的动作不执行，输出不进入目标银行。
 原三轮 SFT epoch3/step3084 权重及完整 optimizer/RNG checkpoint 不修改。
 
+## 17:55 真实修复反证：eager 不是充分修复
+
+四卡eager恢复后，route案例req-000006在GPU1再次出现token0/FSM拒绝，最终原始非流式响应HTTP400：`Out of range float values are not JSON compliant: nan`。
+wire ticket：`validated-execution-candidate-v1/wire/1789551642580005259-b2b919425c11426eb34c440879f2f248`。这反证了仅凭124个诊断请求全通过即放行的充分性，下面的候选结论仅为历史阶段。
+同份实际wire请求保留消息/工具字典顺序、仅改stream/stream_options/cache_salt后，GPU3返回164token、tool_calls、首步有限，用时6.77秒。这仍指向请求状态/执行路径，不证明硬件或具体内核责任。
+精确wire诊断新增绑定字节哈希验证与顺序保留测试；原archive重建诊断仍保留，二者不能混称完全相同请求。
+
+已按完整命令/receipt停止`execution-recovery-v1`控制器，停止凭证在运行根`eager-failure-hold-v1`；完整调查、已完成review和6/12预算状态保留，没有重置。此时main08596已有一轮完整调查和fail审核，main05485有一轮完整审核及第二轮已完成调查待审核；route仍停在第三轮未完成调查。
+正式PSD仍0step、400×8未开始。下一项诊断为单卡eager自定义worker的只读有限性hook，不改site-packages、权重或tensor值；hook同步CUDA可能掩盖竞态，不能把带hook不复现宣称永久修复。
+
 ## 已核实环境与请求
 
 - H20 四个独立 TP1 副本；vLLM 0.18.1、torch 2.10.0、transformers 4.57.6、triton 3.6.0。
@@ -82,3 +92,50 @@
 [上游 #52568](https://github.com/vllm-project/vllm/issues/52568)涉及动态LoRA，不能直接套用本任务。
 编译缓存、前缀缓存、线性注意力状态是不同层次；本次已在APC关闭、mamba none下复现，不把“关前缀缓存”重述成新修复。
 诊断期间自动化保持 PAUSED；当前任务现场持续处理。
+
+## 后续真实请求推翻 eager 已解决的假设
+
+17:55 前后，纯 eager 的真实 repair 再现首 token 0／FSM 不接受，非流式最终
+HTTP 400：`Out of range float values are not JSON compliant: nan`。
+实际原始请求保存在 `validated-execution-candidate-v1/wire/1789551642580005259-b2b919425c11426eb34c440879f2f248`。
+该 wire 的 18 条 messages、图片、工具及字段顺序均保留。以前存档重建请求并非原始 wire，
+后续诊断分开标注两者，不能混用“完全相同输入”的结论。
+
+GPU3 eager 增加只读逐层有限性 hooks 后，44 个混合请求均有限；这些 hooks 会同步 CUDA，
+可能掩盖时序错误，不是修复证据。随后四副本非流式原始字节重放中，GPU0/2 的固定请求长时间未返回；
+GPU0 追加流式诊断在 1.70 秒即抓到首 token 0、top20 全 null。GPU2 的追加请求则正常。
+这表明问题不由“关编译”充分解决；没有证据证明权重训坏或 H20 硬件错误。
+长非流式诊断已显式停止并保留完成结果/取消状态，不计作正式采样或修复预算。
+
+正在单独测试 GPU0 同步调度 + Triton、GPU1 原异步 + Triton、GPU2 异步 + FlashInfer。
+原安装 0.18.1 默认启用 async scheduling，并非 `throughput` 独有。
+FlashInfer 首次分支因缺失 CUDA `cuda/ptx` 头文件失败，默认工作区还落到了 `/root/.cache`；
+停止该失败候选，未删除外部目录内容。脚本已显式绑定 `FLASHINFER_WORKSPACE_BASE`
+到 `/volume/ybo/wza/cache/psd-flashinfer`，使用既有训练环境 CUDA 工具链，后续记录在
+`nan-flashinfer-toolchain-recovery-v1`。失败 JIT 进程 SIGTERM 60 秒未退后，仅对已核验的
+诊断进程组强制终止；没有 Agent／训练任务在该组运行。
+
+上游 [#51562](https://github.com/vllm-project/vllm/issues/51562) 提供首个单 token chunk
+错误走 decode、读取未初始化状态的线索；本机尚未抓到对应 metadata，不能当作已确认根因。
+
+## 审核与训练端验收并行推进
+
+新审核协议 `grounded-procedural-advice-v3` 区分可见对象/区域/已有观察与新答案、改正后的文字及可执行参数。
+不再把“指出检查区域”或“没选 reviewer 喜欢的工具”本身当失败。父子搜索身份都绑定协议，
+旧 v2 审核仅可读取历史，不能作为新 v3 搜索缓存静默复用。
+三个历史完整 round0 各校准一次，未重采样 Agent：main-05485 通过，提供正确 OCR 答案的案例仍失败，
+另一案例也失败；所有旧审核、已花预算与轨迹不变。v15 独立快照服务器全回归 422 passed。
+
+校准通过的完整轨迹又通过严格结构/证据/token 验证，构建了独立工程验收 bank：
+1 repair + 198 preservation targets，199 个全部有原生 top20，零拒收，最长 49,546 个输入 token。
+没有截断图像或序列；该 bank 不冒充正式 400×8 采集。
+`psd_real_datum_gpu_smoke.py`/`run_psd_gpu_update_gate.py` 用真实9B、完整repair与preserve做batch2更新，
+保存adapter+optimizer+scheduler+CPU/CUDA RNG，再比较中断恢复；它不替代四卡 global batch32 的正式训练入口验收。
+
+18:38 更新：GPU batch2 验收实际完成两步并产生视觉梯度，sum-loss 397.3862 → 387.1670，
+峰值 allocated 约39.4 GiB。恢复后的同一步 loss 完全相同，但梯度范数293.1097 vs292.7923、
+adapter最大差6.89e-5，严格恢复比较**失败**；不能把两步成功等同于恢复正确。
+独立v2只启用 Transformers 已支持的 `FLASH_ATTENTION_DETERMINISTIC=1` 做对照，尚未改变正式训练配方。
+FlashInfer 的第二个工具链错误为 conda CUDA 没有预期 `lib64` 布局，现显式配置既有
+`targets/x86_64-linux/lib` 链接路径，未安装/升级软件。`nan-flashinfer-link-recovery-v2`
+已实际完成相同13036-token输入的长prefill及工具调用，才进入72请求跨后端对照；该结果仍非永久修复证明。

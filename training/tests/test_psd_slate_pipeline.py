@@ -50,7 +50,8 @@ def make_targets():
     return result
 
 
-def test_two_verified_local_targets_assemble_with_explicit_corrected_lineage(monkeypatch):
+@pytest.mark.parametrize('review_version', ['v2', 'v3'])
+def test_two_verified_local_targets_assemble_with_explicit_corrected_lineage(monkeypatch, review_version):
     import ifv_training.psd_repair_verifier as verifier
     verified = verify_repair(source_rollout_failed=True, hinted_local_pass=True,
         hinted_recorded_verdict="real", expected_verdict="real", hinted_strict_trace_audit_pass=True,
@@ -58,7 +59,7 @@ def test_two_verified_local_targets_assemble_with_explicit_corrected_lineage(mon
     monkeypatch.setattr(verifier, "verify_causal_episode", lambda *a, **kw: verified)
     episode = {"psd_repair": {"slate": {"used_positions": [0, 1], "unused_positions": []}}}
     review = {"episode_sha256": _sha(episode), "private_reference_sha256": _sha({}),
-        "schema_version": "ifv-psd-slate-review-v2",
+        "schema_version": "ifv-psd-slate-review-" + review_version,
         "hints_sha256": _sha({str(t["position"]): t["hint"] for t in make_targets()}),
         "decision": {"status": "pass", "passing_positions": [0, 1], "evidence": [{"quote": "observed"}]},
         "provenance": {"request_binding": {"model": "judge"}}}

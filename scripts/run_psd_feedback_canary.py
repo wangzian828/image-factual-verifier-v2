@@ -61,6 +61,8 @@ async def run(args):
     if getattr(args, "repair_mode", "feedback") == "slate":
         # A terminal old search must not bypass the child protocol identity check.
         identity["slate_position_policy"] = "observed-decisions-not-localizer-lock-v1"
+        from ifv_training.psd_slate import SLATE_REVIEW_POLICY
+        identity['slate_review_policy'] = SLATE_REVIEW_POLICY
     # Keep the default identity byte-compatible with the immutable historical
     # canary; only bind fields that change its execution/materialization policy.
     if proposal_rounds != 12:
