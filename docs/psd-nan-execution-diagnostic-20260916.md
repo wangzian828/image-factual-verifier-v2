@@ -43,14 +43,41 @@
 
 ## 统计边界与后续
 
-旧 A/B 是原配置1/16、eager0/16，不是永久修复证明。当前加做每组50次固定请求（每卡并发2），随后同参数逐卡重启，再做第二批50次。
+17:29 实测更新：两批均已完成，每组共100次，第二批前四副本逐卡以相同启动命令重新启动，编译缓存未清理。
+
+|配置|首 token 全null|非tool的stop|其余tool完成|
+|---|---:|---:|---:|
+|原编译+图|1/100|2/100|97/100|
+|编译、无图|1/100|0/100|99/100|
+|无编译、decode-only图|0/100|0/100|100/100|
+|eager，两者均关|0/100|0/100|100/100|
+
+第一批每组50次全部tool完成；异常均在重启后的第二批出现。两次全null仍从首个token开始；
+原配置另两次虽然logprob有限，但首步分布明显偏离常见top20，并以stop而非tool_calls结束，不计作Agent成功。
+结果支持优先排查编译及其伴随custom-op/fusion路径，**不证明具体编译器bug或永久修复**。
+仅关闭图仍能出错；关闭编译+保留decode图值得进入真实repair候选验证。
+随后四卡40路混合长短请求两波及回到固定输入的控制请求共96次完成，每卡24次：原配置1次首token全null、保留编译但关闭图1次；无编译decode图及eager均24/24工具调用完成。
+
+固定100次还比较了同一个token760：eager的logprob全为-0.78991；其他路径存在波动（不能把所有波动都当错误）。
+两种无编译候选均未复现NaN，但先选**纯eager**进入真实repair验证，继续保留其他模式证据，不宣称已定位具体编译算子。
+临时候选控制器为`promote_psd_execution_candidate.py --kind eager`，逐卡核验身份/排空后修改执行模式，原始checkpoint、Agent、输入和预算均不变；这不是永久根因结论，也不是正式训练放行。
+网关将启用有限2GiB、单响应64MiB的原始wire诊断，保留实际非流式repair请求字节，弥补存档重建不是原wire的限制；不记录密钥header。
+恢复脚本`resume_psd_pending_cases.py`只续原3个pending案例，保持6/12预算与已经完成的两轮调查/审核哈希；该脚本须等candidate状态就绪才允许启动。
+新增恢复和诊断在本地共57项定向回归通过；真实repair、目标、9B优化及恢复验证仍未通过，不把脚本已写当作训练成功。
+
+旧 A/B 是原配置1/16、eager0/16，不是永久修复证明。上述扩展诊断已完成两批每组50次固定请求（每卡并发2），两批之间同参数逐卡重启。
 每组都绑定启动命令与进程 receipt，记录首步完整top20和规范化请求hash。
 原配置也可能一段时间不复现，因此需要考虑请求历史/调度状态，不能简单以候选零失败宣告成功。
-若固定请求对照不再触发基线，需另外覆盖混合长度/多图的真实请求历史；这些是诊断，不扩大训练采样预算。
+已覆盖混合长度和两道不同图片任务的请求历史；多图完整 Agent 仍需真实验证。这些是诊断，不扩大训练采样预算。
+
+17:38：四卡 eager 候选已全部就绪，网关原始 wire 捕获已启用。仍只放行原3个pending案例的工程恢复，尚未开始3200条正式采集或PSD优化。
+固定请求正常完成部分的耗时中位数：原配置6.71秒、仅关图7.10秒、无编译decode图5.07秒、纯eager6.69秒。
+输出长度、调度和服务历史未严格匹配，不能当作正式吞吐量或加速倍数。关闭CUDA Graph主要减少CPU启动开销优化，性能影响取决于实际瓶颈；不是退回CPU，也不改变BF16或权重。
+参考 [PyTorch CUDA Graph说明](https://pytorch.org/blog/accelerating-pytorch-with-cuda-graphs/)。
 
 服务根：`/volume/ybo/wza/inference/psd-sft3084-20260916`。
 初次坏请求：`nan-stream-sweep-v1/wave1-gpu3-copy0`；第二次：`nan-stream-eager-ab-v1/wave4-gpu2-copy0`。
-新矩阵：`nan-execution-matrix-part1-v1`；重启控制器：`nan-execution-matrix-restarts-v1`；第二批预定：`nan-execution-matrix-part2-v1`。
+新矩阵：`nan-execution-matrix-part1-v1`；重启控制器：`nan-execution-matrix-restarts-v1`；第二批：`nan-execution-matrix-part2-v1`；混合请求：`nan-mixed-history-v1`。
 
 [上游 #52568](https://github.com/vllm-project/vllm/issues/52568)涉及动态LoRA，不能直接套用本任务。
 编译缓存、前缀缓存、线性注意力状态是不同层次；本次已在APC关闭、mamba none下复现，不把“关前缀缓存”重述成新修复。
