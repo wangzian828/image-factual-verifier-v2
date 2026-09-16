@@ -26,8 +26,9 @@ def main():
     parser.add_argument('--storage-cache', action='store_true')
     parser.add_argument('--storage-spool', action='store_true')
     parser.add_argument('--completed-recovery', action='store_true')
+    parser.add_argument('--final-bank-gate', action='store_true')
     args = parser.parse_args()
-    if sum((args.storage_cache, args.storage_spool, args.completed_recovery)) > 1:
+    if sum((args.storage_cache, args.storage_spool, args.completed_recovery, args.final_bank_gate)) > 1:
         parser.error('Choose one immutable snapshot variant')
     if args.storage_cache:
         OUT = ROOT / 'training-artifacts/psd-storage-reader-20260917-v31'
@@ -45,6 +46,11 @@ def main():
         BASE = ROOT / 'training-artifacts/psd-storage-spool-20260917-v32/code'
         FILES = {'training/ifv_training': ['psd_collection_recovery.py'],
                  'training/tests': ['test_psd_collection_recovery.py']}
+    if args.final_bank_gate:
+        OUT = ROOT / 'training-artifacts/psd-final-bank-gate-20260917-v34'
+        BASE = ROOT / 'training-artifacts/psd-completed-recovery-20260917-v33/code'
+        FILES = {'scripts/server': ['run_psd_dp4_resume_gate.py'],
+                 'training/tests': ['test_psd_final_bank_gate.py']}
     os.umask(0o077)
     code = OUT / 'code'
     if code.exists():

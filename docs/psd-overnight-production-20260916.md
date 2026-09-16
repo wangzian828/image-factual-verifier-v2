@@ -1,5 +1,26 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 04:03 最终bank的四卡验收入口已准备（尚未执行）
+
+- 采集继续到693/3200、3普通错误、0待解基础设施槽；四卡、存储助手正常。
+  v3截至03:59累计14次模型超时，未见新增NaN。作业约30.4GiB，128GiB准入保护未触发。
+  这仍是源采集，正式训练0步；不因为夜间时间目标而绕过完整源/目标验收。
+- 新备用代码`/volume/ybo/wza/training-artifacts/psd-final-bank-gate-20260917-v34/code`：
+  531项服务器回归通过、冻结Agent未变，本地29项门槛/配置测试通过。
+  继承v33的gzip及历史预算恢复支持。**没有切换活动collector/存储助手，也没有拿走GPU。**
+- `scripts/server/run_psd_dp4_resume_gate.py`新增显式`--ready`：先通过正常`load_ready`
+  校验最终bank哈希和datum，再从它选择datums、snapshot及19025当前网关，不再误用199-target
+  canary的硬编码bank、旧snapshot及19019。仅接受ROOT内路径、epoch3原模型、无先前PSD adapter
+  的本轮初始化，记录ready/datums/snapshot绑定；原生2步baseline/第1步恢复的证明机制不变。
+  默认不传`--ready`仍是旧工程入口，**正式bank验收必须传，不能直接照抄旧launch命令**。
+- 未来用法：v34的该脚本`launch --deployment psd-final-bank-gate-20260917-v34
+  --output-name dp4-resume-gate-production-v1 --ready <最终本轮ready.json>`。
+  此路径现在尚不存在，不运行。先完成3200源、checker、slate repair、preservation和raw教师评分；
+  准备阶段的`--round-index`应为1（这是第一个PSD round，不是SFT epoch或0-based编号）。
+  最终数据以DP4、每rank2、累积4的global32执行2步及原生恢复对照；通过后另起5epoch优化。
+- 上述531测试只证明代码/输入边界；最终bank上的GPU loss/梯度/更新及恢复仍未实测。
+  旧199-target单卡更新、旧masked bank四卡恢复都不替代这个待完成组合门槛。
+
 ## 2026-09-17 02:35 接续检查及备用恢复入口
 
 - v3采集持续推进到338/3200，3普通错误、0待解基础设施槽，并发40；v3累计6次

@@ -1,6 +1,7 @@
 """Lease the four owned replicas for native FSDP2 PSD checkpoint/resume proof.
 
-Uses the complete 199-target real engineering bank, not the formal 400x8 run.
+Defaults to the historical engineering bank. --ready explicitly binds a new
+completed round's final raw-target bank; it never starts production training.
 Restores every stopped replica on failure or success. No protected model writes.
 """
 import argparse
@@ -24,18 +25,53 @@ SNAPSHOT = ROOT / 'training-artifacts/psd-contract-audit-20260916-v10/snapshot'
 MODEL = ROOT / 'exports/h20-sft-merged4872-3epoch-step3084-20260915/model'
 
 
+def ready_inputs(path, *, root, load_ready):
+    """Resolve an attested final bank before taking any GPU lease."""
+    root = root.resolve()
+    path = path.resolve()
+    path.relative_to(root/'runs')
+    ready = load_ready(path)
+    fields = {}
+    for name in ('datums', 'datum_manifest', 'serving_profile', 'checkpoint_manifest', 'rollout_gate'):
+        fields[name] = Path(ready[name]).resolve()
+        fields[name].relative_to(root)
+        if not fields[name].is_file():
+            raise ValueError('PSD ready input is missing: ' + name)
+    if (ready.get('adapter') is not None
+            or Path(ready['model']).resolve() != (root/'exports/h20-sft-merged4872-3epoch-step3084-20260915/model').resolve()):
+        raise ValueError('Final gate must initialize from the protected epoch3 model')
+    if (fields['datum_manifest'] != fields['datums'].parent/'manifest.json'
+            or fields['checkpoint_manifest'] != fields['serving_profile'].parent/'checkpoint-manifest.json'):
+        raise ValueError('Final gate manifests must match the selected datum/snapshot layout')
+    profile = json.loads(fields['serving_profile'].read_text())
+    if profile.get('base_url') != 'http://127.0.0.1:19025/v1':
+        raise ValueError('Final gate must bind the current owned inference gateway')
+    return {'run': path.parent, 'snapshot': fields['serving_profile'].parent,
+            'datums': fields['datums'], 'gateway': 'http://127.0.0.1:19025', 'ready': path}
+
+
 def main():
-    global DEPLOY, CODE
+    global DEPLOY, CODE, RUN, SNAPSHOT
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('launch', 'execute'))
     parser.add_argument('--output-name', default='dp4-resume-gate-v1')
     parser.add_argument('--deployment', default=DEPLOY.name)
     parser.add_argument('--resume-only-from', type=Path)
+    parser.add_argument('--ready', type=Path,
+                        help='Attested final raw-target bank; omit only for the historical engineering gate')
     args = parser.parse_args()
     assert Path(args.deployment).name == args.deployment and args.deployment.startswith('psd-')
     DEPLOY = ROOT / 'training-artifacts' / args.deployment
     CODE = DEPLOY / 'code'
+    datums = RUN/'bank/datums/datums.jsonl'
+    gateway = 'http://127.0.0.1:19019'
+    if args.ready:
+        sys.path[:0] = [str(CODE), str(CODE/'training')]
+        from scripts.run_psd_round import load_ready
+        selected = ready_inputs(args.ready, root=ROOT, load_ready=load_ready)
+        RUN, SNAPSHOT = selected['run'], selected['snapshot']
+        datums, gateway, args.ready = selected['datums'], selected['gateway'], selected['ready']
     if args.resume_only_from:
         args.resume_only_from = args.resume_only_from.resolve()
         args.resume_only_from.relative_to(ROOT / 'checkpoints')
@@ -44,13 +80,16 @@ def main():
     out = RUN / args.output_name
     spec = importlib.util.spec_from_file_location('owner', ROOT / 'training-artifacts/psd-epoch3-20260916-v1/psd_epoch3_canary.py')
     owner = importlib.util.module_from_spec(spec); spec.loader.exec_module(owner)
-    assert owner.load(DEPLOY / 'state.json')['deployment_ready_not_live']
+    stage = DEPLOY/'stage-state.json'
+    assert owner.load(stage if stage.exists() else DEPLOY/'state.json')['deployment_ready_not_live']
     if args.mode == 'launch':
-        assert owner.load(RUN / 'state.json')['phase'] == 'ready_for_trainer'
+        if not args.ready:
+            assert owner.load(RUN / 'state.json')['phase'] == 'ready_for_trainer'
         out.mkdir(exist_ok=False)
         command = [sys.executable, '-u', str(Path(__file__).resolve()), 'execute', '--output-name', args.output_name,
                    '--deployment', args.deployment]
         if args.resume_only_from: command += ['--resume-only-from', str(args.resume_only_from)]
+        if args.ready: command += ['--ready', str(args.ready)]
         receipt = owner.spawn(command, os.environ.copy(), out / 'run.log')
         owner.save(out / 'process.json', receipt)
         print(json.dumps({'pid': receipt['pid'], 'output': str(out)})); return
@@ -63,14 +102,17 @@ def main():
     assert [e['CUDA_VISIBLE_DEVICES'] for e in environments] == ['0', '1', '2', '3']
     guard = owner.load(SERVICE / 'guard.json'); owner.checked(guard)
     owner.save(out / 'binding.json', {'backends': backends, 'code_binding_sha256': owner.sha(DEPLOY / 'code-binding.json'),
-        'datums_sha256': owner.sha(RUN / 'bank/datums/datums.jsonl'), 'formal_training': False})
+        'datums': str(datums), 'datums_sha256': owner.sha(datums), 'snapshot': str(SNAPSHOT),
+        'gateway': gateway, 'ready': str(args.ready) if args.ready else None,
+        'ready_sha256': owner.sha(args.ready) if args.ready else None,
+        'global_batch_size': 32, 'formal_training': False})
     stopped = []
     def stop_one(i):
         owner.stop(backends[i])
         stopped.append(i)
     try:
         os.kill(guard['pid'], signal.SIGSTOP)
-        assert all(r['inflight'] == 0 for r in owner.http('http://127.0.0.1:19019/health')['replicas'])
+        assert all(r['inflight'] == 0 for r in owner.http(gateway+'/health')['replicas'])
         for attempt in range(90):
             busy = []
             for i in range(4):
@@ -106,7 +148,7 @@ def main():
             command = ['bash', str(CODE / 'training/scripts/train/run_psd_topk.sh'),
                 str(CODE / 'training/configs/models/qwen3.5-9b.env'),
                 str(CODE / 'training/configs/psd/qwen3.5-lora-r32-h20-dp4-128k.env'),
-                str(RUN / 'bank/datums/datums.jsonl'), experiment]
+                str(datums), experiment]
             if checkpoint is not None: command.append(str(checkpoint))
             with (out / f'{experiment}.log').open('x') as log:
                 p = subprocess.Popen(command, env=env, cwd=CODE, stdin=subprocess.DEVNULL,
