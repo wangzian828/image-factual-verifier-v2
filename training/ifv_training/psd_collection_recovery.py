@@ -9,6 +9,7 @@ slots may be carried forward, but this never creates another budget extension.
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from .io import load_json, sha256_file
@@ -90,7 +91,8 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
                 'max_attempts': 5, 'inputs': inputs, 'source_ledger': str(marker),
                 'source_ledger_sha256': sha256_file(marker), 'evidence': numerical_recovery['evidence']}
             recovery_attempt_budget(output/marker.parent.name, inputs, allowance=allowance)
-            work.append((marker, None, None, identity, state, None, allowance, None))
+            work.append((marker, None, None, identity, state, allowance, None,
+                         {str(marker): sha256_file(marker)}, None))
             continue
         if not result_path.is_file() or not state.get('attempts') or state['attempts'][-1]['status'] != 'completed':
             raise ValueError('In-flight or interrupted slot requires explicit diagnosis before recovery')
@@ -102,11 +104,23 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
         evidence = numerical_failure_evidence(result, inputs=inputs, source_slot=marker.parent)
         if carried_allowance is not None and evidence is not None:
             raise ValueError('Completed extended bank has unresolved numerical failure; no further extension')
-        work.append((marker, result_path, trace_path, identity, state, result, evidence, carried_allowance))
+        originals = [marker, result_path, trace_path]
+        if carried_allowance is not None:
+            originals.append(marker.parent/'recovery-allowance.json')
+        header = load_json(result_path)
+        if header.get('schema_version') == 'ifv-psd-bound-gzip-v1':
+            originals.append(result_path.parent/header['archive'])
+        compact = {**result, 'state': {'stage_timings': result.get('state', {}).get('stage_timings', {})}}
+        work.append((marker, result_path, trace_path, identity, state, evidence, carried_allowance,
+                     {str(p): sha256_file(p) for p in originals}, compact))
+        # Never retain every multimodal payload until all slots are checked.
+        del result
     if not work:
         raise ValueError('No completed prior slots to recover')
     records = []
-    for marker, result_path, trace_path, identity, state, result, evidence, carried_allowance in work:
+    for marker, result_path, trace_path, identity, state, evidence, carried_allowance, originals, compact in work:
+        if any(sha256_file(Path(p)) != digest for p, digest in originals.items()):
+            raise ValueError('Prior source changed during recovery validation')
         target = output/marker.parent.name
         binding = {**identity, 'version': VERSION}
         payload = copy.deepcopy(state)
@@ -122,22 +136,30 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
             continue
         if evidence is not None:
             payload['attempts'][-1].update(status='infrastructure_failed', reason=evidence['reason'])
-        originals = [marker, result_path, trace_path]
         if carried_allowance is not None:
             from .io import write_json
             write_json(target/'recovery-allowance.json', carried_allowance)
-            originals.append(marker.parent/'recovery-allowance.json')
         cache_header = load_json(result_path)
-        if cache_header.get('schema_version') == 'ifv-psd-bound-gzip-v1':
-            # load_bound above already validated the relative archive and SHA.
-            originals.append(result_path.parent/cache_header['archive'])
         save_bound(target/'retry-state.json', identity=binding, payload=payload)
         if evidence is None:
-            save_bound(target/'result.json', identity=binding, payload=result)
+            if binding == identity:
+                # Same-filesystem immutable source bank: preserve exact packed
+                # bytes and relative archive references without expanding it.
+                if cache_header.get('schema_version') == 'ifv-psd-bound-gzip-v1':
+                    archive = result_path.parent/cache_header['archive']
+                    os.link(archive, target/archive.name)
+                os.link(result_path, target/'result.json')
+            else:
+                save_bound(target/'result.json', identity=binding,
+                           payload=load_bound(result_path, identity=identity))
+            canonical = destination/'traces'/trace_path.name
+            canonical.parent.mkdir(parents=True, exist_ok=True)
+            os.link(trace_path, canonical)
         records.append({'episode_id': identity['inputs']['episode_id'],
             'action': 'retry_remaining_budget' if evidence else 'reuse_exact_outcome',
             'spent_attempts': len(state['attempts']), 'maximum_attempts': binding['max_attempts'],
-            'originals': {str(p): sha256_file(p) for p in originals},
+            'originals': originals,
+            'cached_result': compact if evidence is None else None,
             'carried_recovery_allowance': carried_allowance is not None,
             'numerical_failure_evidence': evidence})
     return {'schema_version': 'ifv-psd-slot-recovery-v1', 'slots': len(records),

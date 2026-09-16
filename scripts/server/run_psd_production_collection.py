@@ -167,31 +167,23 @@ def execute(o):
     started = time.time()
     progress = {'selected': 3200, 'completed': 0, 'canonical': 0, 'normal_errors': 0,
                 'pending_infrastructure': 0, 'concurrency': 40, 'started_at': started}
-    storage = {'checked_at': 0, 'admission_open': True}
-    storage_lock = asyncio.Lock()
-
-    async def storage_admission():
-        async with storage_lock:
-            if time.time()-storage['checked_at'] >= 60:
-                def measure():
-                    measured = subprocess.run(['du', '-s', '-B1', str(RUN)],
-                        capture_output=True, text=True, check=True, timeout=45)
-                    return int(measured.stdout.split()[0]), shutil.disk_usage(RUN).free
-                used, free = await asyncio.to_thread(measure)
-                storage.update(checked_at=time.time(), run_bytes=used, shared_free_bytes=free,
-                    personal_quota_known=False, ceiling_bytes=STORAGE_CEILING,
-                    admission_open=used < STORAGE_CEILING and free >= 16*GIB)
-                o.save(RUN/'storage.json', storage)
-            if not storage['admission_open']:
-                raise RuntimeError('Storage admission held; preserve completed slots and inspect quota')
+    from ifv_training.psd_storage_admission import StorageAdmission
+    storage_admission = StorageAdmission(run=RUN, ceiling=STORAGE_CEILING, save=o.save)
+    reused_results = {}
 
     class ProductionWorkflow(collector.PSDWorkflow):
         def _new_batch_child(self, config):
             return ProductionWorkflow(config)
 
         async def run_single(self, image_path, image_id='', *, runtime_case=None):
-            await storage_admission()
-            result = await super().run_single(image_path, image_id, runtime_case=runtime_case)
+            if image_id in reused_results:
+                # Import already verified the complete immutable cache and
+                # canonical trace. Reuse its compact record without rewriting
+                # multi-GB histories or generating a new model request.
+                result = reused_results[image_id]
+            else:
+                await storage_admission()
+                result = await super().run_single(image_path, image_id, runtime_case=runtime_case)
             progress['completed'] += 1
             pending = bool(result.get('psd_infrastructure_pending'))
             progress['pending_infrastructure'] += int(pending)
@@ -215,6 +207,8 @@ def execute(o):
                     destination=RUN/'episodes', episode_ids=image_ids, seeds=sampling_seeds,
                     numerical_recovery=binding.get('numerical_recovery'))
                 o.save(RUN/'slot-recovery.json', imported)
+                reused_results.update({r['episode_id']: r['cached_result'] for r in imported['records']
+                                       if r['action'] == 'reuse_exact_outcome'})
             first = await super().run_batch(**{k: v[:40] for k, v in arrays.items()}, concurrency=40)
             paths = []
             for episode in image_ids[:40]:

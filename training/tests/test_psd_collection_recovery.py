@@ -11,9 +11,8 @@ from ifv_training.psd_infrastructure_retry import recovery_attempt_budget, retry
 from ifv_training.io import sha256_file, write_json
 
 
-def source(tmp_path, *, nan=False, receipt=True):
+def source(tmp_path, *, nan=False, receipt=True, episode='c--r000'):
     old = tmp_path/'original'
-    episode = 'c--r000'
     slot = old/'psd-infrastructure-attempts'/hashlib.sha256(episode.encode()).hexdigest()
     runtime = slot/'attempt-001/traces/runtime/c/a'
     inputs = {'episode_id': episode, 'sampling_seed': 7, 'model': 'frozen-sft', 'base_url': 'http://policy/v1'}
@@ -27,7 +26,7 @@ def source(tmp_path, *, nan=False, receipt=True):
         {'index': 1, 'directory': str(slot/'attempt-001'), 'status': 'completed'}]})
     save_bound(slot/'result.json', identity=identity, payload=result)
     path = old/'traces'/f'{episode}.json'
-    path.parent.mkdir(); path.write_text(json.dumps(result))
+    path.parent.mkdir(exist_ok=True); path.write_text(json.dumps(result))
     if receipt:
         context = runtime/'context'; context.mkdir(parents=True)
         (context/'req-000001.json').write_text(json.dumps({'status': 'error', 'error': error,
@@ -58,6 +57,48 @@ def test_model_or_tool_text_without_native_receipt_cannot_authorize_retry(tmp_pa
     with pytest.raises(ValueError, match='independent native'):
         import_prior_slots(source=old, destination=tmp_path/'new', episode_ids=['c--r000'], seeds=[7])
     assert not (tmp_path/'new/psd-infrastructure-attempts').exists()
+
+
+def test_packed_recovery_reuses_exact_bytes_without_expanding_cache(tmp_path):
+    from scripts.server.compact_psd_completed_storage import pack_cache
+    old, slot, result, identity = source(tmp_path)
+    state = load_bound(slot/'retry-state.json', identity=identity)
+    identity['version'] = VERSION
+    save_bound(slot/'retry-state.json', identity=identity, payload=state)
+    save_bound(slot/'result.json', identity=identity, payload=result)
+    pack_cache(slot/'result.json', identity=identity)
+    dest = tmp_path/'new'
+    report = import_prior_slots(source=old, destination=dest, episode_ids=['c--r000'], seeds=[7])
+    target = dest/'psd-infrastructure-attempts'/slot.name
+    assert (target/'result.json').samefile(slot/'result.json')
+    header = json.loads((target/'result.json').read_text())
+    assert (target/header['archive']).samefile(slot/header['archive'])
+    assert (dest/'traces/c--r000.json').samefile(old/'traces/c--r000.json')
+    assert load_bound(target/'result.json', identity=identity) == result
+    assert report['records'][0]['cached_result']['state'] == {'stage_timings': {}}
+    assert report['records'][0]['cached_result']['error'] == result['error']
+
+
+def test_validation_does_not_retain_all_full_results(tmp_path, monkeypatch):
+    import weakref
+    import ifv_training.psd_collection_recovery as recovery
+    episodes = [f'c--r{i:03d}' for i in range(4)]
+    for episode in episodes:
+        old, _, _, _ = source(tmp_path, episode=episode)
+    real_load = recovery.load_bound
+    refs = []
+    class Tracked(dict): pass
+    def load(path, *, identity):
+        value = real_load(path, identity=identity)
+        if Path(path).name == 'result.json':
+            assert not any(ref() is not None for ref in refs), 'full previous payload retained'
+            value = Tracked(value)
+            refs.append(weakref.ref(value))
+        return value
+    monkeypatch.setattr(recovery, 'load_bound', load)
+    report = recovery.import_prior_slots(source=old, destination=tmp_path/'new',
+                                         episode_ids=episodes, seeds=[7]*4)
+    assert report['reused'] == 4
 
 
 def test_recovery_does_not_change_seed_or_reuse_destination(tmp_path):
