@@ -115,6 +115,9 @@ def build_sparse_topk_datum(
 
     if _text(target.get("target_status")) != "complete":
         raise ValueError("target_status must be complete")
+    from .psd_capture_semantics import RAW_POLICY_LOGPROBS
+    if target.get("teacher_logprob_semantics") != RAW_POLICY_LOGPROBS:
+        raise ValueError("teacher_logprob_semantics_unattested: re-score exact original tokens")
     target_id = _text(target.get("target_id"))
     if not target_id:
         raise ValueError("target_id_missing")
@@ -173,6 +176,7 @@ def build_sparse_topk_datum(
         "target_id": target_id,
         "kind": kind,
         "topk": topk,
+        "teacher_logprob_semantics": RAW_POLICY_LOGPROBS,
         "input_ids": input_ids,
         **({"psd_media": dict(target["psd_media"])} if target.get("psd_media") else {}),
         "target_tokens": target_tokens,

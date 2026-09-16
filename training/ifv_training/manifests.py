@@ -61,6 +61,7 @@ TRAINING_RUNTIME_ENVIRONMENT = (
     "PYTORCH_CUDA_ALLOC_CONF",
     "PYTORCH_ALLOC_CONF",
     "IMAGE_MAX_TOKEN_NUM",
+    "FLASH_ATTENTION_DETERMINISTIC",
 )
 
 
@@ -72,6 +73,9 @@ def _version(name: str) -> str | None:
 
 
 def _git_commit(path: Path) -> str:
+    # Deployed immutable code snapshots have a separate hash binding, no Git.
+    if not (path / ".git").exists():
+        return ""
     result = subprocess.run(
         ["git", "-C", str(path), "rev-parse", "HEAD"],
         capture_output=True,

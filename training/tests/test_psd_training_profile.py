@@ -69,6 +69,16 @@ def test_production_psd_profile_gate_accepts_upstream_recipe(tmp_path: Path) -> 
     assert gate["optimization"]["unique_targets_per_step"] == 32
 
 
+@pytest.mark.parametrize('setting,passed', [('0',True),('1',True),('true',False)])
+def test_attention_numerics_are_bound_to_resume_recipe(tmp_path, monkeypatch, setting, passed):
+    monkeypatch.setenv('FLASH_ATTENTION_DETERMINISTIC',setting)
+    output=tmp_path/'gate.json'
+    result=subprocess.run(_command(output),check=False,capture_output=True)
+    gate=json.loads(output.read_text())
+    assert (result.returncode==0) is passed
+    assert gate['numerics']['flash_attention_deterministic'] is (setting=='1')
+
+
 @pytest.mark.parametrize('steps,batch,lr,passed', [(2, 32, '4e-5', True),
     (1, 32, '4e-5', False), (3, 32, '4e-5', False),
     (2, 16, '4e-5', False), (2, 32, '1e-5', False)])

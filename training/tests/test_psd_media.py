@@ -38,6 +38,7 @@ def test_repeated_images_survive_datum_and_hash_validation(tmp_path):
     assert media["image_sha256"][0] == media["image_sha256"][1]
     datum = build_sparse_topk_datum({
         "target_status": "complete", "target_id": "multi", "kind": "repair",
+        "teacher_logprob_semantics": "pre_grammar_unprocessed_v1",
         "student_prompt_ids": ids, "completion_ids": [10, 11],
         "teacher_topk_by_position": [[[10, 1.0]], [[11, 1.0]]], "psd_media": media,
     }, topk=1)

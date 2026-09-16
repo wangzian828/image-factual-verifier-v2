@@ -23,6 +23,7 @@ def test_datum_builder_cannot_silently_strip_pixels():
     with pytest.raises(ValueError, match="psd_multimodal_not_supported"):
         build_sparse_topk_datum({
             "target_status": "complete", "target_id": "visual", "kind": "repair",
+            "teacher_logprob_semantics": "pre_grammar_unprocessed_v1",
             "student_prompt_ids": [1, 248056], "completion_ids": [2],
             "teacher_topk_by_position": [[[2, 1.0]]],
         }, topk=1)

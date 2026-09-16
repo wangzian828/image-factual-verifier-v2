@@ -36,6 +36,8 @@ class PSDWorkflow(VerificationWorkflow):
 
 
 def main():
+    from ifv_training.psd_capture_semantics import install_capture_semantics
+    install_capture_semantics()
     from ifv_training.psd_collection import require_token_capture_environment
     require_token_capture_environment(os.environ)
     from src.eval import run_cases

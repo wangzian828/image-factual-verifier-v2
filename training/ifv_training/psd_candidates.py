@@ -153,6 +153,7 @@ def _policy_token_capture(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "completion_token_ids": completion_token_ids,
         "completion_logprobs": completion_logprobs,
         "completion_topk_by_position": topk,
+        "teacher_logprob_semantics": _text(raw.get("teacher_logprob_semantics")),
         "topk": int(raw.get("topk", 0) or 0),
     }
 

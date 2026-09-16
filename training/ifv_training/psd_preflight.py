@@ -39,6 +39,9 @@ def _integer(value: Any, *, default: int = 0) -> int:
 
 
 def _datum_error(row: Mapping[str, Any], *, topk: int, max_context: int) -> str:
+    from .psd_capture_semantics import RAW_POLICY_LOGPROBS
+    if row.get("teacher_logprob_semantics") != RAW_POLICY_LOGPROBS:
+        return "datum_teacher_logprob_semantics_unattested"
     if _text(row.get("schema_version")) not in {PSD_SPARSE_DATUM_SCHEMA_VERSION, PSD_COMPACT_DATUM_SCHEMA_VERSION}:
         return "datum_schema_invalid"
     if _text(row.get("kind")) not in {"repair", "preserve"}:

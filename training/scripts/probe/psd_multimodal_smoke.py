@@ -73,6 +73,7 @@ def main():
                                             target_modules="all-linear", task_type="CAUSAL_LM"))
     model.train()
     datum = build_sparse_topk_datum({"target_status": "complete", "target_id": "smoke", "kind": "repair",
+        "teacher_logprob_semantics": "pre_grammar_unprocessed_v1",
         "student_prompt_ids": prompt, "completion_ids": completion,
         "teacher_topk_by_position": distributions, "psd_media": media}, topk=20)
     install_ms_swift_psd_plugin()

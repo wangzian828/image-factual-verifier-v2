@@ -194,6 +194,7 @@ def test_materialize_topk_cache_requires_exact_token_hashes(tmp_path: Path) -> N
         json.dumps(
             {
                 "schema_version": "ifv-psd-teacher-topk-cache-v2",
+                "teacher_logprob_semantics": "pre_grammar_unprocessed_v1",
                 "target_id": target["target_id"],
                 "teacher_provider": "qwen_local",
                 "teacher_model": "qwen-round-start",
@@ -244,6 +245,7 @@ def test_materialize_topk_cache_rejects_wrong_self_teacher_checkpoint(
                 "teacher_provider": "qwen_local",
                 "teacher_model": "qwen-round-start",
                 "teacher_checkpoint": "different-checkpoint",
+                "teacher_logprob_semantics": "pre_grammar_unprocessed_v1",
                 "teacher_checkpoint_manifest_sha256": "a" * 64,
                 "teacher_prompt_sha256": _token_hash(
                     target["teacher_prompt_ids"]

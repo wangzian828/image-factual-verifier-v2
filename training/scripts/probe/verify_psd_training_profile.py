@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 
 
@@ -46,6 +47,9 @@ def main() -> None:
     args = parser.parse_args()
 
     errors: list[str] = []
+    deterministic_attention=os.environ.get('FLASH_ATTENTION_DETERMINISTIC','0')
+    if deterministic_attention not in {'0','1'}:
+        errors.append('flash_attention_deterministic_must_be_0_or_1')
     if args.lr_scheduler_type != "constant":
         errors.append("published_scheduler_must_be_constant")
     if args.loss_reduction != "sum":
@@ -134,10 +138,11 @@ def main() -> None:
             errors.append("memory_probe_epochs_must_be_unset")
 
     result = {
-        "schema_version": "ifv-psd-training-profile-gate-v3",
+        "schema_version": "ifv-psd-training-profile-gate-v4",
         "passed": not errors,
         "mode": args.mode,
         "errors": errors,
+        "numerics": {"flash_attention_deterministic": deterministic_attention=='1'},
         "parallelism": {
             "world_size": args.world_size,
             "sequence_parallel_size": args.sequence_parallel_size,

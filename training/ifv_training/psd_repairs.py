@@ -146,6 +146,11 @@ def _captured_topk(
     *,
     completion_ids: list[int],
 ) -> list[Any] | None:
+    from .psd_capture_semantics import RAW_POLICY_LOGPROBS
+    if capture.get("teacher_logprob_semantics") != RAW_POLICY_LOGPROBS:
+        # Preserve the original tokens/episode. Unknown or grammar-masked
+        # distributions need exact forced-token scoring, never relabeling.
+        return None
     value = capture.get("completion_topk_by_position")
     if value in (None, []):
         return None
@@ -350,6 +355,7 @@ def _validate_attempt(
         **({"psd_media": dict(attempt["psd_media"])} if attempt.get("psd_media") else {}),
         "completion_ids": completion_ids,
         "teacher_topk_by_position": captured_topk,
+        "teacher_logprob_semantics": capture.get("teacher_logprob_semantics", ""),
         "row_weight": _positive_weight(
             attempt.get("row_weight", 1.0),
             field="row_weight",
@@ -392,6 +398,7 @@ def _repair_row(
         "completion_ids": list(selected["completion_ids"]),
         **(
             {
+                "teacher_logprob_semantics": selected.get("teacher_logprob_semantics", ""),
                 "teacher_topk_by_position": list(
                     selected["teacher_topk_by_position"]
                 )
@@ -462,7 +469,8 @@ def _preservation_row(
                 **({"psd_media": media} if media else {}),
                 "completion_ids": completion_ids,
                 **(
-                    {"teacher_topk_by_position": captured_topk}
+                    {"teacher_topk_by_position": captured_topk,
+                     "teacher_logprob_semantics": capture.get("teacher_logprob_semantics", "")}
                     if (
                         captured_topk := _captured_topk(
                             capture,

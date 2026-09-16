@@ -93,6 +93,8 @@ class QwenContinuationAdapter:
         policy_topk: int = 20,
         hint_constructor_thinking_level: str = "low",
     ) -> None:
+        from .psd_capture_semantics import install_capture_semantics
+        install_capture_semantics()
         provider = str(getattr(policy_llm, "provider", "")).strip().lower()
         wire_api = str(getattr(policy_llm, "wire_api", "")).strip().lower()
         if provider not in {"qwen_local", "lmdeploy"} or wire_api != "chat_completions":

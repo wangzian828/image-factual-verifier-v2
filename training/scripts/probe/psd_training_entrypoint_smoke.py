@@ -54,6 +54,7 @@ def main():
     for i in range(3):
         target = dict(target_id=f"tiny-{i}", kind="repair" if i == 0 else "preserve",
             target_status="complete", student_prompt_ids=[5, 6, 7, 8],
+            teacher_logprob_semantics="pre_grammar_unprocessed_v1",
             completion_ids=[100 + i, 101 + i], row_weight=1.0,
             teacher_topk_by_position=[[[token, 0.05] for token in range(100, 120)]] * 2)
         rows.append(compact_datum(build_sparse_topk_datum(target, topk=20)))

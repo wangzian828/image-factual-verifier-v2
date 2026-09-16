@@ -17,6 +17,19 @@ from fastapi import FastAPI, HTTPException, Request, Response
 
 from scripts.server import qwen_replica_gateway as base
 from scripts.server.psd_wire_capture import WireCapture
+from scripts.server.psd_raw_logprobs import SEMANTICS, validate_raw_worker_receipts
+
+
+def raw_teacher_binding():
+    marker = os.environ.get('PSD_POLICY_LOGPROB_SEMANTICS', '')
+    if not marker:
+        return None
+    if marker != SEMANTICS:
+        raise ValueError('Unknown PSD teacher logprob semantics')
+    receipts = json.loads(os.environ.get('PSD_RAW_WORKER_RECEIPTS', '[]'))
+    files = json.loads(os.environ.get('PSD_RAW_WORKER_FILES', '{}'))
+    validate_raw_worker_receipts(receipts, base.REPLICA_URLS, files)
+    return marker
 
 
 def public_alias():
@@ -105,6 +118,7 @@ def normalize_payload(payload):
 
 @asynccontextmanager
 async def lifespan(app):
+    raw_teacher_binding()
     gateway, client, stage = deadline_config()
     app.state.deadline = gateway
     app.state.timeout_contract = {'gateway': gateway, 'model_client': client, 'stage': stage}
@@ -214,11 +228,18 @@ async def proxy(request: Request, path: str):
         if path != 'chat/completions':
             raise HTTPException(400, 'PSD gateway only accepts chat completions POST')
         try:
+            raw_teacher_binding()  # Do not relabel after an unbound backend swap.
             payload = normalize_payload(payload)
         except (ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(400, str(exc)) from exc
     response = await request_once(request, 'v1/' + path, payload)
     body = response.content
+    if request.method == 'POST' and response.status_code == 200:
+        marker = raw_teacher_binding()
+        if marker:
+            parsed = json.loads(body)
+            parsed['ifv_policy_logprobs'] = marker
+            body = json.dumps(parsed, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode()
     if request.method == 'GET' and path == 'models' and response.status_code == 200:
         try:
             body = model_alias_payload(body)

@@ -6,6 +6,7 @@ from ifv_training.psd_preflight import _datum_error
 
 def dense():
     return build_sparse_topk_datum({"target_id": "case", "kind": "repair", "target_status": "complete",
+        "teacher_logprob_semantics": "pre_grammar_unprocessed_v1",
         "student_prompt_ids": [5] * 1000, "completion_ids": [7, 8], "row_weight": 0.5,
         "teacher_topk_by_position": [[[7, 0.75], [9, 0.25]], [[8, 0.8], [9, 0.2]]]}, topk=2)
 

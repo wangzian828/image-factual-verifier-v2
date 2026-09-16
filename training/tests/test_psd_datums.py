@@ -25,6 +25,7 @@ def _target(
     return {
         "target_id": target_id,
         "target_status": "complete",
+        "teacher_logprob_semantics": "pre_grammar_unprocessed_v1",
         "kind": kind,
         "student_prompt_ids": prompt_ids or [10, 11],
         "completion_ids": completion,

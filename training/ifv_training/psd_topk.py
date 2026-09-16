@@ -36,6 +36,7 @@ from .psd import (
 )
 from .psd_modality import require_text_only_psd
 from .psd_media import media_digest
+from .psd_capture_semantics import RAW_POLICY_LOGPROBS
 
 
 PSD_TOPK_COLLECTION_SCHEMA_VERSION = "ifv-psd-topk-collection-v1"
@@ -331,6 +332,7 @@ def _cache_record(
         **({"media_sha256": media_digest(scored["target"]["psd_media"])}
            if scored["target"].get("psd_media") else {}),
         "teacher_topk_by_position": distributions,
+        "teacher_logprob_semantics": RAW_POLICY_LOGPROBS,
         "collection": {
             "engine": "vllm",
             "profile_id": _text(profile.get("profile_id")),
@@ -357,6 +359,7 @@ def _validate_existing_cache(
         teacher = scored["teacher"]
         expected = {
             "schema_version": PSD_TOPK_CACHE_SCHEMA_VERSION,
+            "teacher_logprob_semantics": RAW_POLICY_LOGPROBS,
             "teacher_provider": teacher["provider"],
             "teacher_model": teacher["model"],
             "teacher_checkpoint": teacher["checkpoint"],

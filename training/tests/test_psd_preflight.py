@@ -11,6 +11,7 @@ def _target(target_id: str, kind: str) -> dict:
     return {
         "target_id": target_id,
         "target_status": "complete",
+        "teacher_logprob_semantics": "pre_grammar_unprocessed_v1",
         "kind": kind,
         "student_prompt_ids": [10, 11],
         "completion_ids": [20, 21],
