@@ -28,6 +28,7 @@ GATEWAY = 'http://127.0.0.1:19025'
 GIB = 1024**3
 # An admission ceiling, NOT an assertion about the user's unknown GPFS quota.
 STORAGE_CEILING = 128 * GIB
+REUSE_RUN = None
 
 
 def owner():
@@ -99,6 +100,15 @@ def checked_inputs(o):
 
 def launch(o):
     old, source, ids = checked_inputs(o)
+    if REUSE_RUN is not None:
+        prior = o.load(REUSE_RUN/'binding.json')
+        for key in ('benchmark', 'train_cases', 'private_gold', 'source_access_policy'):
+            if prior[key] != source[key] or prior['files'][source[key]] != o.sha(Path(source[key])):
+                raise ValueError('Recovered run has different training inputs')
+        process = o.load(REUSE_RUN/'process.json')
+        cmdline = Path(f'/proc/{process["pid"]}/cmdline')
+        if cmdline.exists() and cmdline.read_bytes():
+            raise ValueError('Original collector still alive; drain before recovery')
     if any(r['inflight'] for r in o.http(GATEWAY+'/health')['replicas']):
         raise ValueError('Another inference client is active; inspect before launch')
     RUN.mkdir(exist_ok=False)
@@ -120,6 +130,7 @@ def launch(o):
         first_batch=40, temperature=.7, seed=0, formal_source_collection=True,
         storage_ceiling_bytes=STORAGE_CEILING, personal_quota_known=False,
         controller_sha256=o.sha(Path(__file__)),
+        reuse_run=str(REUSE_RUN) if REUSE_RUN else None,
         files={str(Path(source[key])): o.sha(Path(source[key])) for key in
             ('benchmark', 'train_cases', 'private_gold', 'source_access_policy')})
     o.save(RUN/'binding.json', binding)
@@ -128,7 +139,11 @@ def launch(o):
     env.update(IFV_CAPTURE_POLICY_TOKENS='1', IFV_POLICY_TOPK='20', PYTHONDONTWRITEBYTECODE='1')
     o.save(RUN/'credential-presence.json', checks)
     o.save(RUN/'state.json', {'phase': 'launching_formal_collection', 'slots': 3200, 'optimizer_steps': 0})
-    receipt = o.spawn([sys.executable, '-u', str(Path(__file__).resolve()), 'execute'], env, RUN/'controller.log')
+    command = [sys.executable, '-u', str(Path(__file__).resolve()), 'execute',
+               '--run-name', RUN.name, '--code-directory', str(CODE)]
+    if REUSE_RUN is not None:
+        command += ['--reuse-run', str(REUSE_RUN)]
+    receipt = o.spawn(command, env, RUN/'controller.log')
     o.save(RUN/'process.json', receipt)
     print(json.dumps({'pid': receipt['pid'], 'run': str(RUN), 'slots': 3200, 'concurrency': 40}))
 
@@ -190,6 +205,11 @@ def execute(o):
                 runtime_cases=runtime_cases, sampling_seeds=sampling_seeds)
             if any(value is None or len(value) != 3200 for value in arrays.values()) or concurrency != 40:
                 raise ValueError('Formal sampling identity or concurrency mismatch')
+            if binding.get('reuse_run'):
+                from ifv_training.psd_collection_recovery import import_prior_slots
+                imported = import_prior_slots(source=Path(binding['reuse_run'])/'episodes',
+                    destination=RUN/'episodes', episode_ids=image_ids, seeds=sampling_seeds)
+                o.save(RUN/'slot-recovery.json', imported)
             first = await super().run_batch(**{k: v[:40] for k, v in arrays.items()}, concurrency=40)
             paths = []
             for episode in image_ids[:40]:
@@ -252,5 +272,20 @@ if __name__ == '__main__':
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('launch', 'execute'))
+    parser.add_argument('--run-name', default=RUN.name)
+    parser.add_argument('--code-directory', type=Path, default=CODE)
+    parser.add_argument('--reuse-run', type=Path)
     arguments = parser.parse_args()
+    if Path(arguments.run_name).name != arguments.run_name or not arguments.run_name.startswith('psd-production400x8-'):
+        parser.error('Invalid formal run name')
+    RUN = ROOT/'runs'/arguments.run_name
+    CODE = arguments.code_directory.resolve()
+    CODE.relative_to(ROOT/'training-artifacts')
+    if CODE.name != 'code':
+        parser.error('Use an immutable code snapshot')
+    if arguments.reuse_run:
+        REUSE_RUN = arguments.reuse_run.resolve()
+        REUSE_RUN.relative_to(ROOT/'runs')
+        if REUSE_RUN == RUN:
+            parser.error('Recovery must preserve the original run')
     {'launch': launch, 'execute': execute}[arguments.mode](owner())

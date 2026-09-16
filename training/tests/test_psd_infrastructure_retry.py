@@ -7,7 +7,7 @@ import pytest
 
 from ifv_training.psd_infrastructure_retry import (
     InfrastructureRetriesExhausted, PolicyInfrastructureFailure, guard_policy_backend,
-    retry_episode, validate_generated_probabilities)
+    retry_episode, validate_generated_probabilities, is_nonfinite_serialization_response)
 
 
 def response(value=-.5, candidate=-1.):
@@ -17,6 +17,52 @@ def response(value=-.5, candidate=-1.):
 
 async def no_sleep(_):
     pass
+
+
+def nan_error():
+    return {'error': {'type': 'BadRequestError', 'code': 400,
+        'message': 'Out of range float values are not JSON compliant: nan'}}
+
+
+def test_exact_provider_nan_400_is_not_an_ordinary_invalid_request():
+    assert is_nonfinite_serialization_response(400, nan_error())
+    for status, payload in [(422, nan_error()), (400, {'error': 'nan'}),
+            (400, {'error': {**nan_error()['error'], 'code': '400'}}),
+            (400, {'error': {**nan_error()['error'], 'message': 'invalid image'}}),
+            (400, {'error': {**nan_error()['error'], 'type': 'UserToolError'}})]:
+        assert not is_nonfinite_serialization_response(status, payload)
+
+
+def test_native_wrapped_nan_http400_is_retryable():
+    async def call(*args, **kwargs):
+        request = httpx.Request('POST', 'http://policy/v1/chat/completions')
+        try:
+            httpx.Response(400, json=nan_error(), request=request).raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise RuntimeError('native wrapper') from error
+    backend = SimpleNamespace(get_response=call, max_retries=0)
+    guard_policy_backend(backend)
+    with pytest.raises(PolicyInfrastructureFailure, match='400_nonfinite'):
+        asyncio.run(backend.get_response([]))
+
+
+@pytest.mark.parametrize('mode', ['nonfinite_400', 'nan_before_parser', 'ordinary_empty'])
+def test_http_boundary_checks_before_unusable_response_parser(mode):
+    payload = nan_error() if mode == 'nonfinite_400' else response(
+        value=float('nan') if mode == 'nan_before_parser' else -.3).raw
+    request = httpx.Request('POST', 'http://policy/v1/chat/completions')
+    async def post(*args, **kwargs):
+        return httpx.Response(400 if mode == 'nonfinite_400' else 200,
+            content=json.dumps(payload).encode(), request=request)
+    backend = SimpleNamespace(max_retries=0, _get_shared_client=lambda: SimpleNamespace(post=post))
+    async def call(*args, **kwargs):
+        await backend._get_shared_client().post('http://policy/v1/chat/completions')
+        raise RuntimeError('native unusable response parser')
+    backend.get_response = call
+    guard_policy_backend(backend)
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(backend.get_response([]))
+    assert isinstance(caught.value, PolicyInfrastructureFailure) == (mode != 'ordinary_empty')
 
 
 @pytest.mark.parametrize("value", [float('nan'), float('inf'), -float('inf'), 'NaN'])

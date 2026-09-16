@@ -15,8 +15,20 @@ import httpx
 
 from .psd_repair_storage import load_bound, save_bound
 
-VERSION = "ifv-psd-infrastructure-retry-v1"
+VERSION = "ifv-psd-infrastructure-retry-v2"
 MAX_ATTEMPTS = 3  # Initial attempt plus at most two complete reruns.
+
+NONFINITE_SERIALIZATION_MESSAGES = frozenset(
+    "Out of range float values are not JSON compliant: " + value
+    for value in ("nan", "inf", "-inf"))
+
+
+def is_nonfinite_serialization_response(status, payload):
+    """Narrow provider error, not a generic HTTP400 or generated error text."""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    return (status == 400 and isinstance(error, dict)
+            and error.get("type") == "BadRequestError" and error.get("code") == 400
+            and error.get("message") in NONFINITE_SERIALIZATION_MESSAGES)
 
 
 class PolicyInfrastructureFailure(RuntimeError):
@@ -33,6 +45,12 @@ def _transport_reason(error):
         seen.add(id(error))
         if isinstance(error, httpx.HTTPStatusError):
             status = error.response.status_code
+            try:
+                payload = error.response.json()
+            except (ValueError, UnicodeError):
+                payload = None
+            if is_nonfinite_serialization_response(status, payload):
+                return "model_http_400_nonfinite_serialization"
             return f"model_http_{status}" if status in {408, 429, 500, 502, 503, 504} else None
         if isinstance(error, (httpx.TimeoutException, TimeoutError)):
             return "model_request_timeout"
@@ -76,6 +94,48 @@ def guard_policy_backend(backend):
         raise ValueError("PSD full-episode recovery requires model request retries=0")
     original = backend.get_response
 
+    def quarantine(payload):
+        from src.orchestrator.runtime_events import current_case_runtime_store
+        from src.redaction import sanitize_for_persistence
+        runtime = current_case_runtime_store()
+        if runtime is not None:
+            artifact = runtime.artifacts.put_text(
+                json.dumps(sanitize_for_persistence(payload), ensure_ascii=False),
+                media_type="application/json", suffix=".json",
+                metadata={"kind": "psd_quarantined_model_response"})
+            runtime.append_event("psd_numerical_response_quarantined", {"artifact": artifact})
+
+    # The native parser may reject an unusable response before returning an
+    # LLMResponse. Validate the policy HTTP response before that parser as well;
+    # do not turn an ordinary empty/malformed model action into a retry.
+    get_client = getattr(backend, "_get_shared_client", None)
+    if get_client is not None:
+        class PolicyClient:
+            def __init__(self, client):
+                self.client = client
+
+            async def post(self, *args, **kwargs):
+                response = await self.client.post(*args, **kwargs)
+                try:
+                    payload = response.json()
+                except (ValueError, UnicodeError):
+                    return response
+                if is_nonfinite_serialization_response(response.status_code, payload):
+                    quarantine(payload)
+                    raise PolicyInfrastructureFailure("model_http_400_nonfinite_serialization")
+                if response.is_success and isinstance(payload, dict):
+                    try:
+                        validate_generated_probabilities(payload)
+                    except PolicyInfrastructureFailure:
+                        quarantine(payload)
+                        raise
+                return response
+
+            def __getattr__(self, name):
+                return getattr(self.client, name)
+
+        backend._get_shared_client = lambda: PolicyClient(get_client())
+
     async def guarded(*args, **kwargs):
         try:
             response = await original(*args, **kwargs)
@@ -88,15 +148,7 @@ def guard_policy_backend(backend):
         try:
             validate_generated_probabilities(payload)
         except PolicyInfrastructureFailure:
-            from src.orchestrator.runtime_events import current_case_runtime_store
-            from src.redaction import sanitize_for_persistence
-            runtime = current_case_runtime_store()
-            if runtime is not None:
-                artifact = runtime.artifacts.put_text(
-                    json.dumps(sanitize_for_persistence(payload), ensure_ascii=False),
-                    media_type="application/json", suffix=".json",
-                    metadata={"kind": "psd_quarantined_model_response"})
-                runtime.append_event("psd_numerical_response_quarantined", {"artifact": artifact})
+            quarantine(payload)
             raise
         return response
 
