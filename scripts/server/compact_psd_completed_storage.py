@@ -153,6 +153,18 @@ def compact_run(run, *, staging=None):
             'all_original_cache_bytes_recoverable': True, 'trajectory_bytes_unchanged': True}
 
 
+def validate_run_scope(run):
+    if run.name == 'psd-production400x8-20260917-v3':
+        return
+    if run.name == 'psd-production400x8-20260917-v4':
+        binding = json.loads((run/'binding.json').read_text())
+        if (binding.get('slots') == 3200 and binding.get('concurrency') == 40
+                and Path(binding.get('reuse_run', '')).resolve()
+                    == run.parent/'psd-production400x8-20260917-v3'):
+            return
+    raise ValueError('Only the current source run and its attested recovery are in scope')
+
+
 def main():
     from ifv_training.psd_repair_search import search_lock
     os.umask(0o077)
@@ -163,7 +175,7 @@ def main():
     args = p.parse_args()
     root = Path('/volume/ybo/wza')
     run = args.run.resolve(); run.relative_to(root/'runs')
-    if run.name != 'psd-production400x8-20260917-v3': raise ValueError('Only the current source run is in scope')
+    validate_run_scope(run)
     code = args.reader_snapshot.resolve(); code.relative_to(root/'training-artifacts')
     if json.loads((code.parent/'stage-state.json').read_text())['tests_returncode'] != 0:
         raise ValueError('Gzip-aware reader snapshot not validated')

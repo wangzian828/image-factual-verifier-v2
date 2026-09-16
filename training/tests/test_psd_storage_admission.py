@@ -37,6 +37,19 @@ def test_recovery_lineage_cannot_escape_its_run_parent(tmp_path):
     with pytest.raises(ValueError, match='escaped'): source_run_paths(run)
 
 
+def test_compactor_only_accepts_attested_current_recovery(tmp_path):
+    import json
+    from scripts.server.compact_psd_completed_storage import validate_run_scope
+    old = tmp_path/'psd-production400x8-20260917-v3'
+    run = tmp_path/'psd-production400x8-20260917-v4'; run.mkdir()
+    validate_run_scope(old)
+    (run/'binding.json').write_text(json.dumps({'slots':3200,'concurrency':40,'reuse_run':str(old)}))
+    validate_run_scope(run)
+    (run/'binding.json').write_text(json.dumps({'slots':3200,'concurrency':40,'reuse_run':str(tmp_path/'other')}))
+    with pytest.raises(ValueError, match='in scope'): validate_run_scope(run)
+    with pytest.raises(ValueError, match='in scope'): validate_run_scope(tmp_path/'other')
+
+
 @pytest.mark.parametrize('error', [subprocess.TimeoutExpired(['du'], 180),
                                   subprocess.CalledProcessError(1, ['du']),
                                   OSError('transient metadata failure'), ValueError('bad du output')])
