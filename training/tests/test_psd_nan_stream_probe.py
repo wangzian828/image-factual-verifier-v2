@@ -34,3 +34,24 @@ def test_eager_ablation_only_changes_execution_mode_on_owned_gpu():
     assert selected[:-2] == other
     assert selected[-2] == '--compilation-config'
     assert json.loads(selected[-1]) == {'mode': 0, 'cudagraph_mode': 'FULL_DECODE_ONLY'}
+    other[other.index('--port')+1] = '19003'
+    selected = eager_command(other, gpu=1, no_graph=True)
+    assert selected[:-2] == other
+    assert json.loads(selected[-1]) == {'mode': 3, 'cudagraph_mode': 'NONE'}
+    with pytest.raises(AssertionError):
+        eager_command(other,gpu=1,no_graph=True,decode_only=True)
+
+
+@pytest.mark.parametrize('gpu',range(4))
+def test_execution_matrix_rejects_accidentally_equivalent_modes(gpu):
+    from scripts.server.probe_psd_execution_matrix import validate_mode
+    import json
+    command = ['--port',str(19002+gpu),'--no-enable-prefix-caching','--mamba-cache-mode','none']
+    config = {1:{'mode':3,'cudagraph_mode':'NONE'},2:{'mode':0,'cudagraph_mode':'FULL_DECODE_ONLY'}}
+    if gpu in config:
+        command += ['--compilation-config',json.dumps(config[gpu])]
+    if gpu==3:
+        command += ['--enforce-eager']
+    validate_mode(gpu,command)
+    with pytest.raises(AssertionError):
+        validate_mode(gpu,command+['--enforce-eager'] if gpu!=3 else command[:-1])

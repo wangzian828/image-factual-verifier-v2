@@ -82,6 +82,7 @@ async def execute(out, gpu):
     model = ROOT / 'exports/h20-sft-merged4872-3epoch-step3084-20260915/model'
     end = Tokenizer.from_file(str(model / 'tokenizer.json')).token_to_id('</think>')
     result = {'not_training_target': True, 'request_sha256': hashlib.sha256(raw).hexdigest(),
+              'semantic_request_sha256': hashlib.sha256(json.dumps({k:v for k,v in body.items() if k!='cache_salt'},sort_keys=True,ensure_ascii=False).encode()).hexdigest(),
               'stream_only_diagnostic': True, 'archive_reconstruction_not_exact_wire': True,
               'gpu': gpu, 'tokens': 0, 'zero_tokens': 0, 'think_closures': [], 'bytes': 0,
               'status': 'running', 'first_tokens': []}
@@ -113,6 +114,11 @@ async def execute(out, gpu):
                             result['error_type'] = (payload.get('error') or {}).get('type')
                             return
                         for choice in payload.get('choices', []):
+                            rows = (choice.get('logprobs') or {}).get('content') or []
+                            if rows and 'first_logprob' not in result:
+                                result['first_logprob'] = {k:v for k,v in rows[0].items() if k!='bytes'}
+                                result['first_logprob']['top_logprobs'] = [
+                                    {k:v for k,v in item.items() if k!='bytes'} for item in rows[0].get('top_logprobs',[])]
                             ids = choice.get('token_ids') or []
                             if len(result['first_tokens']) < 16:
                                 result['first_tokens'].extend(ids[:16-len(result['first_tokens'])])
