@@ -1,5 +1,39 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 07:50 慢磁盘扫描修复与 v4 接续（当前权威入口）
+
+- v3在1538条已完成、0在途时安全停止，6条普通模型错误照常保留；没有重采成功样本。
+  此前`du`独立实测48.387秒，超过控制器45秒超时，空间状态反复过期、GPU请求队列出现空档。
+  `gather(return_exceptions=True)`还会把准入测量异常变成未采集槽，不能放着等最后补齐。
+  这不是新增NaN、不是磁盘已满。停机前短暂冻结准确owned进程组再次核对ledger/进度/
+  canonical数量一致后TERM；证据在v36部署目录`source-drain.json`。原轨迹、尝试次数未改。
+- **当前RUN为`/volume/ybo/wza/runs/psd-production400x8-20260917-v4`**，不要复活v3。
+  新控制器receipt=`RUN/process.json`，初始PID1287468仅线索；原1538槽在逐条预校验，
+  全部通过后才发布新ledger/canonical硬链接与`slot-recovery.json`，再复用首40验收并接余下槽。
+  07:50仍是预校验、尚未恢复新模型采样，尚无优化训练；单进程约0.25–0.33GiB RSS，
+  持续读取原压缩缓存，不能把暂时没有目标ledger当死锁，也不能把PID启动称为恢复完成。
+- **CODE37=`/volume/ybo/wza/training-artifacts/psd-recovery-compactor-20260917-v37/code`**，
+  545项服务器回归、82项本地定向测试通过，冻结Agent仍未变。活动controller在该code父目录；
+  修复提交`4eaf96e`、`e25867e`、`23fe94e`已本地push。v35/v36只作中间验证候选，不运行。
+  原CODE34的最终bank DP4门槛、v33历史5次预算兼容和gzip读者均完整继承。
+- 空间准入扫描改180秒，失败先关闭准入并10秒后重测，不跳过槽、也不花模型尝试额度；
+  真超空间阈值则60秒重查，不假装完成。128GiB/共享free16GiB门槛不变，扫描范围包含
+  当前run与`binding.reuse_run`完整祖先链，一次`du -c`按inode去重，**换目录不绕过限额**。
+  shared free仍不是用户配额，个人配额未知。完整3200后可能仍接近/达到限额，继续评估。
+- 恢复改为逐个验证完整缓存，仅保留小结果记录，避免把1538个多模态payload一起放内存。
+  同版本的原result/gzip/canonical采用硬链接，字节与原路径保留、不展开缓存；原失败次数、
+  四个历史max5 allowance原样继承，无新预算。校验前后核SHA，复用槽不再调用模型或重写trace。
+- 原v32 compactor已在休眠窗口停止，并对v3做完最后一次压缩：1502个本地生成槽，
+  另外36个更早复用槽不触碰。旧receipt/PID1234814仅历史，不能复活或并发启动。
+  **v4 compactor尚待启动**：等v4进入`collecting_remaining_3160`且import完成后，用CODE37
+  的`compact_psd_completed_storage.py --run RUN --reader-snapshot CODE37 --follow`，
+  PYTHONPATH=CODE37:CODE37/training，owner.spawn新独占日志，存`RUN/storage-compaction-process.json`。
+  新helper只允许v3及binding严格指向v3的当前v4；不处理旧run的native文件。
+- 四个vLLM服务与原计算guard未重启，空档有真实计算脉冲；不得用显存占用冒充利用率。
+  下一检查先核v4的import/首40/新采样实际产出，再启动上项compactor；不要重复launch。
+  全部3200后用CODE37、v4 episodes/snapshot接source checker、slate修复、raw教师评分，
+  最终真实bank的DP4 global32恢复验收通过后才启动5epoch优化。原SFT权重及全部旧run保留。
+
 ## 2026-09-17 04:03 最终bank的四卡验收入口已准备（尚未执行）
 
 - 采集继续到693/3200、3普通错误、0待解基础设施槽；四卡、存储助手正常。
