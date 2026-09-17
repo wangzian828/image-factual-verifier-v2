@@ -237,7 +237,8 @@ async def prepare(args):
     identity["source_review_summary_sha256"] = sha256_file(source_reviews / "summary.json")
     completed_stage(root, "postprocess", identity, lambda: (
         postprocess(run_dir=run_dir, train_cases=args.train_cases, private_gold=args.private_gold,
-            source_access_policy=args.source_access_policy, source_reviews=source_reviews),
+            source_access_policy=args.source_access_policy, source_reviews=source_reviews,
+            workers=getattr(args, "postprocess_workers", 1)),
         [run_dir / name for name in ("post_rollout_rewards.jsonl", "rollout_groups.jsonl", "psd-postprocess.json")]))
     gate = root / "rollout-gate.json"
     rollout = completed_stage(root, "rollout-gate", identity, lambda: (
@@ -344,6 +345,8 @@ def main():
     prepare_parser.add_argument("--attempts", type=int, default=6)
     prepare_parser.add_argument("--case-concurrency", type=int, default=1)
     prepare_parser.add_argument("--source-review-concurrency", type=int, default=4)
+    prepare_parser.add_argument("--postprocess-workers", type=int, default=1,
+        help="Bounded local worker processes for independent trace audit/postprocessing")
     prepare_parser.add_argument('--source-review-prefetch', type=Path,
         help='Reuse exact source-review responses after the independent prefetch process has drained')
     prepare_parser.add_argument("--expected-rollouts-per-case", type=int, default=8,

@@ -202,7 +202,7 @@ async def judge_source(client, trace, *, gold, image_path, model, cache_dir):
     return result
 
 
-def validate_source_review(artifact, *, trace, gold=None):
+def validate_source_review(artifact, *, trace, gold=None, trace_canonical_sha256=None):
     """Recheck task/trace and request identity; absent/stale evidence fails closed.
 
     Candidate construction has no gold access. Postprocessing and causal repair
@@ -210,7 +210,8 @@ def validate_source_review(artifact, *, trace, gold=None):
     """
     if not isinstance(artifact, dict) or artifact.get("schema_version") != VERSION:
         raise ValueError("PSD source task review missing or invalid")
-    if artifact.get("source_trace_canonical_sha256") != _sha(trace):
+    trace_digest = trace_canonical_sha256 or _sha(trace)
+    if artifact.get("source_trace_canonical_sha256") != trace_digest:
         raise ValueError("PSD source trace changed after review")
     media, verifier = artifact.get("media", {}), artifact.get("verifier", {})
     if (not trace.get("state", {}).get("runtime_case", {}).get("image_sha256")
