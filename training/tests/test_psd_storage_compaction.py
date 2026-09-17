@@ -80,6 +80,24 @@ def test_running_slot_is_never_rewritten(tmp_path):
     assert not os.path.samefile(native,canonical)
 
 
+def test_busy_completed_source_is_skipped_without_stopping_compactor(tmp_path, monkeypatch):
+    import contextlib
+    import ifv_training.psd_repair_search as locking
+    slot,native,canonical,identity,payload = make_slot(tmp_path)
+    before = (slot/'result.json').read_bytes()
+    original = locking.search_lock
+    @contextlib.contextmanager
+    def busy(root):
+        raise BlockingIOError('synthetic active source reviewer')
+        yield
+    monkeypatch.setattr(locking, 'search_lock', busy)
+    assert compact_run(tmp_path)['slots_checked'] == 0
+    assert (slot/'result.json').read_bytes() == before and not os.path.samefile(native, canonical)
+    monkeypatch.setattr(locking, 'search_lock', original)
+    assert compact_run(tmp_path)['slots_checked'] == 1
+    assert load_bound(slot/'result.json', identity=identity) == payload
+
+
 def test_retry_reuses_packed_result_without_new_model_call(tmp_path):
     import asyncio
     from ifv_training.psd_infrastructure_retry import VERSION, retry_episode

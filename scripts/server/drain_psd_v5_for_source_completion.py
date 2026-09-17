@@ -14,7 +14,7 @@ import time
 
 ROOT = Path('/volume/ybo/wza')
 RUN = ROOT/'runs/psd-production400x8-20260917-v5'
-OUT = ROOT/'training-artifacts/psd-complete-source-20260917-v40'
+OUT = ROOT/'training-artifacts/psd-complete-source-20260917-v41'
 
 
 def main():

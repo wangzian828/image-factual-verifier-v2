@@ -113,6 +113,7 @@ def link_identical(source, target, *, root, staging=None):
 
 
 def compact_run(run, *, staging=None):
+    from contextlib import ExitStack
     from ifv_training.psd_repair_search import search_lock
     from ifv_training.psd_repair_storage import load_bound
     run = run.resolve()
@@ -120,7 +121,13 @@ def compact_run(run, *, staging=None):
     for marker in sorted((run/'episodes/psd-infrastructure-attempts').glob('*/retry-state.json')):
         if json.loads(marker.read_text())['payload']['attempts'][-1]['status'] != 'completed':
             continue
-        with search_lock(marker.parent):
+        with ExitStack() as locks:
+            try:
+                locks.enter_context(search_lock(marker.parent))
+            except BlockingIOError:
+                # A source reviewer can briefly hold the completed-slot lock.
+                # Leave its bytes untouched and reconsider on the next sweep.
+                continue
             saved = json.loads(marker.read_text()); identity = saved['identity']
             state = load_bound(marker, identity=identity)
             last = state['attempts'][-1]

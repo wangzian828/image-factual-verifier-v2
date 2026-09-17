@@ -85,10 +85,10 @@ def main():
         FILES = {'scripts': ['prefetch_psd_source_reviews.py', 'review_psd_sources.py', 'run_psd_round.py'],
                  'training/tests': ['test_psd_source_review_prefetch.py']}
     if args.complete_source:
-        OUT = ROOT / 'training-artifacts/psd-complete-source-20260917-v40'
+        OUT = ROOT / 'training-artifacts/psd-complete-source-20260917-v41'
         BASE = ROOT / 'training-artifacts/psd-source-review-prefetch-20260917-v39/code'
         FILES = {'training/ifv_training': ['psd_source_completion.py', 'psd_infrastructure_retry.py', 'psd_collection_recovery.py'],
-                 'training/tests': ['test_psd_source_completion.py', 'test_psd_infrastructure_retry.py', 'test_psd_source_review_prefetch.py'],
+                 'training/tests': ['test_psd_source_completion.py', 'test_psd_infrastructure_retry.py', 'test_psd_source_review_prefetch.py', 'test_psd_storage_compaction.py'],
                  'scripts': ['collect_psd_rollouts.py', 'prefetch_psd_source_reviews.py'],
                  'scripts/server': ['run_psd_production_collection.py', 'compact_psd_completed_storage.py',
                      'drain_psd_v5_for_source_completion.py', 'finish_psd_completion_handoff.py']}

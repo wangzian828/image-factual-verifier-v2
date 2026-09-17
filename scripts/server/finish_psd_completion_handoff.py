@@ -8,7 +8,7 @@ import sys
 import time
 
 ROOT = Path('/volume/ybo/wza')
-OUT = ROOT/'training-artifacts/psd-complete-source-20260917-v40'
+OUT = ROOT/'training-artifacts/psd-complete-source-20260917-v41'
 CODE = OUT/'code'
 OLD = ROOT/'runs/psd-production400x8-20260917-v5'
 NEW = ROOT/'runs/psd-production400x8-20260917-v6'
@@ -43,6 +43,11 @@ def main():
         compactor = o.load(OLD/'storage-compaction-process.json')
         deadline = time.monotonic()+900
         while True:
+            cmdline = Path(f'/proc/{compactor["pid"]}/cmdline')
+            if not cmdline.exists() or not cmdline.read_bytes():
+                # The old v38 helper can exit on a busy reviewer lock. There is
+                # no live process to stop; the v41 successor skips busy slots.
+                break
             o.checked(compactor)
             wait = Path(f'/proc/{compactor["pid"]}/wchan').read_text().strip()
             if wait == 'hrtimer_nanosleep':
@@ -77,7 +82,7 @@ def main():
                'PYTHONDONTWRITEBYTECODE': '1', 'TMPDIR': str(ROOT/'tmp')}
         compactor = o.spawn([sys.executable, '-u', str(CODE/'scripts/server/compact_psd_completed_storage.py'),
             '--run', str(NEW), '--reader-snapshot', str(CODE), '--follow'], env,
-            NEW/'storage-compaction-v40-controller.log')
+            NEW/'storage-compaction-v41-controller.log')
         o.save(NEW/'storage-compaction-process.json', compactor)
         status('complete_source_collection_resumed', reused=recovery['reused'], retry_remaining=recovery['retry_remaining'], run=str(NEW), ceiling_bytes=None)
         deadline = time.monotonic()+1800
