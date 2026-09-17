@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import importlib.util
 import json
 import os
@@ -12,7 +13,7 @@ import sys
 
 ROOT = Path("/volume/ybo/wza")
 CODE = ROOT / "training-artifacts/psd-abstention-quote-repair-20260917-v45/code"
-OUT = ROOT / "training-artifacts/psd-abstention-quote-repair-20260917-v45/real-quote-repair-canary"
+ARTIFACT_ROOT = ROOT / "training-artifacts/psd-abstention-quote-repair-20260917-v45"
 RUN = ROOT / "runs/psd-production400x8-20260917-v6"
 PREP = ROOT / "runs/psd-pilot400-preparation-20260915-v1"
 PREFETCH = RUN / "source-review-prefetch-v2-auto-retry"
@@ -41,7 +42,11 @@ def module(name: str, path: Path):
     return result
 
 
-async def main() -> None:
+async def main(output: Path) -> None:
+    output = output.resolve()
+    output.relative_to(ARTIFACT_ROOT.resolve())
+    global OUT
+    OUT = output
     if OUT.exists():
         raise RuntimeError("Never overwrite a real quote-repair canary")
     sys.path[:0] = [str(CODE), str(CODE / "training")]
@@ -116,4 +121,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path,
+        default=ARTIFACT_ROOT / "real-quote-repair-canary")
+    args = parser.parse_args()
+    asyncio.run(main(args.output))
