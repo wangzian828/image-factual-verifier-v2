@@ -1,5 +1,27 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 用户取消人为 128GiB 门槛：v38 安全接续中（优先于下文）
+
+- 用户明确要求移除该人为采集上限；`STORAGE_CEILING=None`，不能再恢复128GiB或改成另一个
+  任意run上限。保留占用统计及shared free低于16GiB保护，个人GPFS quota仍未知。
+- 本地代码`0da3ae3`已push，44项定向测试及新不可变CODE38的549项服务器回归通过，
+  冻结Agent未改。CODE38=`/volume/ybo/wza/training-artifacts/psd-uncapped-storage-20260917-v38/code`。
+- v4暂仍活动；一次性排空助手receipt为CODE38父目录`drain-process.json`，初始PID1299053
+  仅线索，进度`drain-progress.json`。旧控制器没有drain接口，因此只暂停其精确owned `du`
+  子进程，利用原准入重测等待阻止新槽，已派发Agent继续；绝不杀在途Agent/扩大重试预算。
+  只有ledger全部completed、canonical和progress一致、冻结后再核验才停止旧collector；
+  成功证据`source-drain.json`。测量TimeoutExpired在此维护窗口是预期，不是新的磁盘故障。
+  若助手失败，其finally会恢复精确owned测量子进程；诊断后再做接续，不能盲目重采。
+- 排空后在v4 compactor的300秒sleep窗口按receipt精确停止，避免恢复校验时改缓存。
+  下一RUN=`/volume/ybo/wza/runs/psd-production400x8-20260917-v5`，从v4原样复用，
+  CODE38父目录`run_psd_production_collection.py launch --run-name psd-production400x8-20260917-v5
+  --code-directory CODE38 --reuse-run /volume/ybo/wza/runs/psd-production400x8-20260917-v4`。
+  不修改旧run、权重或模型服务；保留原样本/seed/预算/所有失败记录。已有目标RUN时先检查，勿双开。
+- 待v5 import和first40通过、恢复新采样后，以CODE38启动其独占compactor；v5 scope严格绑定v4。
+  后续checker/repair/raw教师/final-bank DP4及5epoch均使用v5与CODE38，DP4 deployment改为
+  `psd-uncapped-storage-20260917-v38`，仍必须传本轮最终ready。当前未开始optimizer。
+- 下文所有128GiB规定都是已撤销的历史记录，旧v37/v4接续指令不能覆盖此节。
+
 ## 2026-09-17 08:08 v4 已恢复新采样，压缩助手已接上
 
 - 原1538槽全部通过恢复校验并原样复用；`slot-recovery.json`记录1538 reused、0新增预算、
