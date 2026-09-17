@@ -1,5 +1,21 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 21:12 用户指定后续 repair 改为 Gemini 3.7 Flash/high
+
+- 当前正式控制器为 `runs/psd-formal-prepare-controller-20260917-flash-high-v1`，启动 receipt
+  PID 1402745；代码 `d447157` 位于 `training-artifacts/psd-flash-high-20260917-v55/code`。
+  后续错误定位、方法提示生成与修复验收均使用 `gemini-3.7-flash`，共同请求入口实际发送
+  `thinking_level=high`、`max_output_tokens=8192`。case 并发 40，外部请求门限 16。
+- 完成的 3200 条原采样、source review 和候选包沿用。修复输出使用独立
+  `runs/psd-production-round1-20260917-v1/search-gemini37-flash-high`，旧 Pro 提示/验收缓存保持原位，
+  不改写旧绑定为 Flash。新增 `prepare --search-name` 贯穿修复、物化及训练 ready 路径。
+- Flash/high 真实图片结构化请求通过：约 23.54 秒，1064 个图片输入 token、297 个 thought token。
+  这只验证接口与图片传输，完整修复效果仍以正式产物为准。服务器 64 项相关测试、Python 编译与
+  diff 检查通过。每个失败案例另存无密钥的异常类型、HTTP 状态码及代码位置，便于区分限流、服务错误
+  和本地契约失败。
+- 未提交新 Batch。当前修复存在提示→策略调查→验收的逐轮依赖，先用普通接口持续推进。四卡推理服务
+  和原 GPU guard 持续保留；原三轮 SFT 权重不变。
+
 ## 2026-09-17 20:50 正式 repair 续跑，重型扫描已移除
 
 - 3200 条轨迹后处理已改为一次读取、16 进程流式执行，约 9 分钟完成 3200/3200；候选构建同样改为
