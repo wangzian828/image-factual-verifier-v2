@@ -30,8 +30,9 @@ def main():
     parser.add_argument('--slow-storage', action='store_true')
     parser.add_argument('--storage-lineage', action='store_true')
     parser.add_argument('--recovery-compactor', action='store_true')
+    parser.add_argument('--uncapped-storage', action='store_true')
     args = parser.parse_args()
-    if sum((args.storage_cache, args.storage_spool, args.completed_recovery, args.final_bank_gate, args.slow_storage, args.storage_lineage, args.recovery_compactor)) > 1:
+    if sum((args.storage_cache, args.storage_spool, args.completed_recovery, args.final_bank_gate, args.slow_storage, args.storage_lineage, args.recovery_compactor, args.uncapped_storage)) > 1:
         parser.error('Choose one immutable snapshot variant')
     if args.storage_cache:
         OUT = ROOT / 'training-artifacts/psd-storage-reader-20260917-v31'
@@ -69,6 +70,12 @@ def main():
         OUT = ROOT / 'training-artifacts/psd-recovery-compactor-20260917-v37'
         BASE = ROOT / 'training-artifacts/psd-storage-lineage-20260917-v36/code'
         FILES = {'scripts/server': ['compact_psd_completed_storage.py'],
+                 'training/tests': ['test_psd_storage_admission.py']}
+    if args.uncapped_storage:
+        OUT = ROOT / 'training-artifacts/psd-uncapped-storage-20260917-v38'
+        BASE = ROOT / 'training-artifacts/psd-recovery-compactor-20260917-v37/code'
+        FILES = {'scripts/server': ['run_psd_production_collection.py', 'compact_psd_completed_storage.py'],
+                 'training/ifv_training': ['psd_storage_admission.py'],
                  'training/tests': ['test_psd_storage_admission.py']}
     os.umask(0o077)
     code = OUT / 'code'

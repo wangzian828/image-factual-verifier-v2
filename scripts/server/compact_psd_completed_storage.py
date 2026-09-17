@@ -156,11 +156,15 @@ def compact_run(run, *, staging=None):
 def validate_run_scope(run):
     if run.name == 'psd-production400x8-20260917-v3':
         return
-    if run.name == 'psd-production400x8-20260917-v4':
+    predecessors = {
+        'psd-production400x8-20260917-v4': 'psd-production400x8-20260917-v3',
+        'psd-production400x8-20260917-v5': 'psd-production400x8-20260917-v4',
+    }
+    if run.name in predecessors:
         binding = json.loads((run/'binding.json').read_text())
         if (binding.get('slots') == 3200 and binding.get('concurrency') == 40
                 and Path(binding.get('reuse_run', '')).resolve()
-                    == run.parent/'psd-production400x8-20260917-v3'):
+                    == run.parent/predecessors[run.name]):
             return
     raise ValueError('Only the current source run and its attested recovery are in scope')
 

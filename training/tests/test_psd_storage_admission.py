@@ -101,3 +101,44 @@ def test_cancellation_during_space_hold_is_not_swallowed():
                             measure=lambda p: (100, 32*1024**3),
                             save=lambda *args: None, sleep=sleep)
     with pytest.raises(asyncio.CancelledError): asyncio.run(gate())
+
+
+def test_no_run_cap_admits_above_former_128_gib_limit():
+    rows = []
+    gate = StorageAdmission(run=Path('/run'), ceiling=None,
+                            measure=lambda p: (256*1024**3, 32*1024**3),
+                            save=lambda p, v: rows.append(dict(v)))
+    asyncio.run(gate())
+    assert rows[-1]['admission_open'] and rows[-1]['ceiling_bytes'] is None
+    assert rows[-1]['run_bytes'] == 256*1024**3
+    assert rows[-1]['personal_quota_known'] is False
+
+
+def test_no_run_cap_still_waits_for_real_low_free_space():
+    rows, sleeps = [], []
+    measurements = iter([(256*1024**3, 15*1024**3), (256*1024**3, 16*1024**3)])
+    async def sleep(seconds): sleeps.append(seconds)
+    gate = StorageAdmission(run=Path('/run'), ceiling=None,
+                            measure=lambda p: next(measurements), sleep=sleep,
+                            save=lambda p, v: rows.append(dict(v)))
+    asyncio.run(gate())
+    assert sleeps == [60] and not rows[0]['admission_open'] and rows[1]['admission_open']
+    assert all(row['ceiling_bytes'] is None for row in rows)
+
+
+def test_production_collector_has_no_arbitrary_run_ceiling():
+    from scripts.server.run_psd_production_collection import STORAGE_CEILING
+    assert STORAGE_CEILING is None
+
+
+def test_uncapped_recovery_compactor_checks_exact_predecessor(tmp_path):
+    import json
+    from scripts.server.compact_psd_completed_storage import validate_run_scope
+    run = tmp_path/'psd-production400x8-20260917-v5'; run.mkdir()
+    binding = {'slots': 3200, 'concurrency': 40,
+               'reuse_run': str(tmp_path/'psd-production400x8-20260917-v4')}
+    (run/'binding.json').write_text(json.dumps(binding))
+    validate_run_scope(run)
+    binding['reuse_run'] = str(tmp_path/'psd-production400x8-20260917-v3')
+    (run/'binding.json').write_text(json.dumps(binding))
+    with pytest.raises(ValueError, match='in scope'): validate_run_scope(run)

@@ -26,8 +26,9 @@ SERVICE = ROOT/'inference/psd-sft3084-20260916'
 PRIOR = ROOT/'runs/psd-sft3084-captured-canary4x8-20260916'
 GATEWAY = 'http://127.0.0.1:19025'
 GIB = 1024**3
-# An admission ceiling, NOT an assertion about the user's unknown GPFS quota.
-STORAGE_CEILING = 128 * GIB
+# User removed the arbitrary per-run cap. Keep measurement and low-free-space
+# protection; shared filesystem free space is NOT the unknown personal quota.
+STORAGE_CEILING = None
 REUSE_RUN = None
 NUMERICAL_RECOVERY = None
 

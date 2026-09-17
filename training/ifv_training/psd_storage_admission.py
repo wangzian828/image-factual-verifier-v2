@@ -67,7 +67,8 @@ class StorageAdmission:
                                   shared_free_bytes=free, personal_quota_known=False,
                                   scope='source_run_and_recovery_lineage',
                                   ceiling_bytes=self.ceiling, measurement_status='complete',
-                                  admission_open=used < self.ceiling and free >= 16*1024**3)
+                                  admission_open=(self.ceiling is None or used < self.ceiling)
+                                      and free >= 16*1024**3)
                 self.save(self.run/'storage.json', self.state)
                 if self.state['admission_open']:
                     return
