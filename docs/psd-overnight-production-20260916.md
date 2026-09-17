@@ -24,6 +24,13 @@
   Gemini响应，包括无效已完成响应；不按标签反复评分直到通过。records的pending_error和unresolved
   与普通policy fail分开，缓存/缺口不得擅自删掉重抽。worker存储异常会终止而非卡死queue.join。
   source采集发生intervention时停止新评分调度、排空已排队工作；不影响source进程本身。
+- 后续实跑出现少量HTTP429（客户端内部2次重试已用完）及响应解析错误，独立pending_error，
+  未伪装成policy fail。持续监控限流/吞吐，最终正式review会尝试补未缓存成功的请求，不无限付费重抽。
+  用户追问两条无报告的重跑情况：`main-02754--d5fdfd7f--r003/r006`均只有1次attempt，
+  原生异常为`finish_reason=tool_calls, content_chars=0`，reasoning_chars分别1/332。
+  当前规则把它们识别为`unusable_policy_output_with_captured_prefix`而非基础设施异常，**没有自动重跑**。
+  仅凭此错误无法区分模型生成格式与服务解析问题，不能宣称已证明是模型自身错误；需原始响应证据。
+  也不能把pending的source review说成已进入实际修复执行；正式repair尚未开始。
 - 11:10源轨迹已2117/3200，四卡40路继续；不是开始optimizer。全部3200后先等prefetch排空并退出，
   用**CODE39**正常`run_psd_round.py prepare`，原参数不变，额外显式传
   `--source-review-prefetch RUN/source-review-prefetch-v1 --source-review-concurrency16`。
