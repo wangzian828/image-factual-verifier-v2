@@ -1,5 +1,21 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 14:05 AVIF真实评分验收通过，采集继续
+
+- collector/reviewer/compactor/guard精确身份均正常；v6采集2546/3200、0normal_error、
+  0pending_infrastructure，32个durable running槽，四卡实测100%利用率。存储测量已从超时自动恢复，
+  admission_open=true、按inode去重约120.3GiB；不把共享free当个人quota。
+- CODE42评分2490条有效、44pending、10在途、queued0、exhausted_transport0；有新轨迹即继续，
+  不代表全部3200已评分。朋友Pro161成功/49失败/226未尝试，仍正常串行。
+- 在活跃评分只有10/16时使用1路空闲额度，首次对固定真实AVIF轨迹main-05936 r003执行CODE44完整
+  Gemini3.1ProPreview source judge；不是视觉简化probe。返回合法`fail`并通过全部trace/gold/image/request
+  binding及literal证据校验，artifact/原trace/原AVIF哈希写入CODE44父目录
+  `live-avif-canary/{artifact,result}.json`，原文件不改，active reviewer/collector均未重启。
+  这证明PNG传输适配可被真实接口接收且产出可验收artifact；`fail`是评分结果，不是工程失败。
+  不为追求pass重抽同一轨迹。其余AVIF在正式流程按相同确定性转换与精确缓存处理即可。
+- 正式prepare/repair/raw teacher/最终bank继续以CODE44为当前候选；19条JSON转义引用可从原缓存机械恢复，
+  2条真实改写仍pending。在线CODE42先自然跑完，不能热替换活动进程；optimizer_steps仍0。
+
 ## 2026-09-17 13:36 找到并修复JSON引用误报，CODE44已做真实缓存验收
 
 - 活跃collector仍CODE41/v6、prefetch仍CODE42/v2-auto-retry，不重启、不热改；2476/3200完整，
