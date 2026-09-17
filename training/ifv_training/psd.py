@@ -15,7 +15,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .io import canonical_json, load_jsonl, require_new_or_empty, sha256_file, write_json, write_jsonl
+from .io import (canonical_json, iter_jsonl, load_jsonl, require_new_or_empty,
+                 sha256_file, write_json, write_jsonl)
 from .psd_modality import require_text_only_psd
 from .psd_media import media_digest
 from .psd_capture_semantics import RAW_POLICY_LOGPROBS
@@ -654,72 +655,74 @@ def build_psd_target_package(
     allow_local_only: bool = False,
 ) -> dict[str, Any]:
     require_new_or_empty(output_dir)
-    repair_targets: list[dict[str, Any]] = []
-    preservation_targets: list[dict[str, Any]] = []
-    rejected: list[dict[str, Any]] = []
+    repair_target_count = 0
+    preservation_target_count = 0
+    rejection_count = 0
+    pending_topk = 0
+    target_ids: set[str] = set()
+    role_records: dict[str, Mapping[str, Any]] = {}
+    repair_tiers: Counter[str] = Counter()
+    repair_output = output_dir / "repair_targets.jsonl"
+    preservation_output = output_dir / "preservation_targets.jsonl"
+    targets_output = output_dir / "targets.jsonl"
+    rejections_output = output_dir / "rejections.jsonl"
 
-    for index, row in enumerate(load_jsonl(repairs_path)):
-        try:
-            repair_targets.append(
-                build_repair_target(
-                    row, topk=topk, allow_local_only=allow_local_only
-                )
-            )
-        except ValueError as exc:
-            rejected.append(
-                {
-                    "kind": "repair",
-                    "row_index": index,
-                    "case_id": _text(row.get("case_id")),
-                    "episode_id": _text(row.get("episode_id")),
-                    "reason": str(exc),
-                }
-            )
-
-    round_model_roles: Mapping[str, Any] | None = None
-    if repair_targets:
-        role_records = {
-            canonical_json(item["model_roles"]): item["model_roles"]
-            for item in repair_targets
-        }
-        if len(role_records) != 1:
-            raise ValueError(
-                "all PSD repairs in one package must use the same round-start policy"
-            )
-        round_model_roles = next(iter(role_records.values()))
-
-    if preservation_path is not None:
-        for index, row in enumerate(load_jsonl(preservation_path)):
+    with (repair_output.open("w", encoding="utf-8") as repair_handle,
+          preservation_output.open("w", encoding="utf-8") as preservation_handle,
+          targets_output.open("w", encoding="utf-8") as targets_handle,
+          rejections_output.open("w", encoding="utf-8") as rejection_handle):
+        for index, row in enumerate(iter_jsonl(repairs_path)):
             try:
-                preservation_targets.extend(
-                    build_preservation_targets(
-                        row,
-                        topk=topk,
-                        model_roles=round_model_roles,
-                    )
-                )
+                target = build_repair_target(row, topk=topk,
+                    allow_local_only=allow_local_only)
             except ValueError as exc:
-                rejected.append(
-                    {
-                        "kind": "preserve",
-                        "row_index": index,
+                rejection = {"kind": "repair", "row_index": index,
+                    "case_id": _text(row.get("case_id")),
+                    "episode_id": _text(row.get("episode_id")), "reason": str(exc)}
+                rejection_handle.write(canonical_json(rejection) + "\n")
+                rejection_count += 1
+                continue
+            target_id = target["target_id"]
+            if target_id in target_ids:
+                raise ValueError("PSD target IDs must be unique")
+            target_ids.add(target_id)
+            role_records[canonical_json(target["model_roles"])] = target["model_roles"]
+            if len(role_records) > 1:
+                raise ValueError(
+                    "all PSD repairs in one package must use the same round-start policy")
+            rendered = canonical_json(target) + "\n"
+            repair_handle.write(rendered)
+            targets_handle.write(rendered)
+            repair_target_count += 1
+            pending_topk += target["target_status"] == "pending_topk"
+            repair_tiers[target["repair_tier"]] += 1
+
+        round_model_roles = next(iter(role_records.values())) if role_records else None
+        if preservation_path is not None:
+            for index, row in enumerate(iter_jsonl(preservation_path)):
+                try:
+                    row_targets = build_preservation_targets(row, topk=topk,
+                        model_roles=round_model_roles)
+                except ValueError as exc:
+                    rejection = {"kind": "preserve", "row_index": index,
                         "case_id": _text(row.get("case_id")),
-                        "episode_id": _text(row.get("episode_id")),
-                        "reason": str(exc),
-                    }
-                )
+                        "episode_id": _text(row.get("episode_id")), "reason": str(exc)}
+                    rejection_handle.write(canonical_json(rejection) + "\n")
+                    rejection_count += 1
+                    continue
+                row_ids = [target["target_id"] for target in row_targets]
+                if (len(row_ids) != len(set(row_ids))
+                        or any(target_id in target_ids for target_id in row_ids)):
+                    raise ValueError("PSD target IDs must be unique")
+                target_ids.update(row_ids)
+                for target in row_targets:
+                    rendered = canonical_json(target) + "\n"
+                    preservation_handle.write(rendered)
+                    targets_handle.write(rendered)
+                    preservation_target_count += 1
+                    pending_topk += target["target_status"] == "pending_topk"
 
-    targets = repair_targets + preservation_targets
-    target_ids = [item["target_id"] for item in targets]
-    if len(target_ids) != len(set(target_ids)):
-        raise ValueError("PSD target IDs must be unique")
-
-    write_jsonl(output_dir / "repair_targets.jsonl", repair_targets)
-    write_jsonl(output_dir / "preservation_targets.jsonl", preservation_targets)
-    write_jsonl(output_dir / "targets.jsonl", targets)
-    write_jsonl(output_dir / "rejections.jsonl", rejected)
-
-    pending_topk = sum(item["target_status"] == "pending_topk" for item in targets)
+    target_count = repair_target_count + preservation_target_count
     manifest = {
         "schema_version": PSD_MANIFEST_SCHEMA_VERSION,
         "topk": topk,
@@ -733,16 +736,14 @@ def build_psd_target_package(
             ),
         },
         "counts": {
-            "repair_targets": len(repair_targets),
-            "preservation_targets": len(preservation_targets),
-            "targets": len(targets),
+            "repair_targets": repair_target_count,
+            "preservation_targets": preservation_target_count,
+            "targets": target_count,
             "pending_topk": pending_topk,
-            "complete_topk": len(targets) - pending_topk,
-            "rejections": len(rejected),
+            "complete_topk": target_count - pending_topk,
+            "rejections": rejection_count,
         },
-        "repair_tiers": dict(
-            sorted(Counter(item["repair_tier"] for item in repair_targets).items())
-        ),
+        "repair_tiers": dict(sorted(repair_tiers.items())),
         "artifacts": {
             "repair_targets": "repair_targets.jsonl",
             "preservation_targets": "preservation_targets.jsonl",
@@ -751,11 +752,11 @@ def build_psd_target_package(
         },
         "status": (
             "blocked_missing_source_kind"
-            if targets and (not repair_targets or not preservation_targets)
+            if target_count and (not repair_target_count or not preservation_target_count)
             else "ready_for_topk_cache"
-            if targets and pending_topk
+            if target_count and pending_topk
             else "ready_for_training"
-            if targets
+            if target_count
             else "empty"
         ),
     }

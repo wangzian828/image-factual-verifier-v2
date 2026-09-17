@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .io import (
-    load_jsonl,
+    canonical_json,
+    iter_jsonl,
     require_new_or_empty,
     sha256_file,
     write_json,
-    write_jsonl,
 )
 from .psd import validate_topk_by_position
 from .psd_modality import require_text_only_psd
@@ -243,51 +243,55 @@ def build_sparse_topk_package(
     if max_sequence_length < 2:
         raise ValueError("max_sequence_length must be at least two")
     require_new_or_empty(output_dir)
-    targets = load_jsonl(targets_path)
-    if not targets:
+    target_ids: set[str] = set()
+    input_kinds: set[str] = set()
+    input_target_count = 0
+    datum_count = 0
+    rejection_count = 0
+    effective_mass = Counter()
+    loss_positions = Counter()
+    target_kind_counts = Counter()
+    input_lengths: list[int] = []
+    sequence_lengths: list[int] = []
+    completion_lengths: list[int] = []
+    candidate_path = output_dir / "candidate_datums.jsonl"
+    rejection_path = output_dir / "rejections.jsonl"
+    with (candidate_path.open("w", encoding="utf-8") as candidate_handle,
+          rejection_path.open("w", encoding="utf-8") as rejection_handle):
+        for row_index, target in enumerate(iter_jsonl(targets_path)):
+            input_target_count += 1
+            target_id = _text(target.get("target_id"))
+            if not target_id:
+                raise ValueError("all targets must have target_id")
+            if target_id in target_ids:
+                raise ValueError("PSD target IDs must be unique")
+            target_ids.add(target_id)
+            kind = _text(target.get("kind"))
+            input_kinds.add(kind)
+            source_weight = target.get("row_weight", 1.0)
+            try:
+                datum = compact_datum(build_sparse_topk_datum(target, topk=topk,
+                    effective_row_weight=float(source_weight),
+                    max_sequence_length=max_sequence_length))
+            except (KeyError, TypeError, ValueError) as exc:
+                rejection = {"row_index": row_index, "target_id": target_id,
+                    "kind": kind, "reason": str(exc)}
+                rejection_handle.write(canonical_json(rejection) + "\n")
+                rejection_count += 1
+                continue
+            candidate_handle.write(canonical_json(datum) + "\n")
+            datum_count += 1
+            target_kind_counts[datum["kind"]] += 1
+            effective_mass[datum["kind"]] += float(datum["row_weight"])
+            loss_positions[datum["kind"]] += len(datum["loss_positions"])
+            input_lengths.append(int(datum["input_tokens"]))
+            sequence_lengths.append(int(datum["sequence_tokens"]))
+            completion_lengths.append(int(datum["completion_tokens"]))
+    if not input_target_count:
         raise ValueError("PSD target input is empty")
-
-    target_ids = [_text(target.get("target_id")) for target in targets]
-    if any(not target_id for target_id in target_ids):
-        raise ValueError("all targets must have target_id")
-    if len(target_ids) != len(set(target_ids)):
-        raise ValueError("PSD target IDs must be unique")
-
-    input_kinds = {_text(target.get("kind")) for target in targets}
     missing_kinds = sorted({"repair", "preserve"} - input_kinds)
     source_kind_gate = not require_both_kinds or not missing_kinds
-
-    datums: list[dict[str, Any]] = []
-    rejections: list[dict[str, Any]] = []
-    for row_index, target in enumerate(targets):
-        kind = _text(target.get("kind"))
-        source_weight = target.get("row_weight", 1.0)
-        try:
-            datums.append(compact_datum(
-                build_sparse_topk_datum(
-                    target,
-                    topk=topk,
-                    effective_row_weight=float(source_weight),
-                    max_sequence_length=max_sequence_length,
-                )
-            ))
-        except (KeyError, TypeError, ValueError) as exc:
-            rejections.append(
-                {
-                    "row_index": row_index,
-                    "target_id": _text(target.get("target_id")),
-                    "kind": kind,
-                    "reason": str(exc),
-                }
-            )
-
-    ready = (
-        len(datums) == len(targets)
-        and not rejections
-        and source_kind_gate
-    )
-    write_jsonl(output_dir / "candidate_datums.jsonl", datums)
-    write_jsonl(output_dir / "rejections.jsonl", rejections)
+    ready = datum_count == input_target_count and not rejection_count and source_kind_gate
     artifacts = {
         "candidate_datums": "candidate_datums.jsonl",
         "rejections": "rejections.jsonl",
@@ -298,17 +302,9 @@ def build_sparse_topk_package(
         try:
             os.link(output_dir / "candidate_datums.jsonl", output_dir / "datums.jsonl")
         except OSError:
-            write_jsonl(output_dir / "datums.jsonl", datums)
+            import shutil
+            shutil.copyfile(output_dir / "candidate_datums.jsonl", output_dir / "datums.jsonl")
         artifacts["datums"] = "datums.jsonl"
-
-    effective_mass = Counter()
-    loss_positions = Counter()
-    for datum in datums:
-        effective_mass[datum["kind"]] += float(datum["row_weight"])
-        loss_positions[datum["kind"]] += len(datum["loss_positions"])
-    input_lengths = [int(datum["input_tokens"]) for datum in datums]
-    sequence_lengths = [int(datum["sequence_tokens"]) for datum in datums]
-    completion_lengths = [int(datum["completion_tokens"]) for datum in datums]
     manifest = {
         "schema_version": PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION,
         "source": {
@@ -323,14 +319,12 @@ def build_sparse_topk_package(
         "require_both_kinds": require_both_kinds,
         "missing_source_kinds": missing_kinds,
         "counts": {
-            "input_targets": len(targets),
-            "candidate_datums": len(datums),
-            "rejections": len(rejections),
+            "input_targets": input_target_count,
+            "candidate_datums": datum_count,
+            "rejections": rejection_count,
             "loss_positions": sum(loss_positions.values()),
         },
-        "targets_by_kind": dict(sorted(Counter(
-            datum["kind"] for datum in datums
-        ).items())),
+        "targets_by_kind": dict(sorted(target_kind_counts.items())),
         "loss_positions_by_kind": dict(sorted(loss_positions.items())),
         "effective_row_mass_by_kind": dict(sorted(effective_mass.items())),
         "lengths": {
@@ -348,7 +342,7 @@ def build_sparse_topk_package(
             "ready_for_trainer"
             if ready
             else "blocked_invalid_target"
-            if rejections or len(datums) != len(targets)
+            if rejection_count or datum_count != input_target_count
             else "blocked_missing_source_kind"
         ),
     }

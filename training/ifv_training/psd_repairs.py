@@ -16,6 +16,7 @@ from typing import Any, Mapping
 
 from .io import (
     canonical_json,
+    iter_jsonl,
     load_jsonl,
     require_new_or_empty,
     sha256_file,
@@ -513,7 +514,6 @@ def assemble_psd_repair_package(
     require_new_or_empty(output_dir)
     repair_candidates = load_jsonl(repair_candidates_path)
     repair_attempts = load_jsonl(repair_attempts_path)
-    preservation_candidates = load_jsonl(preservation_candidates_path)
 
     candidates_by_id: dict[str, Mapping[str, Any]] = {}
     for index, candidate in enumerate(repair_candidates):
@@ -646,71 +646,53 @@ def assemble_psd_repair_package(
     if len(repair_rounds) != 1 and repairs:
         raise ValueError("selected repairs do not share one PSD round")
 
-    preservation: list[dict[str, Any]] = []
-    preservation_rejections: list[dict[str, Any]] = []
+    preservation_candidate_count = 0
+    preservation_row_count = 0
+    preservation_rejection_count = 0
     seen_preservation_ids: set[str] = set()
-    for row_index, candidate in enumerate(preservation_candidates):
-        candidate_id = _text(candidate.get("candidate_id"))
-        if not candidate_id:
-            preservation_rejections.append(
-                {
-                    "row_index": row_index,
-                    "reason": "candidate_id_missing",
-                }
-            )
-            continue
-        if candidate_id in seen_preservation_ids:
-            preservation_rejections.append(
-                {
-                    "row_index": row_index,
-                    "candidate_id": candidate_id,
-                    "reason": "duplicate_candidate_id",
-                }
-            )
-            continue
-        seen_preservation_ids.add(candidate_id)
-        try:
-            if round_model_roles is None:
-                raise ValueError("round_start_model_roles_missing")
-            candidate_run = _text(
-                candidate.get("source_run_id")
-                or _mapping(candidate.get("source")).get("source_run_id")
-            )
-            if repair_source_runs and candidate_run not in repair_source_runs:
-                raise ValueError("preservation_source_run_mismatch")
-            candidate_source = _source_fields(candidate)
-            if repair_rollout_gates and _text(
-                candidate_source.get("psd_rollout_gate_sha256")
-            ) not in repair_rollout_gates:
-                raise ValueError("preservation_rollout_gate_mismatch")
-            if repair_rounds and candidate_source.get("psd_round_index") not in repair_rounds:
-                raise ValueError("preservation_psd_round_mismatch")
-            preservation.append(
-                _preservation_row(
-                    candidate,
-                    model_roles=round_model_roles,
-                    media_dir=output_dir / "media",
-                )
-            )
-        except ValueError as exc:
-            preservation_rejections.append(
-                {
-                    "row_index": row_index,
-                    "candidate_id": candidate_id,
-                    "case_id": _text(candidate.get("case_id")),
-                    "episode_id": _text(candidate.get("episode_id")),
-                    "reason": str(exc),
-                }
-            )
+    preservation_output = output_dir / "preservation.jsonl"
+    preservation_rejections_output = output_dir / "preservation_rejections.jsonl"
+    with (preservation_output.open("w", encoding="utf-8") as preservation_handle,
+          preservation_rejections_output.open("w", encoding="utf-8") as rejection_handle):
+        for row_index, candidate in enumerate(iter_jsonl(preservation_candidates_path)):
+            preservation_candidate_count += 1
+            candidate_id = _text(candidate.get("candidate_id"))
+            rejection = None
+            if not candidate_id:
+                rejection = {"row_index": row_index, "reason": "candidate_id_missing"}
+            elif candidate_id in seen_preservation_ids:
+                rejection = {"row_index": row_index, "candidate_id": candidate_id,
+                    "reason": "duplicate_candidate_id"}
+            else:
+                seen_preservation_ids.add(candidate_id)
+                try:
+                    if round_model_roles is None:
+                        raise ValueError("round_start_model_roles_missing")
+                    candidate_run = _text(candidate.get("source_run_id")
+                        or _mapping(candidate.get("source")).get("source_run_id"))
+                    if repair_source_runs and candidate_run not in repair_source_runs:
+                        raise ValueError("preservation_source_run_mismatch")
+                    candidate_source = _source_fields(candidate)
+                    if repair_rollout_gates and _text(
+                            candidate_source.get("psd_rollout_gate_sha256")) not in repair_rollout_gates:
+                        raise ValueError("preservation_rollout_gate_mismatch")
+                    if repair_rounds and candidate_source.get("psd_round_index") not in repair_rounds:
+                        raise ValueError("preservation_psd_round_mismatch")
+                    row = _preservation_row(candidate, model_roles=round_model_roles,
+                        media_dir=output_dir / "media")
+                    preservation_handle.write(canonical_json(row) + "\n")
+                    preservation_row_count += 1
+                except ValueError as exc:
+                    rejection = {"row_index": row_index, "candidate_id": candidate_id,
+                        "case_id": _text(candidate.get("case_id")),
+                        "episode_id": _text(candidate.get("episode_id")), "reason": str(exc)}
+            if rejection is not None:
+                rejection_handle.write(canonical_json(rejection) + "\n")
+                preservation_rejection_count += 1
 
     write_jsonl(output_dir / "repairs.jsonl", repairs)
-    write_jsonl(output_dir / "preservation.jsonl", preservation)
     write_jsonl(output_dir / "attempt_rejections.jsonl", attempt_rejections)
     write_jsonl(output_dir / "unrepaired_candidates.jsonl", unrepaired)
-    write_jsonl(
-        output_dir / "preservation_rejections.jsonl",
-        preservation_rejections,
-    )
 
     selected_levels = Counter(row["hint_level"] for row in repairs)
     manifest = {
@@ -731,9 +713,9 @@ def assemble_psd_repair_package(
             "selected_repairs": len(repairs),
             "unrepaired_candidates": len(unrepaired),
             "attempt_rejections": len(attempt_rejections),
-            "preservation_candidates": len(preservation_candidates),
-            "preservation_rows": len(preservation),
-            "preservation_rejections": len(preservation_rejections),
+            "preservation_candidates": preservation_candidate_count,
+            "preservation_rows": preservation_row_count,
+            "preservation_rejections": preservation_rejection_count,
         },
         "selected_hint_levels": {
             str(level): count for level, count in sorted(selected_levels.items())
@@ -747,9 +729,9 @@ def assemble_psd_repair_package(
         },
         "status": (
             "ready_for_target_build"
-            if repairs and preservation
+            if repairs and preservation_row_count
             else "blocked_missing_source_kind"
-            if repairs or preservation_candidates
+            if repairs or preservation_candidate_count
             else "empty"
         ),
     }
