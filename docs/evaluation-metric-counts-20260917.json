@@ -1,0 +1,99 @@
+{
+  "schema": "ifv-main-table-integer-counts-v1",
+  "recovered_on": "2026-09-17",
+  "support": [377, 1150],
+  "gold_rows": ["real", "fake"],
+  "prediction_columns": ["real", "fake", "missing_or_invalid"],
+  "gold_sha256": "49a5785522b982dc4f97b28270a4b5bf5f4da0d7247f8dc7fd30cdf0de5ea671",
+  "notes": [
+    "Aggregate documentation only; no per-case predictions, images, private gold or credentials are copied here.",
+    "Historical integer counts are recovered from archived tool output, not inferred from rounded percentages. Original gpu-13 files were not reopened on this date.",
+    "H20 prediction rows were joined by unique exact case ID against the frozen 1527 gold sidecar. Epoch2 uses its frozen integer summary.",
+    "SESR is copied unchanged from the main table; this recovery performs no judge calls and does not reclassify evidence quality.",
+    "Gemini3.7 Agent classification uses the original full 1527 historical counts. Its later 1526-case judge transfer is not used to discard a known historical prediction.",
+    "Existing Agent cache-quality limitations remain in force. Numerical recovery does not resolve that incident."
+  ],
+  "sources": {
+    "history_34755": {
+      "kind": "archived_integer_summary",
+      "session": "01a06fd4-69e4-7b92-bfdd-34efac6a8aed",
+      "jsonl_line": 34755,
+      "tool_output_utf8_sha256": "93bcc8ae6f623b267cb314a949ee6b6caa26d822a72677ee39d105843e9bf616",
+      "original_path": "/gsdata/home/wza/image-factual-verifier-v2-data/generated/direct-qa-imports/direct-qa-results-final-20260908/filtered-test1527-r1/accuracy-summary-prejudge.json"
+    },
+    "history_34763": {
+      "kind": "archived_integer_confusion_matrix",
+      "session": "01a06fd4-69e4-7b92-bfdd-34efac6a8aed",
+      "jsonl_line": 34763,
+      "tool_output_utf8_sha256": "e892f6eb561788ae407e64dcfdefe2f263dea0dc48ea103a200dfc8aa2f18c2b"
+    },
+    "sft2578": {
+      "kind": "h20_frozen_predictions",
+      "path": "/volume/ybo/wza/evaluation/qwen35-sft-initial2578-agent-final1526-20260913/frozen-results.jsonl",
+      "sha256": "c7d8ab83d9174ded7044363e15250bf71073c1a4314cbb70ea74fd639557f28f"
+    },
+    "sft1028": {
+      "kind": "h20_frozen_predictions",
+      "path": "/volume/ybo/wza/evaluation/qwen35-sft1028-agent-final1526-20260914/frozen-results.jsonl",
+      "sha256": "2c66494eaadb5ed5f339041aded7e1b56b26b0474de19bfe8863406d4cd57c92"
+    },
+    "sft2056": {
+      "kind": "h20_frozen_integer_summary",
+      "path": "/volume/ybo/wza/evaluation/qwen35-sft2056-epoch2-agent-budgeted1524-20260916/summary.json",
+      "sha256": "da94380c1d60b19d5c5e026ba8ce1670f08a1eaa9dbe9d459d5233affd0e2b95"
+    },
+    "sft3084": {
+      "kind": "h20_frozen_candidate_predictions",
+      "path": "/volume/ybo/wza/evaluation/sft3084-gemini31pro-v3-judge-20260915/qwen35-9b-sft3084-agent.jsonl.gz",
+      "sha256": "c803e97312ad1ad741c263098e7e5b3894e67690efde92f93253a1306e4cec43"
+    },
+    "gpt55_agent": {
+      "kind": "h20_frozen_candidate_predictions",
+      "path": "/volume/ybo/wza/evaluation/external-agent-handoffs-20260913/gpt55-agent-formal1526-v3-candidates.jsonl.gz",
+      "sha256": "4aa3e5903cf8604eff742ebf52ae9e2620eff101f4b4d167e060a649a4f02a8d"
+    },
+    "qwen397_agent": {
+      "kind": "h20_frozen_candidate_predictions",
+      "path": "/volume/ybo/wza/evaluation/external-agent-handoffs-20260913/qwen35-397b-a17b-agent-formal1526-v3-candidates.jsonl.gz",
+      "sha256": "a1ea8a254df3ce45dc1704f9209792bbd6755beab85146beeb6ee772cc3e028d"
+    },
+    "base_agent": {
+      "kind": "h20_frozen_recorded_candidate_labels",
+      "path": "/volume/ybo/wza/runs/eval/qwen35-base-agent-formal1527-pretrain-from-old1682-20260912/selected-audit-results.jsonl",
+      "sha256": "b123552f3b7c32231bddb254ed59067f3c9b827ab62d706d85fac1d05725c02e",
+      "note": "Only recorded candidate_verdict is read; obsolete judge quality labels in this file are not reused."
+    },
+    "base_qa": {
+      "kind": "h20_frozen_predictions",
+      "path": "/volume/ybo/wza/runs/eval/qwen35-base-directqa-formal1527-20260912/results.jsonl",
+      "sha256": "79f1e65e226308ca69d46ca8c64ace7b1c0b79b42fde0590f4b7436e78ca84f9"
+    },
+    "gemini31_agent": {
+      "kind": "h20_frozen_predictions",
+      "path": "/volume/ybo/wza/runs/eval/gemini31pro-agent-formal1527-20260913/resume-control-20260914/merged-success-results.jsonl",
+      "sha256": "10413e6e3471ba2f8f46ebb3b1da5375c2dd81056c5c737b166730474e9a94eb"
+    }
+  },
+  "models": [
+    {"id":"gemini37_agent","group":"agent","model":"Gemini 3.7 Agent","matrix":[[318,59,0],[244,906,0]],"source":"history_34755","previous_percent":{"bacc":"81.57","supported_recall":"84.35","refuted_recall":"78.78"},"sesr_existing_percent":"42.89"},
+    {"id":"sft4872","group":"agent","model":"Qwen3.5-9B Agent（SFT-4872，从 Base 独立训练）","matrix":[[313,63,1],[266,884,0]],"source":"sft1028","previous_percent":{"bacc":"79.95","supported_recall":"83.02","refuted_recall":"76.87"},"sesr_existing_percent":"36.54"},
+    {"id":"sft2578","group":"agent","model":"Qwen3.5-9B Agent（SFT-2578，从 Base 独立训练）","matrix":[[300,76,1],[228,922,0]],"source":"sft2578","previous_percent":{"bacc":"79.87","supported_recall":"79.58","refuted_recall":"80.17"},"sesr_existing_percent":"34.77"},
+    {"id":"sft3084","group":"agent","model":"Qwen3.5-9B Agent（SFT-4872，另一次 Base 初始化训练，epoch 3；缓存缺陷记录）","matrix":[[295,81,1],[231,919,0]],"source":"sft3084","previous_percent":{"bacc":"79.08","supported_recall":"78.25","refuted_recall":"79.91"},"sesr_existing_percent":"44.66"},
+    {"id":"gpt55_agent","group":"agent","model":"GPT-5.5 Agent","matrix":[[316,60,1],[317,833,0]],"source":"gpt55_agent","previous_percent":{"bacc":"78.13","supported_recall":"83.82","refuted_recall":"72.43"},"sesr_existing_percent":"50.49"},
+    {"id":"sft2056","group":"agent","model":"Qwen3.5-9B Agent（SFT-4872，同一次三 epoch 训练，epoch 2；2 条失败、缓存缺陷记录）","matrix":[[284,91,2],[226,923,1]],"source":"sft2056","previous_percent":{"bacc":"77.80","supported_recall":"75.33","refuted_recall":"80.26"},"sesr_existing_percent":"暂停新提交"},
+    {"id":"qwen397_agent","group":"agent","model":"Qwen3.5-397B-A17B Agent","matrix":[[191,185,1],[83,1067,0]],"source":"qwen397_agent","previous_percent":{"bacc":"71.72","supported_recall":"50.66","refuted_recall":"92.78"},"sesr_existing_percent":"43.29"},
+    {"id":"base_agent","group":"agent","model":"Qwen3.5-9B Agent（训练前）","matrix":[[264,112,1],[445,705,0]],"source":"base_agent","previous_percent":{"bacc":"65.67","supported_recall":"70.03","refuted_recall":"61.30"},"sesr_existing_percent":"3.14"},
+    {"id":"gemini31_agent","group":"agent","model":"Gemini 3.1 Pro Agent","matrix":[[112,264,1],[56,1094,0]],"source":"gemini31_agent","previous_percent":{"bacc":"62.42","supported_recall":"29.71","refuted_recall":"95.13"},"sesr_existing_percent":"32.68"},
+    {"id":"gpt55_qa","group":"direct_qa","model":"GPT-5.5","matrix":[[300,75,2],[319,830,1]],"source":"history_34763","previous_percent":{"bacc":"75.87","supported_recall":"79.58","refuted_recall":"72.17"},"sesr_existing_percent":"3.67"},
+    {"id":"gemini37_qa","group":"direct_qa","model":"Gemini 3.7 Flash","matrix":[[270,107,0],[234,916,0]],"source":"history_34755","previous_percent":{"bacc":"75.64","supported_recall":"71.62","refuted_recall":"79.65"},"sesr_existing_percent":"9.10"},
+    {"id":"claude_qa","group":"direct_qa","model":"Claude Opus 4.8","matrix":[[263,113,1],[292,858,0]],"source":"history_34755","previous_percent":{"bacc":"72.18","supported_recall":"69.76","refuted_recall":"74.61"},"sesr_existing_percent":"6.75"},
+    {"id":"kimi_qa","group":"direct_qa","model":"Kimi K2.6","matrix":[[306,70,1],[468,682,0]],"source":"history_34755","previous_percent":{"bacc":"70.24","supported_recall":"81.17","refuted_recall":"59.30"},"sesr_existing_percent":"8.91"},
+    {"id":"doubao_qa","group":"direct_qa","model":"Doubao Seed 2.0 Pro","matrix":[[292,82,3],[421,723,6]],"source":"history_34755","previous_percent":{"bacc":"70.16","supported_recall":"77.45","refuted_recall":"62.87"},"sesr_existing_percent":"8.45"},
+    {"id":"qwen397_qa","group":"direct_qa","model":"Qwen3.5-397B-A17B","matrix":[[212,164,1],[217,933,0]],"source":"history_34755","previous_percent":{"bacc":"68.68","supported_recall":"56.23","refuted_recall":"81.13"},"sesr_existing_percent":"6.68"},
+    {"id":"minimax_qa","group":"direct_qa","model":"MiniMax-M3","matrix":[[319,57,1],[587,560,3]],"source":"history_34763","previous_percent":{"bacc":"66.66","supported_recall":"84.62","refuted_recall":"48.70"},"sesr_existing_percent":"3.41"},
+    {"id":"gpt52_qa","group":"direct_qa","model":"GPT-5.2","matrix":[[324,46,7],[602,526,22]],"source":"history_34755","previous_percent":{"bacc":"65.84","supported_recall":"85.94","refuted_recall":"45.74"},"sesr_existing_percent":"2.95"},
+    {"id":"base_qa","group":"direct_qa","model":"Qwen3.5-9B（训练前）","matrix":[[298,78,1],[548,602,0]],"source":"base_qa","previous_percent":{"bacc":"65.70","supported_recall":"79.05","refuted_recall":"52.35"},"sesr_existing_percent":"1.70"},
+    {"id":"gemini31_qa","group":"direct_qa","model":"Gemini 3.1 Pro","matrix":[[108,269,0],[38,1110,2]],"source":"history_34755","previous_percent":{"bacc":"62.58","supported_recall":"28.65","refuted_recall":"96.52"},"sesr_existing_percent":"5.57"},
+    {"id":"glm_qa","group":"direct_qa","model":"GLM-4.6V","matrix":[[360,16,1],[867,281,2]],"source":"history_34755","previous_percent":{"bacc":"59.96","supported_recall":"95.49","refuted_recall":"24.43"},"sesr_existing_percent":"3.01"}
+  ]
+}
