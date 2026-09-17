@@ -1,8 +1,8 @@
 {
   "schema": "ifv-main-table-integer-counts-v1",
   "recovered_on": "2026-09-17",
-  "main_table_excluded_ids": ["sft2578", "sft2056", "sft3084"],
-  "main_table_selection_note": "User requested one SFT row only. Retain SFT-4872/step1028, the highest BAcc among the recorded SFT runs, not the newest epoch3 run. Other integer records remain archival; no weights or predictions are deleted.",
+  "main_table_excluded_ids": ["sft2578", "sft2056", "sft4872"],
+  "main_table_selection_note": "User explicitly selected the three-epoch SFT/step3084 result with SESR 44.66%, not the highest-BAcc step1028 run. Keep all six metrics from step3084 together and retain its cache-quality warning. Other integer records remain archival; no weights or predictions are deleted.",
   "support": [377, 1150],
   "gold_rows": ["real", "fake"],
   "prediction_columns": ["real", "fake", "missing_or_invalid"],
@@ -13,7 +13,7 @@
     "H20 prediction rows were joined by unique exact case ID against the frozen 1527 gold sidecar. Epoch2 uses its frozen integer summary.",
     "SESR is copied unchanged from the main table; this recovery performs no judge calls and does not reclassify evidence quality.",
     "Gemini3.7 Agent classification uses the original full 1527 historical counts. Its later 1526-case judge transfer is not used to discard a known historical prediction.",
-    "Existing Agent cache-quality limitations remain in force. Numerical recovery does not resolve that incident."
+    "Existing Agent cache-quality limitations remain in force. Numerical recovery or selection of step3084 for display does not resolve that incident."
   ],
   "sources": {
     "history_34755": {

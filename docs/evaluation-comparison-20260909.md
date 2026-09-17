@@ -1,10 +1,10 @@
 # 图像事实核查对比实验结果
 
-> **评测限定：** 历史三 epoch SFT 评测发现过跨图片感知/OCR缓存错误，相关记录不进入当前精简主表。其余 Agent 尚未完成同类审计，不能据此宣称不受影响；Direct QA 不经过此工具缓存。详见[缓存事件及处置](perception-cache-incident-20260916.md)。此次仅精简展示，不重跑评测、不改变原预测或解除既有质量限制。
+> **评测限定：** 主表按用户指定保留的三 epoch SFT（step 3084）评测发现过跨图片感知/OCR缓存错误，数值属于原流程冻结记录，暂不能视为排除该工程缺陷后的最终模型对比。其余 Agent 尚未完成同类审计，不能据此宣称不受影响；Direct QA 不经过此工具缓存。详见[缓存事件及处置](perception-cache-incident-20260916.md)。此次仅调整展示，不重跑评测、不改变原预测或解除既有质量限制。
 
 ## 实验设置
 
-- 2026-09-17：主表固定为 BAcc、Macro-Precision、Macro-F1、Supported Recall、Refuted Recall、SESR 六项。按用户要求，SFT 只展示当前已记录实验中 BAcc 最高的 SFT-4872（step 1028，79.95%），不是最新三 epoch checkpoint；不混搭不同 checkpoint 的指标。当前展示 17 组，其余 3 组 SFT 仅保留历史记录，旧权重不删除。
+- 2026-09-17：主表固定为 BAcc、Macro-Precision、Macro-F1、Supported Recall、Refuted Recall、SESR 六项。按用户明确指定，SFT 只展示三 epoch 训练的 epoch 3（step 3084，SESR 44.66%、BAcc 79.08%），不是 BAcc 最高的 step 1028；六项指标均来自同一 checkpoint，不混搭。当前展示 17 组，其余 3 组 SFT 仅保留历史记录，旧权重不删除。
 - 原 20 组分类指标均已从整数计数恢复；原 BAcc、两类 Recall 和 SESR 数值未变，未重新推理或调用 judge。详见下方“恢复依据与复算”。
 - 2026-09-16 09:35：epoch3与Gemini3.1Pro两组judge已收尾，每组1,525条有效审核、1条按用户要求计失败的输入；另1条缺图仍保留在1,527分母中。SESR分别为682/1,527（44.66%）及499/1,527（32.68%）。没有改变原预测或BAcc。
 - 按用户要求取消26个停滞Batch，保留62条已成功结果，仅把87条明确取消的请求转普通接口；另24条503尾项给予两次追加预算。补跑111条全部成功，没有重跑有效judge，也没有重置旧attempt。详见[尾项处理](judge-realtime-switch-20260915.md)。
@@ -25,7 +25,7 @@
 | 排名 | 模型 | BAcc ↑ | Macro-Precision ↑ | Macro-F1 ↑ | Supported Recall ↑ | Refuted Recall ↑ | SESR ↑ |
 |---:|:---|---:|---:|---:|---:|---:|---:|
 | 1 | Gemini 3.7 Agent | 81.57 | 75.23 | 76.70 | 84.35 | 78.78 | 42.89 |
-| 2 | Qwen3.5-9B Agent（SFT-4872，从 Base 独立训练） | 79.95 | 73.70 | 74.90 | 83.02 | 76.87 | 36.54 |
+| 2 | Qwen3.5-9B Agent（SFT-4872，另一次 Base 初始化训练，epoch 3；缓存缺陷记录） | 79.08 | 73.99 | 75.41 | 78.25 | 79.91 | 44.66 |
 | 3 | GPT-5.5 Agent | 78.13 | 71.60 | 72.06 | 83.82 | 72.43 | 50.49 |
 | 4 | Qwen3.5-397B-A17B Agent | 71.72 | 77.47 | 73.76 | 50.66 | 92.78 | 43.29 |
 | 5 | Qwen3.5-9B Agent（训练前） | 65.67 | 61.76 | 60.15 | 70.03 | 61.30 | 3.14 |
@@ -67,7 +67,7 @@ Qwen3.5-9B（训练前）Direct QA 已完成 1,526 条唯一推理及对应的 1
 
 Qwen3.5-9B Agent（训练前）的二分类结果按冻结 case ID 复用已有的 1,526 条推理。缺失的 1 条 real 按未召回计入 1,527 分母；real 正确 264/377，fake 正确 705/1,150，其 Accuracy 为 63.46%。表中的 SESR 已更新为最终 v3 全材料审核结果 48/1,527（3.14%），替代旧版 44/1,527（2.88%）。二分类记录保存在服务器 `qwen35-base-agent-formal1527-pretrain-from-old1682-20260912/summary.json`；v3 审核保存在 `/volume/ybo/wza/runs/eval/gemini37-qwen35base-agent-batch-judge-v3-low32k-20260913`。旧版 Gemini 3.1 Pro/high 审核不进入本表。
 
-Qwen3.5-9B Agent（SFT-4872）的冻结结果同样覆盖 1,526 条可运行样本。该模型也从同一个 Qwen3.5-9B Base 独立启动训练，不是从 SFT-2578 checkpoint 续训。可用样本口径为 real 313/376、fake 884/1,150，BAcc 80.06%；本表把缺失的 1 条 real 计为未召回，因此记录 Real Recall 83.02%、Fake Recall 76.87%、BAcc 79.95%。冻结结果位于服务器 `/volume/ybo/wza/evaluation/qwen35-sft1028-agent-final1526-20260914`；统一 v3 审核得到 `Strong` 558 条，即 SESR 558/1,527（36.54%）。
+主表唯一的 Qwen3.5-9B SFT 来自另一次 Base 独立初始化的三 epoch 训练，选择 epoch 3 / step 3084，不是较早 SFT checkpoint 的续训。冻结结果覆盖 1,526 条可运行样本，real 正确 295/377、fake 正确 919/1,150；缺失的 1 条 real 保留在分母中，因此 Supported Recall 78.25%、Refuted Recall 79.91%、BAcc 79.08%。冻结索引位于服务器 `/volume/ybo/wza/runs/eval/qwen35-sft3084-3epoch-agent-formal1527-20260915/selected-traces.json`；统一 v3 审核严格证据充分数为 682，SESR 为 682/1,527（44.66%）。该组保留页首的缓存缺陷限定。
 
 Gemini 3.1 Pro 的证据质量已使用统一的 Gemini 3.7 Flash、`thinking_level=low` 配置重新审核。最终有 85 条样本被判定为 `Strong`，SESR 为 5.57%；旧的 23.71% 来自 Gemini 3.1 Pro 自审且使用 `thinking_level=high` 的非统一口径，已废弃。
 
@@ -118,7 +118,7 @@ epoch3 与 Gemini 3.1 Pro 两组同口径 v3 judge 继续采用已固定的混�
 
 - Gemini 3.7 Agent 获得当前最高 BAcc，为 81.57%，且 real/fake 两类召回较为均衡。
 - GPT-5.5 Agent 获得当前最高 SESR，为 50.49%；Gemini 3.7 Agent 与 Qwen3.5-397B-A17B Agent 分别为 42.89% 和 43.29%。
-- 从 Base 独立训练的 SFT-4872 是当前主表唯一的 SFT 结果，BAcc 79.95%、Macro-Precision 73.70%、Macro-F1 74.90%、SESR 36.54%；相对训练前 Agent，BAcc 高 14.28 个百分点、SESR 高 33.40 个百分点。
+- 用户指定的三 epoch SFT（step 3084）是当前主表唯一的 SFT 结果：BAcc 79.08%、Macro-Precision 73.99%、Macro-F1 75.41%、SESR 44.66%。相对训练前 Agent，冻结记录中的 BAcc 高 13.41 个百分点、SESR 高 41.52 个百分点；解读时仍需保留缓存缺陷限定。
 - GPT-5.5 与 Gemini 3.7 Flash 的 BAcc 分别为 75.87% 和 75.64%，是表现最好的两组 Direct QA 基线。
 - Gemini 3.1 Pro 虽然原始 Accuracy 较高，但 real 召回仅为 28.65%，BAcc 因此降至 62.58%。
 - Agent 的优势体现在证据搜集与证据支持的推理质量，但训练前 Qwen3.5-9B Agent 的 SESR 仅 3.14%，说明该优势并非仅由 Agent 流程保证。

@@ -54,13 +54,16 @@ def test_duplicate_experiment_rejected():
         recover(doc)
 
 
-def test_main_table_keeps_only_best_sft_and_preserves_history():
+def test_main_table_keeps_user_selected_epoch3_sft_and_preserves_history():
     rows = recover(json.loads(DEFAULT_COUNTS.read_text(encoding="utf-8")))
     assert sum(r["main_table"] for r in rows) == 17
     sft = [r for r in rows if r["id"].startswith("sft")]
     assert len(sft) == 4
-    assert [r["id"] for r in sft if r["main_table"]] == ["sft4872"]
-    assert max(sft, key=lambda r: r["metrics"]["bacc"])["id"] == "sft4872"
+    selected = [r for r in sft if r["main_table"]]
+    assert [r["id"] for r in selected] == ["sft3084"]
+    assert selected[0]["sesr_existing_percent"] == "44.66"
+    assert f"{100 * selected[0]['metrics']['bacc']:.2f}" == "79.08"
+    assert "缓存缺陷记录" in selected[0]["model"]
     assert markdown(rows, "agent").count("SFT-") == 1
     assert markdown(rows, "agent", include_history=True).count("SFT-") == 4
 
