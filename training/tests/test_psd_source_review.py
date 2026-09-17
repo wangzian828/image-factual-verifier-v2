@@ -302,7 +302,14 @@ def test_review_run_resume_keeps_decisions_and_does_not_label_transport_failure(
     assert first["counts"]["pending_error"] == 1 and first["counts"]["fail"] == 0
     second = asyncio.run(script.review_sources(**args))
     assert second["counts"]["fail"] == 1 and second["pending"] == 0
+    offloads = []
+    original_to_thread = script.asyncio.to_thread
+    async def tracked_to_thread(function, *values, **options):
+        offloads.append(function)
+        return await original_to_thread(function, *values, **options)
+    monkeypatch.setattr(script.asyncio, "to_thread", tracked_to_thread)
     assert asyncio.run(script.review_sources(**args)) == second
+    assert len(offloads) == 1
     assert len(calls) == 2
     # A valid old review remains readable as history but must not be silently
     # reused by the new driver under an unchanged prompt/schema hash.

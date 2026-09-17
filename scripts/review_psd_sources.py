@@ -72,19 +72,40 @@ async def review_sources(*, run_dir, benchmark, train_cases, private_gold, outpu
 
     async def one(item):
         case, episode, path = item
+        saved_path = review_path(output, episode)
+
+        def validate_saved():
+            trace = load_json(path)
+            if _trace_case_id(trace) != case:
+                raise ValueError("source trace case mismatch")
+            image = (benchmark.parent / public[case]["image_path"]).resolve()
+            binding = {"run": _sha(identity), "episode_id": episode,
+                       "trace_sha256": sha256_file(path),
+                       "gold_sha256": _sha(gold[case]), "image_sha256": sha256_file(image)}
+            artifact = load_bound(saved_path, identity=binding)
+            if artifact.get("trace_projection") != TRACE_PROJECTION:
+                raise ValueError("source review projection is stale; use a new versioned output")
+            status = validate_source_review(artifact, trace=trace, gold=gold[case])
+            return {"case_id": case, "episode_id": episode, "status": status,
+                    "path": str(saved_path), "sha256": sha256_file(saved_path)}
+
+        # A resumed formal pass may have thousands of already-bound reviews.
+        # Their image/archive/hash validation is CPU and filesystem work; doing
+        # it synchronously inside this coroutine serializes the entire case
+        # pool and makes a small transport-error tail replay every local item at
+        # one item per second.  Keep provider concurrency unchanged while using
+        # the caller's bounded case pool for independent local revalidation.
+        if saved_path.exists():
+            return await asyncio.to_thread(validate_saved)
         trace = load_json(path)
         if _trace_case_id(trace) != case:
             raise ValueError("source trace case mismatch")
         image = (benchmark.parent / public[case]["image_path"]).resolve()
         binding = {"run": _sha(identity), "episode_id": episode, "trace_sha256": sha256_file(path),
                    "gold_sha256": _sha(gold[case]), "image_sha256": sha256_file(image)}
-        saved_path = review_path(output, episode)
-        if saved_path.exists():
-            artifact = load_bound(saved_path, identity=binding)
-        else:
-            artifact = await judge_source(client, trace, gold=gold[case], image_path=image,
-                model=model, cache_dir=cache_dir)
-            save_bound(saved_path, identity=binding, payload=artifact)
+        artifact = await judge_source(client, trace, gold=gold[case], image_path=image,
+            model=model, cache_dir=cache_dir)
+        save_bound(saved_path, identity=binding, payload=artifact)
         if artifact.get("trace_projection") != TRACE_PROJECTION:
             raise ValueError("source review projection is stale; use a new versioned output")
         status = validate_source_review(artifact, trace=trace, gold=gold[case])
