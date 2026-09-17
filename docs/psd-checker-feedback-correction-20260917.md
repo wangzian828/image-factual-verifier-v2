@@ -177,3 +177,12 @@ tests: **98 passed**. The immutable deployment is
 handoff PID 1421031 is only a receipt hint. Read its `handoff-state.json` and
 the upstream v59 state before identifying the live owner. Staging does not mean
 the corrections are live until that completed-pass handoff succeeds.
+
+Live update: v60 switched at v59's completed-pass boundary with zero interrupted
+rollouts. It backed up and reclassified **69** exact legacy transport ledgers;
+no attempt or budget was reset. In the first live v60 pass, 22 bound
+evidence-only corrections had already passed local validation (15 immutable
+fail decisions and 7 immutable pass decisions). The remaining latest
+`nonretryable_error` ledgers were four `ValueError` cases, so they were not
+misclassified as transport. Controller:
+`/volume/ybo/wza/runs/psd-formal-prepare-controller-20260918-tail-recovery-v3`.
