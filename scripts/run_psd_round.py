@@ -229,7 +229,8 @@ async def prepare(args):
     source_reviews = root / "source-reviews"
     review_summary = await review_sources(run_dir=run_dir, benchmark=args.benchmark,
         train_cases=args.train_cases, private_gold=args.private_gold, output=source_reviews,
-        model=args.judge_model, concurrency=getattr(args, "source_review_concurrency", 4))
+        model=args.judge_model, concurrency=getattr(args, "source_review_concurrency", 4),
+        prefetch=getattr(args, "source_review_prefetch", None))
     if review_summary["pending"]:
         return {"status": "paused_source_review_requires_resolution", "training_started": False,
                 "source_reviews": str(source_reviews / "summary.json"), "pending": review_summary["pending"]}
@@ -343,6 +344,8 @@ def main():
     prepare_parser.add_argument("--attempts", type=int, default=6)
     prepare_parser.add_argument("--case-concurrency", type=int, default=1)
     prepare_parser.add_argument("--source-review-concurrency", type=int, default=4)
+    prepare_parser.add_argument('--source-review-prefetch', type=Path,
+        help='Reuse exact source-review responses after the independent prefetch process has drained')
     prepare_parser.add_argument("--expected-rollouts-per-case", type=int, default=8,
         help="Enforce every sampling slot before source review; published grouped collection uses 8")
     prepare_parser.add_argument("--task-source-selection", choices=("all", "longest_failed"), default="longest_failed")

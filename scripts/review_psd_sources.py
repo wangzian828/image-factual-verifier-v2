@@ -25,12 +25,23 @@ def review_path(root, episode):
 
 
 async def review_sources(*, run_dir, benchmark, train_cases, private_gold, output,
-                         model, concurrency=4, client=None):
+                         model, concurrency=4, client=None, prefetch=None):
+    if type(concurrency) is not int or not 1 <= concurrency <= 64:
+        raise ValueError('Invalid source review concurrency')
     run_dir, output = run_dir.resolve(), output.resolve()
     manifest = load_json(run_dir / "run_manifest.json")
     require_completed_collection(run_dir, manifest)
     if manifest.get("benchmark", {}).get("training_prohibited"):
         raise ValueError("PSD source review requires completed training-only rollouts")
+    cache_dir = output / 'judge-cache'
+    if prefetch is not None:
+        from scripts.prefetch_psd_source_reviews import validate_prefetch_cache
+        cache_dir = validate_prefetch_cache(prefetch, run_dir=run_dir, benchmark=benchmark,
+            train_cases=train_cases, private_gold=private_gold, model=model)
+        # Prefetch must have drained before the final pass can share its cache.
+        from ifv_training.psd_repair_search import search_lock
+        with search_lock(Path(prefetch) / 'process-lock'):
+            pass
     public_rows, gold_rows = load_jsonl(benchmark), load_jsonl(private_gold)
     public, gold = {r["case_id"]: r for r in public_rows}, {r["case_id"]: r for r in gold_rows}
     allowed = _load_train_case_allowlist(train_cases)
@@ -72,7 +83,7 @@ async def review_sources(*, run_dir, benchmark, train_cases, private_gold, outpu
             artifact = load_bound(saved_path, identity=binding)
         else:
             artifact = await judge_source(client, trace, gold=gold[case], image_path=image,
-                model=model, cache_dir=output / "judge-cache")
+                model=model, cache_dir=cache_dir)
             save_bound(saved_path, identity=binding, payload=artifact)
         if artifact.get("trace_projection") != TRACE_PROJECTION:
             raise ValueError("source review projection is stale; use a new versioned output")
@@ -98,8 +109,9 @@ async def review_sources(*, run_dir, benchmark, train_cases, private_gold, outpu
 
     if client is not None:
         return await collect()
-    from src.integrations.gemini import GeminiInteractionsClient
-    async with GeminiInteractionsClient(timeout=240, max_retries=2) as live_client:
+    from src.integrations.gemini import GeminiInteractionsClient, GeminiRequestGate
+    async with GeminiInteractionsClient(timeout=240, max_retries=2,
+            request_gate=GeminiRequestGate(concurrency)) as live_client:
         client = live_client
         return await collect()
 
@@ -110,6 +122,8 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--model", default="gemini-3.1-pro-preview")
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument('--prefetch', type=Path,
+        help='Exact-request cache from the completed incremental prefetch process')
     result = asyncio.run(review_sources(**vars(parser.parse_args())))
     print(json.dumps({k: v for k, v in result.items() if k != "reviews"}, ensure_ascii=False, indent=2))
     if result["pending"]:
