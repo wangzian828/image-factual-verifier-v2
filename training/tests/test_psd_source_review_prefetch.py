@@ -126,6 +126,76 @@ def test_transport_errors_are_bounded_and_secret_free(bank):
     assert 'do-not-record-secret' not in raw and 'private-url' not in raw and '429' in raw
 
 
+def test_automatic_transport_retry_recovers_without_resampling_valid_fail(bank):
+    from src.integrations.gemini import GeminiInteractionsHTTPError
+    args, _, complete, original, _ = bank; complete(0)
+    class TransientClient(Client):
+        failures = 1
+        async def create(self, **kwargs):
+            if self.failures:
+                self.failures -= 1; self.calls += 1
+                raise GeminiInteractionsHTTPError(429, 'secret', 'private-url', retry_attempts=2)
+            return await super().create(**kwargs)
+    client = TransientClient(original.decision)
+    options = dict(client=client, retry_errors=True, retry_delay_seconds=0)
+    result = asyncio.run(script.prefetch(**args, **options))
+    assert result['counts'] == {'fail':1} and client.calls == 2
+    asyncio.run(script.prefetch(**args, **options)); assert client.calls == 2
+    path = next((args['output']/'records').glob('*.json'))
+    data = load_json(path)['payload']
+    assert [r['status'] for r in data['attempt_history']] == ['pending_error','fail']
+    assert 'secret' not in path.read_text() and 'private-url' not in path.read_text()
+
+
+def test_retry_budget_survives_restart_and_charges_legacy_failure(bank):
+    from src.integrations.gemini import GeminiInteractionsHTTPError
+    args, _, complete, _, _ = bank; complete(0)
+    class FailingClient:
+        calls = 0
+        async def create(self, **kwargs):
+            self.calls += 1
+            raise GeminiInteractionsHTTPError(503, 'secret', 'private-url', retry_attempts=2)
+    client = FailingClient()
+    asyncio.run(script.prefetch(**args, client=client))
+    # Simulate the previous deployed format, which had one attempt but no history.
+    path = next((args['output']/'records').glob('*.json'))
+    saved = load_json(path); saved['payload'].pop('attempt_history')
+    save_bound(path, identity=saved['identity'], payload=saved['payload'])
+    options = dict(client=client, retry_errors=True, max_review_attempts=3, retry_delay_seconds=0)
+    result = asyncio.run(script.prefetch(**args, **options))
+    assert client.calls == 3 and result['exhausted_transport'] == 1
+    asyncio.run(script.prefetch(**args, **options)); assert client.calls == 3
+    assert len(load_json(path)['payload']['attempt_history']) == 3
+
+
+def test_structural_fault_is_not_retried_as_transport(bank, monkeypatch):
+    args, _, complete, client, _ = bank; complete(0)
+    calls = []
+    async def invalid(*a, **kw):
+        calls.append(1)
+        raise ValueError('PSD judge evidence is not a literal observed quote')
+    monkeypatch.setattr(script,'judge_source',invalid)
+    result = asyncio.run(script.prefetch(**args, client=client, retry_errors=True, retry_delay_seconds=0))
+    assert result['counts'] == {'pending_error':1} and len(calls) == 1
+
+
+def test_automatic_retry_keeps_unresolved_decision(bank):
+    args, _, complete, client, _ = bank; complete(0)
+    client.decision = {**client.decision,'status':'unresolved'}
+    for _ in range(2):
+        result = asyncio.run(script.prefetch(**args,client=client,retry_errors=True,retry_delay_seconds=0))
+        assert result['counts'] == {'unresolved':1}
+    assert client.calls == 1
+
+
+def test_http_400_auth_and_schema_failures_are_not_transient():
+    from src.integrations.gemini import GeminiInteractionsHTTPError, GeminiInteractionsResponseError
+    for status in (400,401,403,404):
+        assert not script.retryable_error(GeminiInteractionsHTTPError(status,'secret','url'))
+    assert script.retryable_error(GeminiInteractionsResponseError('bad transport JSON'))
+    assert not script.retryable_error(json.JSONDecodeError('completed model reply malformed','{',0))
+
+
 def test_worker_persistence_failure_is_not_a_deadlock(bank, monkeypatch):
     args, _, complete, client, _ = bank; complete(0)
     original = script.save_bound
@@ -202,3 +272,30 @@ def test_recovery_ancestor_cache_is_reused_but_unrelated_bank_rejected(bank):
         script.validate_prefetch_cache(args['output'], **{k:v for k,v in updated.items()
             if k not in ('output','cache_source')})
     assert client.calls == 8
+
+
+def test_recovery_inherits_spent_transport_attempts(bank):
+    import shutil
+    from src.integrations.gemini import GeminiInteractionsHTTPError
+    args, _, complete, _, _ = bank
+    complete(0)
+    class FailingClient:
+        calls = 0
+        async def create(self, **kwargs):
+            self.calls += 1
+            raise GeminiInteractionsHTTPError(429,'secret','url',retry_attempts=2)
+    client = FailingClient()
+    asyncio.run(script.prefetch(**args,client=client)); assert client.calls == 1
+    previous = args['run_dir'].parent; new = previous.parent/'recovered'
+    shutil.copytree(previous,new)
+    binding = load_json(new/'binding.json')
+    binding.update(snapshot=str(new/'snapshot'),reuse_run=str(previous))
+    write_json(new/'binding.json',binding)
+    updated = {**args,'run_dir':new/'episodes','output':new/'prefetch','cache_source':args['output']}
+    result = asyncio.run(script.prefetch(**updated,client=client,retry_errors=True,
+        max_review_attempts=2,retry_delay_seconds=0))
+    assert result['exhausted_transport'] == 1 and client.calls == 2
+    saved = load_json(next((new/'prefetch/records').glob('*.json')))['payload']
+    assert len(saved['attempt_history']) == 2 and saved['inherited_attempt_record_sha256']
+    asyncio.run(script.prefetch(**updated,client=client,retry_errors=True,
+        max_review_attempts=2,retry_delay_seconds=0)); assert client.calls == 2

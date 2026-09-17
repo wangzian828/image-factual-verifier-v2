@@ -31,6 +31,44 @@ from ifv_training.psd_source_review import VERSION, TRACE_PROJECTION, PROMPT, SC
 from src.eval.rollout import rollout_specs
 
 PREFETCH_VERSION = 'ifv-psd-source-review-prefetch-v1'
+RETRYABLE_HTTP = {429, 500, 502, 503, 504}
+TRANSPORT_ERROR_NAMES = {'GeminiInteractionsResponseError', 'TimeoutError', 'ReadTimeout',
+    'ConnectTimeout', 'WriteTimeout', 'PoolTimeout', 'ConnectError', 'ReadError',
+    'WriteError', 'RemoteProtocolError', 'LocalProtocolError'}
+
+
+def review_attempts(record):
+    if not record:
+        return []
+    history = record.get('attempt_history')
+    if history is None:
+        # Charge the earlier prefetch attempt instead of resetting its budget.
+        return [{k: v for k, v in record.items() if k in {
+            'status', 'error_type', 'status_code', 'retry_attempts', 'elapsed_seconds'}}]
+    if (not isinstance(history, list) or not history
+            or any(not isinstance(row, dict) or not row.get('status') for row in history)):
+        raise ValueError('Malformed persisted source-review attempt history')
+    return history
+
+
+def retryable_record(record):
+    if record.get('status') == 'in_progress':
+        return True  # Interrupted work stays charged; exact cached replies are reused.
+    if record.get('status') != 'pending_error':
+        return False  # Never retry pass/fail/unresolved for a preferred decision.
+    if record.get('retryable_transport') is not None:
+        return record['retryable_transport'] is True
+    return (record.get('error_type') in TRANSPORT_ERROR_NAMES
+            or (record.get('error_type') == 'GeminiInteractionsHTTPError'
+                and record.get('status_code') in RETRYABLE_HTTP))
+
+
+def retryable_error(error):
+    from src.integrations.gemini import GeminiInteractionsHTTPError, GeminiInteractionsResponseError
+    import httpx
+    return (isinstance(error, GeminiInteractionsHTTPError) and error.status_code in RETRYABLE_HTTP
+            or isinstance(error, (GeminiInteractionsResponseError, httpx.TransportError, TimeoutError))
+            or type(error) is ValueError and str(error) == 'PSD judge interaction did not complete')
 
 
 def load_scope(*, run_dir, benchmark, train_cases, private_gold, model):
@@ -169,10 +207,15 @@ def completed_source(scope, episode):
 
 
 async def prefetch(*, run_dir, benchmark, train_cases, private_gold, output, model,
-                   concurrency=16, follow=False, limit=None, poll_seconds=30, client=None, cache_source=None):
+                   concurrency=16, follow=False, limit=None, poll_seconds=30, client=None, cache_source=None,
+                   retry_errors=False, max_review_attempts=4, retry_delay_seconds=60):
     if type(concurrency) is not int or not 1 <= concurrency <= 64: raise ValueError('Invalid concurrency')
     if limit is not None and (type(limit) is not int or limit < 1): raise ValueError('Invalid prefetch limit')
     if poll_seconds <= 0: raise ValueError('Polling interval must be positive')
+    if type(max_review_attempts) is not int or not 1 <= max_review_attempts <= 10:
+        raise ValueError('Invalid bounded source-review retry budget')
+    if not 0 <= retry_delay_seconds <= 3600:
+        raise ValueError('Invalid source-review retry delay')
     scope = load_scope(run_dir=run_dir, benchmark=benchmark, train_cases=train_cases, private_gold=private_gold, model=model)
     output = Path(output).resolve()
     # Separate lock directory keeps the private reviewer independent of source writing.
@@ -190,8 +233,13 @@ async def prefetch(*, run_dir, benchmark, train_cases, private_gold, output, mod
             if raw['identity']['prefetch'] != _sha(scope['identity']) or episode not in scope['expected']:
                 raise ValueError('Existing prefetch record belongs to another scope')
             records[episode] = value
-        queue = asyncio.Queue(); scheduled = set(records); active = set(); submitted = 0
+        def can_retry(record):
+            return retry_errors and retryable_record(record) and len(review_attempts(record)) < max_review_attempts
+
+        queue = asyncio.Queue(); scheduled = {e for e,r in records.items() if not can_retry(r)}
+        active = set(); submitted = 0
         started = time.time(); available = 0; stop_scan = False
+        cooldown_until = 0.0
 
         def progress(phase):
             counts = Counter(r['status'] for r in records.values())
@@ -200,17 +248,23 @@ async def prefetch(*, run_dir, benchmark, train_cases, private_gold, output, mod
                 'active': len(active), 'queued': queue.qsize(), 'concurrency': concurrency,
                 'counts': dict(counts), 'reviewed': sum(counts[s] for s in ('pass', 'fail', 'unresolved')),
                 'training_started': False, 'full_collection_admitted': False, 'model': model}
+            value.update(retry_errors=retry_errors, max_review_attempts=max_review_attempts,
+                retrying=sum(e in active and len(review_attempts(records.get(e))) > 1 for e in active),
+                exhausted_transport=sum(retryable_record(r) and len(review_attempts(r)) >= max_review_attempts
+                    for r in records.values()), cooldown_until=cooldown_until)
             _atomic_json(output/'progress.json', value)
             return value
 
         async def worker():
+            nonlocal cooldown_until
             while True:
                 episode = await queue.get()
                 if episode is None: queue.task_done(); return
                 active.add(episode); progress('prefetching')
                 record_path = output/'records'/(hashlib.sha256(episode.encode()).hexdigest()+'.json')
                 binding = {'prefetch': _sha(scope['identity']), 'episode_id': episode}
-                attempt_started = time.monotonic()
+                previous = records.get(episode)
+                source_validated = False
                 try:
                     # Only the short local lock acquisition is retried here, never a paid decision.
                     for lock_attempt in range(20):
@@ -220,18 +274,69 @@ async def prefetch(*, run_dir, benchmark, train_cases, private_gold, output, mod
                         except BlockingIOError:
                             if lock_attempt == 19: raise
                             await asyncio.sleep(.25)
-                    save_bound(record_path, identity=binding, payload={'status': 'in_progress', 'time': time.time()})
-                    artifact = await judge_source(client, trace, gold=scope['gold'][scope['expected'][episode]['case_id']],
-                        image_path=image, model=model, cache_dir=cache_dir)
-                    status = validate_source_review(artifact, trace=trace,
-                        gold=scope['gold'][scope['expected'][episode]['case_id']])
-                    if await asyncio.to_thread(sha256_file, trace_path) != binding['trace_sha256']:
-                        raise ValueError('Source changed while being reviewed')
-                    result = {'status': status, 'artifact': artifact, 'elapsed_seconds': time.monotonic()-attempt_started}
+                    if previous is None and cache_source is not None:
+                        ancestor_path = Path(cache_source)/'records'/record_path.name
+                        if ancestor_path.exists():
+                            header = load_json(ancestor_path)
+                            old = load_bound(ancestor_path, identity=header['identity'])
+                            if (retryable_record(old) and all(header['identity'].get(k) == binding[k]
+                                    for k in ('episode_id','trace_sha256','gold_sha256','image_sha256'))):
+                                previous = {**old, 'inherited_attempt_record': str(ancestor_path),
+                                            'inherited_attempt_record_sha256': sha256_file(ancestor_path)}
+                    source_validated = True
+                    history = review_attempts(previous)
+                    if retry_errors and previous and not can_retry(previous):
+                        result = previous
+                    else:
+                        while True:
+                            deadline = max(cooldown_until, (previous or {}).get('retry_after', 0))
+                            while retry_errors and time.time() < deadline:
+                                await asyncio.sleep(min(5, deadline-time.time()))
+                                deadline = max(deadline, cooldown_until)
+                            attempt_started = time.monotonic()
+                            entry = {'status':'in_progress', 'started_at':time.time()}
+                            history = [*history, entry]
+                            inherited = {k:v for k,v in (previous or {}).items() if k.startswith('inherited_attempt_record')}
+                            records[episode] = {'status':'in_progress', 'attempt_history':history, **inherited}
+                            save_bound(record_path, identity=binding, payload=records[episode])
+                            progress('prefetching')
+                            try:
+                                artifact = await judge_source(client, trace,
+                                    gold=scope['gold'][scope['expected'][episode]['case_id']],
+                                    image_path=image, model=model, cache_dir=cache_dir)
+                                status = validate_source_review(artifact, trace=trace,
+                                    gold=scope['gold'][scope['expected'][episode]['case_id']])
+                                if await asyncio.to_thread(sha256_file, trace_path) != binding['trace_sha256']:
+                                    raise ValueError('Source changed while being reviewed')
+                                result = {'status':status, 'artifact':artifact}
+                            except Exception as error:
+                                result = {'status':'pending_error', 'error_type':type(error).__name__,
+                                          'retryable_transport':retryable_error(error)}
+                                for key in ('status_code','retry_attempts'):
+                                    if type(getattr(error,key,None)) is int: result[key] = getattr(error,key)
+                            elapsed = time.monotonic()-attempt_started
+                            history[-1] = {**entry, **{k:v for k,v in result.items() if k != 'artifact'},
+                                           'finished_at':time.time(), 'elapsed_seconds':elapsed}
+                            result.update(attempt_history=history, elapsed_seconds=elapsed, **inherited)
+                            if can_retry(result):
+                                delay = retry_delay_seconds * 2**(len(history)-1)
+                                # Deterministic jitter avoids all 16 retries firing together.
+                                jitter = retry_delay_seconds * (int(record_path.stem[:4],16) % 21) / 100
+                                result['retry_after'] = time.time()+min(900,delay+jitter)
+                                if result.get('status_code') == 429:
+                                    cooldown_until = max(cooldown_until, result['retry_after'])
+                            save_bound(record_path, identity=binding, payload=result)
+                            records[episode] = result
+                            progress('prefetching')
+                            if not can_retry(result): break
+                            previous = result
                 except Exception as error:
+                    if source_validated:
+                        raise  # Persistence/control faults must stop, not masquerade as API errors.
                     # No raw exception text: provider errors can contain secrets.
                     result = {'status': 'pending_error', 'error_type': type(error).__name__,
-                              'elapsed_seconds': time.monotonic()-attempt_started}
+                              'retryable_transport': False, 'attempt_history': review_attempts(previous) or [
+                                  {'status':'pending_error','error_type':type(error).__name__,'phase':'source_validation'}]}
                     for key in ('status_code', 'retry_attempts'):
                         if type(getattr(error, key, None)) is int: result[key] = getattr(error, key)
                 save_bound(record_path, identity=binding, payload=result)
@@ -294,6 +399,9 @@ def main():
     parser.add_argument('--poll-seconds', type=float, default=30)
     parser.add_argument('--cache-source', type=Path,
         help='Reuse exact response cache from an idle, validated recovery ancestor')
+    parser.add_argument('--retry-errors', action='store_true', help='Automatically retry transient errors, never valid decisions')
+    parser.add_argument('--max-review-attempts', type=int, default=4)
+    parser.add_argument('--retry-delay-seconds', type=float, default=60)
     print(json.dumps(asyncio.run(prefetch(**vars(parser.parse_args())))), flush=True)
 
 
