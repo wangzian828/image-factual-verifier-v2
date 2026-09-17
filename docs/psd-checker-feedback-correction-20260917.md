@@ -1,5 +1,41 @@
 # PSD checker-feedback correction (2026-09-17)
 
+## Latest user scope: 100-case paired evaluation, not full-test inference
+
+After the existing 400 × 8 PSD round and its five training epochs, run a small
+paired comparison of the original three-epoch SFT checkpoint and the new PSD
+checkpoint. **Each model gets the same 100 cases** (200 complete Agent runs in
+total), following smoke validation; do not launch 1,527-case inference or enlarge
+this subset without a new user decision. The training scope is unchanged.
+
+The list is frozen at
+`/volume/ybo/wza/runs/psd-paired-eval100-20260917-v1/case-list.txt`.
+Its `selection.json` binds the existing 1,526-case public runtime manifest and a
+deterministic outcome-independent selection, using the existing
+`scripts/prepare_psd_paired_eval.py`, count 100, salt
+`psd-sft3-vs-psd-fixed100-v1`. This is a subset of the registered 1,527-case test
+set, selected from its available-image runtime release; it does not change the
+full-test denominator or include the historically absent image.
+
+The sample has **26 supported / 74 refuted**, with all 100 image paths present
+at selection time. Case-list SHA-256:
+`95c9e25b1fdab72e12031e73c61edfccd240a08a6671d9dd8c29d2245764d6b0`.
+No model outcomes were used for selection, no images were copied, and no new
+inference/provider calls were launched by this preparation. The list must not
+be redrawn because of model failures, scores, or inconvenient cases.
+
+Use one frozen Agent/tool/prompt/serving/sampling/budget protocol for both arms;
+fresh paired runs avoid silently comparing different historical serving recipes.
+Resume already completed outputs of these exact paired runs rather than repeat
+successful cases. Preserve the SFT3 original checkpoint. Both arms use the same
+established **evaluation** judge/model/material coverage, not the PSD repair
+reviewer's identity. Report BAcc, Macro-Precision, Macro-F1, supported/refuted
+recall, SESR, completion/failure rate, tool/thinking behavior and cost/latency.
+For this comparison the denominator is **100**, with failed cases retained;
+class recall denominators remain 26 and 74. Do not label these as 1,527-case
+results or overwrite the existing full-test main table. Treat the pilot as a
+small-sample trend check, not proof of a significant/general improvement.
+
 ## Defect and upstream boundary
 
 The private source checker could fail a report for fabricated support or an
