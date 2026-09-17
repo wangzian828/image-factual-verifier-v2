@@ -1,5 +1,19 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 16:06 PSD评分优先，朋友Pro在当前样本后暂时排空
+
+- PSD collector仍健康，16:04为3020/3200、0 normal error、0 pending infrastructure，
+  四卡均100%利用率；在线source review为2905条有效、70 pending、5 exhausted transport。
+  新增耗尽项仍是HTTP 429，不是轨迹或policy错误。
+- 朋友Pro与PSD source reviewer共用同一外部Gemini额度；固定样本`sample-0220-fa084f97`
+  的实时日志也连续返回quota 429。继续同时压测会增加PSD评分的共享冷却和有限attempt耗尽，
+  与当前“PSD优先”冲突。
+- 已在核验receipt与完整cmdline后仅向朋友Pro控制器PID1063898发送SIGTERM。其signal handler
+  只设置STOP并排空当前样本，不粗暴杀sandbox、不覆盖结果；当前attempt继续到正常有界结束，
+  随后状态应为`stopped_after_drain`。Flash旧结果不动。
+- 这只是为PSD source review排空而暂停，不取消朋友实验。PSD评分和后续外部repair/judge不再受
+  当前Pro请求竞争后，再从既有campaign状态恢复；成功样本不重跑，失败仍按原最多3个补跑wave处理。
+
 ## 2026-09-17 15:31 采集继续，识别出2条评分传输预算耗尽
 
 - collector仍为CODE41/v6且精确进程身份正常；2878/3200完整、0 normal error、
