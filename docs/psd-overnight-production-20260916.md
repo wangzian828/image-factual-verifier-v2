@@ -1,5 +1,21 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 15:31 采集继续，识别出2条评分传输预算耗尽
+
+- collector仍为CODE41/v6且精确进程身份正常；2878/3200完整、0 normal error、
+  0 pending infrastructure，四张H20实时利用率均为100%。按14:37至15:30的实际增量估算，
+  剩余322槽纯采集约需1.5小时；这只是动态估计，不把它写成完成承诺。
+- CODE42在线评分可见2871、已审核2777，active16、queued27；1887 fail、864 pass、
+  26 unresolved、56 pending error。评分仍在跟随新增轨迹，没有停。
+- `exhausted_transport=2`已定位为两条在4次外层预算（每次内部最多2次）全部收到HTTP 429，
+  不是policy fail、解析错误或轨迹错误。原记录与计费attempt必须保留；当前不重启活跃reviewer、
+  不清预算无限重抽。待全量排空时与其余pending一起按CODE44正式切换门槛做有界补齐，
+  未补齐前不得宣称full collection admitted或进入最终bank。
+- compactor持续无损处理且每轮报告原始缓存可恢复、轨迹字节不变。朋友Pro独立串行任务为
+  166成功、51失败、219未尝试，仍在运行；不抢PSD的GPU采集。
+- 正式PSD optimizer仍为0 step；采集完成不等于训练启动，后续source review排空、
+  prepare/repair、raw teacher、最终bank DP4 global32恢复验收与5 epoch顺序不变。
+
 ## 2026-09-17 14:05 AVIF真实评分验收通过，采集继续
 
 - collector/reviewer/compactor/guard精确身份均正常；v6采集2546/3200、0normal_error、
