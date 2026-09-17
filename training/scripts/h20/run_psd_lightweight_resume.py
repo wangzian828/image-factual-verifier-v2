@@ -14,11 +14,24 @@ import time
 ROOT = Path("/volume/ybo/wza")
 RUN = ROOT / "runs/psd-production400x8-20260917-v6"
 ROUND = ROOT / "runs/psd-production-round1-20260917-v1"
-CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v5"
-DEPLOY = ROOT / "training-artifacts/psd-lightweight-selection-20260917-v52"
+CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v6"
+DEPLOY = ROOT / "training-artifacts/psd-external-env-gate-20260917-v53"
 CODE = DEPLOY / "code"
 PREFETCH = RUN / "source-review-prefetch-v2-auto-retry"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
+PRIVATE_ENV = ROOT / "private/runtime.env"
+EXTERNAL_ENV_KEYS = {
+    "GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_WIRE_API",
+    "GEMINI_MODEL", "GEMINI_VISION_MODEL", "SERPER_API_KEY",
+    "SERPER_KEY_ID", "JINA_API_KEY", "JINA_API_KEYS",
+    "BAIDU_OCR_API_KEY", "BAIDU_OCR_SECRET_KEY", "BAIDU_OCR_ACCESS_TOKEN",
+    "OCR_BACKEND", "OSS_ACCESS_KEY_ID", "OSS_ACCESS_KEY_SECRET",
+    "OSS_ENDPOINT", "OSS_BUCKET_NAME", "OSS_KEY_PREFIX",
+    "OSS_USE_SIGNED_URL", "OSS_SIGNED_URL_EXPIRY_SECONDS",
+    "IMAGE_UPLOAD_PROVIDER", "VISUAL_SEARCH_PROVIDER", "BROWSE_FETCH_PROVIDER",
+    "BROWSE_EXTRACT_PROVIDER", "BROWSE_EXTRACT_MODEL", "IFV_SERVER_PROXY",
+    "NO_PROXY", "PADDLEOCR_API_TOKEN", "TOOL_CACHE_ENABLED",
+}
 
 
 def load(path: Path):
@@ -38,6 +51,30 @@ def module(name: str, path: Path):
     sys.modules[name] = result
     spec.loader.exec_module(result)
     return result
+
+
+def external_environment() -> tuple[dict[str, str], dict[str, bool]]:
+    from dotenv import dotenv_values
+    mode = PRIVATE_ENV.stat().st_mode & 0o777
+    if mode & 0o077:
+        raise RuntimeError("private runtime environment must not be group/world accessible")
+    parsed = {key: str(value) for key, value in dotenv_values(PRIVATE_ENV).items()
+              if key in EXTERNAL_ENV_KEYS and value is not None and str(value).strip()}
+    present = lambda *keys: any(parsed.get(key, "").strip() for key in keys)
+    checks = {
+        "gemini": present("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+        "serper": present("SERPER_API_KEY", "SERPER_KEY_ID"),
+        "jina": present("JINA_API_KEY", "JINA_API_KEYS"),
+        "baidu_ocr": (present("BAIDU_OCR_ACCESS_TOKEN")
+                       or (present("BAIDU_OCR_API_KEY")
+                           and present("BAIDU_OCR_SECRET_KEY"))),
+        "oss": all(present(key) for key in ("OSS_ACCESS_KEY_ID",
+            "OSS_ACCESS_KEY_SECRET", "OSS_ENDPOINT", "OSS_BUCKET_NAME")),
+    }
+    if not all(checks.values()):
+        raise RuntimeError("PSD external credential preflight is incomplete")
+    parsed["GEMINI_MAX_INFLIGHT_REQUESTS"] = "4"
+    return parsed, checks
 
 
 def prepare_command() -> list[str]:
@@ -111,10 +148,13 @@ def launch() -> None:
     owner = module("psd_epoch3_owner",
         ROOT / "training-artifacts/psd-epoch3-20260916-v1/psd_epoch3_canary.py")
     env = owner.checked(load(SERVICE / "gateway.json"))
+    external, checks = external_environment()
+    env.update(external)
     command = [sys.executable, "-u", str(Path(__file__).resolve()), "worker"]
     receipt = owner.spawn(command, env, CONTROL / "controller.log")
     save(CONTROL / "process.json", receipt)
-    save(CONTROL / "state.json", {"phase": "launched", "time": time.time()})
+    save(CONTROL / "state.json", {"phase": "launched", "external_checks": checks,
+        "gemini_max_inflight_requests": 4, "time": time.time()})
     print(json.dumps({"pid": receipt["pid"], "mode": "lightweight_resume"}))
 
 
