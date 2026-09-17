@@ -1,6 +1,8 @@
 {
   "schema": "ifv-main-table-integer-counts-v1",
   "recovered_on": "2026-09-17",
+  "main_table_excluded_ids": ["sft2578", "sft2056", "sft3084"],
+  "main_table_selection_note": "User requested one SFT row only. Retain SFT-4872/step1028, the highest BAcc among the recorded SFT runs, not the newest epoch3 run. Other integer records remain archival; no weights or predictions are deleted.",
   "support": [377, 1150],
   "gold_rows": ["real", "fake"],
   "prediction_columns": ["real", "fake", "missing_or_invalid"],

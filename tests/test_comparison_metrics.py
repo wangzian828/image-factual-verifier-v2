@@ -54,6 +54,24 @@ def test_duplicate_experiment_rejected():
         recover(doc)
 
 
+def test_main_table_keeps_only_best_sft_and_preserves_history():
+    rows = recover(json.loads(DEFAULT_COUNTS.read_text(encoding="utf-8")))
+    assert sum(r["main_table"] for r in rows) == 17
+    sft = [r for r in rows if r["id"].startswith("sft")]
+    assert len(sft) == 4
+    assert [r["id"] for r in sft if r["main_table"]] == ["sft4872"]
+    assert max(sft, key=lambda r: r["metrics"]["bacc"])["id"] == "sft4872"
+    assert markdown(rows, "agent").count("SFT-") == 1
+    assert markdown(rows, "agent", include_history=True).count("SFT-") == 4
+
+
+def test_unknown_main_table_exclusion_rejected():
+    doc = json.loads(DEFAULT_COUNTS.read_text(encoding="utf-8"))
+    doc["main_table_excluded_ids"].append("not-a-recorded-run")
+    with pytest.raises(ValueError, match="unknown experiment"):
+        recover(doc)
+
+
 def test_main_tables_match_recovered_counts():
     rows = recover(json.loads(DEFAULT_COUNTS.read_text(encoding="utf-8")))
     report = (ROOT / "docs/evaluation-comparison-20260909.md").read_text(encoding="utf-8")

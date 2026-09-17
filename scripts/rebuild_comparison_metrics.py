@@ -51,6 +51,7 @@ def recover(document):
     if document["gold_rows"] != ["real", "fake"]:
         raise ValueError("Unexpected gold-row order")
     support = document["support"]
+    excluded = set(document.get("main_table_excluded_ids", []))
     seen = set()
     rows = []
     for record in document["models"]:
@@ -63,17 +64,20 @@ def recover(document):
         for key, previous in record["previous_percent"].items():
             if f"{100 * metrics[key]:.2f}" != previous:
                 raise ValueError(f"Existing metric changed: {record['id']} / {key}")
-        rows.append({**record, "metrics": metrics})
+        rows.append({**record, "metrics": metrics, "main_table": record["id"] not in excluded})
+    if excluded - seen:
+        raise ValueError("Main table exclusion refers to an unknown experiment")
     return rows
 
 
-def markdown(rows, group):
+def markdown(rows, group, *, include_history=False):
     lines = [
         "| 排名 | 模型 | BAcc ↑ | Macro-Precision ↑ | Macro-F1 ↑ | Supported Recall ↑ | Refuted Recall ↑ | SESR ↑ |",
         "|---:|:---|---:|---:|---:|---:|---:|---:|",
     ]
     keys = ("bacc", "macro_precision", "macro_f1", "supported_recall", "refuted_recall")
-    selected = sorted((r for r in rows if r["group"] == group),
+    selected = sorted((r for r in rows if r["group"] == group
+                       and (include_history or r["main_table"])),
                       key=lambda r: r["metrics"]["bacc"], reverse=True)
     for rank, row in enumerate(selected, 1):
         values = [f"{100 * row['metrics'][k]:.2f}" for k in keys]
@@ -85,11 +89,13 @@ def markdown(rows, group):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--counts", type=Path, default=DEFAULT_COUNTS)
+    parser.add_argument("--include-history", action="store_true",
+                        help="Include archived SFT rows, without changing the main table")
     args = parser.parse_args()
     rows = recover(json.loads(args.counts.read_text(encoding="utf-8")))
     for group in ("agent", "direct_qa"):
         print(group)
-        print(markdown(rows, group))
+        print(markdown(rows, group, include_history=args.include_history))
         print()
 
 
