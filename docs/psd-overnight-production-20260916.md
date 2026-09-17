@@ -1,5 +1,21 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 21:50 增量切换 Gemini 3.6 Flash/high
+
+- 用户要求换3.6，并明确不重开已完成流程。当前控制器为
+  `runs/psd-formal-prepare-controller-20260917-flash36-high-v1`，PID1405927，子进程1405928；
+  代码位于`training-artifacts/psd-flash36-incremental-20260917-v57/code`。
+- 继续原`search-gemini37-flash-high`目录，**目录名及CLI的judge-model是历史恢复身份，不是新请求的实际模型**。
+  明确的`external-model-route.json`仅作用于该目录内尚无完成响应的PSD外部请求，将3.7映射到3.6；
+  实际provider model、请求缓存绑定、提示作者和验收者均记录3.6。high/8192、case40、外部16不变。
+- 旧缓存（包含完成的拒绝／无可修复位置／格式不合格响应）优先复用，不能因为换模型重新抽样。
+  新3.6缓存独立绑定真实模型，但不重开case、重置6次修复预算或重做3200条采集/source review。
+  切换时原进度记录258个返回项，其中4个converged；旧结果未删除。4条确因此次控制器切换中断的
+  running调查已按原基础设施预算关闭并允许续跑，已完成的continuation不重算。
+- 47项本地、71项服务器定向测试通过，覆盖缓存复用、作用域隔离、实际模型来源以及旧绑定恢复。
+  原四卡vLLM、GPU guard、SFT3原权重与朋友Pro均未停止。未采用此前准备的v56新search方案，
+  `search-gemini36-flash-high`没有被用于正式任务。
+
 ## 2026-09-17 21:12 用户指定后续 repair 改为 Gemini 3.7 Flash/high
 
 - 当前正式控制器为 `runs/psd-formal-prepare-controller-20260917-flash-high-v1`，启动 receipt

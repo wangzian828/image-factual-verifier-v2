@@ -192,6 +192,15 @@ async def _request(client, packet, *, prompt, schema, model, images=(), cache_di
                 "schema_sha256": _sha(schema), "packet_sha256": _sha(packet),
                 "images_sha256": _sha(images)}
     cache = Path(cache_dir) / (_sha(identity) + ".json") if cache_dir else None
+    route = None
+    # A completed historical result (including a rejection) always wins.
+    # Preserve run/continuation identities, but bind every NEW response to the
+    # actual externally requested model instead of relabeling the old cache.
+    if not cache or not cache.exists():
+        from .psd_model_route import uncached_model
+        model, route = uncached_model(model, cache_dir)
+        identity = {**identity, "model": model}
+        cache = Path(cache_dir) / (_sha(identity) + ".json") if cache_dir else None
     if cache and cache.exists():
         saved = load_json(cache)
         if saved.get("identity") != identity or saved.get("response_sha256") != _sha(saved.get("response")):
@@ -209,9 +218,12 @@ async def _request(client, packet, *, prompt, schema, model, images=(), cache_di
             _atomic_json(cache, {"identity": identity, "response": response, "response_sha256": _sha(response)})
     if response.get("status") != "completed":
         raise ValueError("PSD judge interaction did not complete")
+    if response.get('model') and response['model'] != model:
+        raise ValueError('PSD provider returned a different model')
     return json.loads(extract_text(response)), {
         "interaction_id": response.get("id"), "usage": response.get("usage"),
-        "request_binding": identity, "response_sha256": _sha(response)}
+        "request_binding": identity, "response_sha256": _sha(response),
+        **({"model_route": route} if route else {})}
 
 
 async def judge_repair(client, packet, *, model="gemini-3.1-pro-preview", images=(), cache_dir=None):
@@ -325,7 +337,8 @@ async def localize_failure(client, trace, *, gold, image_path, model, cache_dir,
         if selected["stage"] == "unified_judgment" and value["category"] != "evidence_interpretation_error":
             raise ValueError("judgment localization requires observed interpretation error")
         candidates.append({"source_step_index": value["source_step_index"], "recoverable": True,
-            "selected": True, "category": value["category"], "verifier": verifier_identity(model),
+            "selected": True, "category": value["category"],
+            "verifier": verifier_identity(provenance["request_binding"]["model"]),
             "observed_basis": value["evidence"], "explanation": value["explanation"]})
     elif value["source_step_index"] != -1 or value["category"] != "none":
         raise ValueError("unlocalized failure must not nominate a step")
@@ -379,7 +392,8 @@ async def judge_attempt(client, *, source, source_trace_sha256, episode, attempt
                   repaired_rows[-1].get("stage") == "unified_judgment" and
                   repaired_rows[-1].get("action_type") == "output", "media": media}
     review = await judge_repair(client, packet, model=model, images=images, cache_dir=cache_dir)
-    return {"schema_version": "ifv-psd-local-verification-v1", "verifier": verifier_identity(model),
+    return {"schema_version": "ifv-psd-local-verification-v1",
+            "verifier": verifier_identity(review["request_binding"]["model"]),
             "repair_step_id": attempt["repair_step_id"], "source_trace_sha256": source_trace_sha256,
             "hint_sha256": hint["audit"]["hint_sha256"],
             "teacher_prompt_sha256": _sha(attempt["teacher_prompt_ids"]),

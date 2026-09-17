@@ -69,6 +69,7 @@ def test_two_verified_local_targets_assemble_with_explicit_corrected_lineage(mon
         source_policy=None, roles=SimpleNamespace(record=lambda: role_record))
     assert len(candidates) == len(records) == 2
     for candidate, record in zip(candidates, records):
+        assert record['model_roles']['hint_constructor']['model'] == record['hint_record']['model']
         checked = _validate_attempt(candidate=candidate, attempt=record)
         assert checked["row_weight"] == 1.0
         assert "rollout_token_capture" not in candidate["repair_site"]

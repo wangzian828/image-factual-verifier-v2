@@ -254,7 +254,8 @@ async def propose_slate(client, *, public_context, previous, passing_positions,
         model=model, images=images, cache_dir=cache_dir)
     try:
         result = _parse_slate(value, packet=packet, previous=previous, passing_positions=passing_positions,
-            failed_position=failed_position, model=model, private_context=private_context)
+            failed_position=failed_position,
+            model=provenance.get("request_binding", {}).get("model", model), private_context=private_context)
     except ValueError as error:
         raise SlateProposalRejected(provenance) from error
     return result, provenance
@@ -478,6 +479,13 @@ def assemble_slate_attempts(*, seed, source, source_hash, episode, targets, revi
             teacher_token_capture=target["teacher_token_capture"], source_trace_sha256=source_hash,
             case_id=seed["case_id"], episode_id=seed["episode_id"])
         record.update(student_prefix_capture=lineage, row_weight=1.0)
+        # A resumed search can contain old pending hints plus newly generated
+        # hints from an explicitly switched external model. Attribute each
+        # target to its real hint author; the frozen Qwen roles never change.
+        import copy
+        record['model_roles'] = copy.deepcopy(record['model_roles'])
+        record['model_roles']['hint_constructor'].update(
+            provider=target['hint_record']['provider'], model=target['hint_record']['model'])
         if target.get("psd_media"):
             record["psd_media"] = target["psd_media"]
         candidates.append(candidate)
