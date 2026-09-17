@@ -42,7 +42,7 @@ def module(name: str, path: Path):
     return result
 
 
-async def main(output: Path) -> None:
+async def main(output: Path, episodes: list[str]) -> None:
     output = output.resolve()
     output.relative_to(ARTIFACT_ROOT.resolve())
     global OUT
@@ -50,10 +50,12 @@ async def main(output: Path) -> None:
     if OUT.exists():
         raise RuntimeError("Never overwrite a real quote-repair canary")
     sys.path[:0] = [str(CODE), str(CODE / "training")]
-    owner = module("psd_epoch3_owner", ROOT / "training-artifacts/psd-epoch3-20260916-v1/psd_epoch3_canary.py")
-    receipt = load(RUN / "source-review-prefetch-process.json")
-    trusted = owner.checked(receipt)
-    os.environ.update(trusted)
+    if not (os.getenv("GEMINI_API_KEY", "").strip()
+            or os.getenv("GOOGLE_API_KEY", "").strip()):
+        owner = module("psd_epoch3_owner",
+            ROOT / "training-artifacts/psd-epoch3-20260916-v1/psd_epoch3_canary.py")
+        receipt = load(RUN / "source-review-prefetch-process.json")
+        os.environ.update(owner.checked(receipt))
 
     from scripts.prefetch_psd_source_reviews import completed_source, load_scope, validate_prefetch_cache
     from ifv_training.psd_gemini_judge import VERSION as REQUEST_VERSION, _request
@@ -81,7 +83,7 @@ async def main(output: Path) -> None:
     rows = []
     async with GeminiInteractionsClient(timeout=240, max_retries=2,
             request_gate=GeminiRequestGate(1)) as client:
-        for episode in EPISODES:
+        for episode in episodes:
             trace, image, trace_path, binding = completed_source(scope, episode)
             images, media = source.review_images({"source": trace}, image_path=image)
             packet = source._packet(trace, scope["gold"][scope["expected"][episode]["case_id"]],
@@ -115,7 +117,7 @@ async def main(output: Path) -> None:
                          "artifact_sha256": source.sha256_file(artifact_path),
                          "provider_calls": 1,
                          "decision_unchanged_except_quotes": True})
-    save(OUT / "result.json", {"passed": len(rows) == len(EPISODES), "records": rows,
+    save(OUT / "result.json", {"passed": len(rows) == len(episodes), "records": rows,
         "active_reviewer_restarted": False, "policy_agent_changed": False})
     print(json.dumps({"passed": True, "records": len(rows)}, ensure_ascii=False), flush=True)
 
@@ -124,5 +126,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path,
         default=ARTIFACT_ROOT / "real-quote-repair-canary")
+    parser.add_argument("--episode", action="append", choices=EPISODES,
+        help="Run only a named frozen regression episode; may be repeated")
     args = parser.parse_args()
-    asyncio.run(main(args.output))
+    asyncio.run(main(args.output, args.episode or EPISODES))
