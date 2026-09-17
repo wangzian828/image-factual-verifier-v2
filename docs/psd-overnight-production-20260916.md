@@ -15,6 +15,14 @@
 - 47项本地、71项服务器定向测试通过，覆盖缓存复用、作用域隔离、实际模型来源以及旧绑定恢复。
   原四卡vLLM、GPU guard、SFT3原权重与朋友Pro均未停止。未采用此前准备的v56新search方案，
   `search-gemini36-flash-high`没有被用于正式任务。
+- 真实恢复后已检查37份新增completed provider缓存，请求绑定和response.model均为
+  `gemini-3.6-flash`；4个旧converged manifest的mtime仍早于切换。另新增1个converged：
+  原3.7已生成的提示被复用，3.6验收通过，二者来源分别记录，没有把旧提示冒充3.6生成。
+  新Qwen调查的基础设施ledger已进入running。
+- 3.6并非完全无拥堵：首批已见2条HTTP429、1条ReadError和1条响应格式错误，仍按现有有界机制补跑。
+  main-06268另有**切换前即存在**的slate-state断点校验缺陷：数字位置键4/14经JSON变成字符串后
+  排序改变；恢复为数字键时恰好匹配原payload hash。该条原状态已是paused_strict_audit_failed，
+  并非本次模型切换导致的输入变化；尚未修复，不影响其他case推进，不能声称所有尾项已解决。
 
 ## 2026-09-17 21:12 用户指定后续 repair 改为 Gemini 3.7 Flash/high
 
