@@ -1,5 +1,22 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 09:53 自动排空完成，v5 正在校验复用1860槽
+
+- 排空助手已自动完成：v4的1860槽全部completed、0在途，canonical/progress一致，
+  `v38/source-drain.json`保存冻结后二次验证。旧collector及旧compactor均已退出，无在途轨迹被杀。
+  最后1槽在原预算第2次完成，普通模型错误共7条仍原样保留，不按正确性重采。
+- 接续助手已自动启动v5，当前RUN=`/volume/ybo/wza/runs/psd-production400x8-20260917-v5`；
+  `RUN/process.json`初始PID1301181仅线索。CODE38不变。binding的`storage_ceiling_bytes=null`。
+- 当前仍在逐条读取、校验1860份旧结果，**尚未恢复新的采样**，不把进程启动当作接续完成。
+  09:53进程RSS约0.31–0.45GiB；3秒内累计读取增加约200MB，持续工作，不是卡死。
+  旧数据全部预校验通过后才发布v5 ledger/slot-recovery；此时ledger为空是预期。
+- `handoff-process.json`对应助手仍活动，`storage-policy-handoff.json`阶段为
+  `validating_and_reusing_completed_sources`。它会自动等复用/首40通过后接新compactor，
+  再验证`storage.ceiling_bytes=null`及真实新采样。**不要手动重复启动v5或compactor。**
+- 最新2份旧源轨迹strict audit通过，30个完整有限capture、28次成功工具调用；三epoch
+  export/fullstate保护核验通过。四个模型副本及实际计算guard保持活动，空档有成功计算脉冲。
+- 朋友Pro继续135成功、28失败、273未尝试；旧judge不重复提交。PSD optimizer仍0步。
+
 ## 2026-09-17 用户取消人为 128GiB 门槛：v38 安全接续中（优先于下文）
 
 - 用户明确要求移除该人为采集上限；`STORAGE_CEILING=None`，不能再恢复128GiB或改成另一个
