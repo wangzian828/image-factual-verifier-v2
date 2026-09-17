@@ -1,5 +1,10 @@
 # PSD completion and acceptance checklist
 
+> 2026-09-17: source collection is now complete (400 × 8). See the
+> [checker-feedback correction and real canary](psd-checker-feedback-correction-20260917.md)
+> for the removed localizer veto, two real successful repairs, and remaining
+> formal target/scoring/training stages. The dated evidence below is historical.
+
 > Latest scope: [400-image pilot, slate repair and performance investigation](psd-adjustments-and-agent-latency-20260915.md). Grouped collection and multi-position code are prepared; the 3,200 rollouts and new real/GPU acceptance have not run. Existing evidence below retains its original scope.
 
 > Preparation update (2026-09-15): [4,000-input PSD preparation](psd-experiment-preparation-20260915.md).

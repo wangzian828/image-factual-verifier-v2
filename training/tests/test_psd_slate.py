@@ -110,7 +110,8 @@ def test_live_capture_keeps_json_rendering_tool_order_and_archived_images(monkey
 
 
 @pytest.mark.parametrize("initial_hint", [False, True])
-def test_two_position_runtime_uses_corrected_history_and_removes_each_hint(monkeypatch, initial_hint):
+@pytest.mark.parametrize("plain_retry", [False, True])
+def test_two_position_runtime_uses_corrected_history_and_removes_each_hint(monkeypatch, initial_hint, plain_retry):
     adapter = QwenContinuationAdapter.__new__(QwenContinuationAdapter)
     adapter.image_path, adapter.runtime_store = "image", None
     adapter.tools_by_name, adapter.source_access_policy = {}, None
@@ -154,8 +155,14 @@ def test_two_position_runtime_uses_corrected_history_and_removes_each_hint(monke
     async def capture(**kw):
         return {"position": kw["position"], "prefix": copy.deepcopy(kw["unhinted_prefix"])}
     result = asyncio.run(adapter.run_hinted_episode(failure_site=site,
-        hint=hint("first advice") if initial_hint else None, base_trace={},
-        hints_by_action={1: hint("second advice")}, capture_local_target=capture))
+        hint=hint("first advice") if initial_hint and not plain_retry else None, base_trace={},
+        hints_by_action={} if plain_retry else {1: hint("second advice")}, capture_local_target=capture))
+    if plain_retry:
+        assert len(seen) == 3 and result.teacher_complete
+        assert result.local_targets == []
+        assert result.teacher_episode_trace["psd_repair"]["slate"]["used_positions"] == []
+        assert "advice" not in str(seen)
+        return
     assert [r["position"] for r in result.local_targets] == ([0, 1] if initial_hint else [1])
     assert "first advice" not in str(seen[1])
     assert "action-1" in str(result.local_targets[-1]["prefix"])

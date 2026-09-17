@@ -212,8 +212,6 @@ def _parse_slate(value, *, packet, previous, passing_positions, failed_position,
     from .psd_repair import build_hint_proposal
     if not isinstance(value, dict) or set(value) != {"hints"} or not isinstance(value["hints"], list):
         raise ValueError("invalid PSD slate proposer response")
-    if not value["hints"]:
-        return {}
     parsed = {}
     for row in value["hints"]:
         if (not isinstance(row, dict) or set(row) != {"position", "hint"}
@@ -241,7 +239,8 @@ async def propose_slate(client, *, public_context, previous, passing_positions,
     prompt = (SLATE_PROMPT + '\nDiagnostic failed position: ' + str(failed_position)
               + '. This is not an exclusive edit boundary. Allowed observed positions: '
               + json_positions(schema) + '. Preserve hints at passing_positions verbatim. '
-              + 'Use [] to stop if no grounded hint can help.\n')
+              + 'Use [] for a plain retry if no grounded hint can help; '
+              + 'the normal full-rerun budget still applies.\n')
     if proposal_feedback is not None:
         # Never put hint-audit private matches or exception text in feedback.
         if (set(proposal_feedback) != {"rejected_proposals", "reason"}

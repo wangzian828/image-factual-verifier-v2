@@ -725,7 +725,9 @@ class QwenContinuationAdapter:
             slate[initial_position] = hint
         elif initial_position in slate:
             teacher_history = build_teacher_messages(site, slate[initial_position])
-        if not slate:
+        # An explicitly supplied empty slate is the upstream plain-retry path.
+        # It produces no intervention target, even if the full episode passes.
+        if not slate and hints_by_action is None:
             raise ValueError("PSD repair requires at least one explicit intervention")
         if hints_by_action is not None and capture_local_target is None:
             raise ValueError("PSD multi-position repair requires exact local target capture")

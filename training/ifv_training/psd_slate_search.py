@@ -15,6 +15,8 @@ from .psd_repair import _sha
 from .psd_repair_storage import cached_continuation, load_bound, save_bound
 from .psd_slate import (capture_target, decision_map, propose_slate, review_slate,
                         assemble_slate_attempts, SlateProposalRejected)
+from .psd_slate_feedback import (POLICY, checker_feedback, diagnostic_position,
+                                load_slate_state)
 
 
 async def propose_with_budget(*, state, round_index, budget, persist, judge, kwargs):
@@ -66,7 +68,7 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
     root = args.output_dir
     marker = root / "slate-state.json"
     identity = {"version": "slate-search-v3-observed-positions", "inputs": _sha(config), 'proposal_budget':proposal_budget}
-    state = load_bound(marker, identity=identity) if marker.exists() else {
+    state = load_slate_state(marker, identity=identity) if marker.exists() else {
         "rounds": [], "elapsed_seconds": 0.0, "status": "repairing"}
     for row in state["rounds"]:
         for raw, digest in row["files"].items():
@@ -74,11 +76,22 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
             path.relative_to(root.resolve())
             if sha256_file(path) != digest:
                 raise ValueError("PSD slate completed round changed")
+    if state["status"] == "no_further_grounded_hint":
+        # Preserve the old terminal artifact, then continue the SAME budget
+        # and accepted empty proposal. No completed rerun is discarded.
+        historical = root / "pre-checker-feedback-slate-state.json"
+        if not historical.exists():
+            write_json(historical, load_json(marker))
+        state["status"] = "repairing"
+        state.pop("output_files", None)
     if state["status"] != "repairing":
         audit_slate_search(root)
         return load_json(root / "manifest.json")
     initial_state, _ = adapter._initial_runtime_state(base_trace=trace, failure_site=site)
-    initial = 24 if site.stage == "unified_judgment" else initial_state.action_count
+    source_feedback = checker_feedback(source_task_review, trace)
+    initial = (diagnostic_position(source_feedback, trace) if source_task_review else
+               24 if site.stage == "unified_judgment" else initial_state.action_count)
+    state["active_feedback_policy"] = POLICY
     from .psd_repair import FailureSite, project_policy_steps
     first = next(row for row in project_policy_steps(trace) if row["action_type"] in {"tool_call", "output"})
     replay_site = FailureSite(step_index=0, **{k: first[k] for k in (
@@ -114,10 +127,10 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                 if failed < 0:
                     raise ValueError("PSD failed review has no actionable localization")
             images, _ = review_images({"source": trace, **({"repaired": observed} if number else {})}, image_path=args.image)
+            feedback = (checker_feedback(last["review"], observed, repaired=True, hints=previous)
+                        if state["rounds"] else source_feedback)
             public = {"source_steps": trace_steps(trace), "observed_steps": trace_steps(observed),
-                "decision_map": decision_map(observed)}
-            # Never forward private review explanations, labels, gold or reasons
-            # to the proposer. It sees observed material plus checker positions.
+                "decision_map": decision_map(observed), "checker_feedback": feedback}
             hints, provenance = await propose_with_budget(state=state,round_index=number,
                 budget=proposal_budget,persist=lambda:save_bound(marker,identity=identity,payload=state),judge=judge,
                 kwargs=dict(public_context=public, previous=previous, passing_positions=passing,
@@ -125,9 +138,6 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                     private_context=private_context,images=images))
             if hints is None:
                 state['status']='proposal_budget_exhausted'
-                break
-            if not hints:
-                state["status"] = "no_further_grounded_hint"
                 break
             directory = root / "slate-rounds" / f"{number:02d}"
             directory.mkdir(parents=True, exist_ok=True)
@@ -159,8 +169,10 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                 image_path=args.image, model=args.judge_model, cache_dir=root / "judge-cache",
                 targets=continuation.local_targets)
             write_json(directory / "review.json", review)
-            round_state = {"hints": {k: h.text for k, h in hints.items()}, "review": review,
+            round_state = {"hints": {str(k): h.text for k, h in hints.items()}, "review": review,
                 "proposal": provenance, "episode_path": str(episode_path),
+                "feedback_policy": POLICY, "checker_feedback_sha256": _sha(feedback),
+                "plain_retry": not hints,
                 "files": {str(p): sha256_file(p) for p in (
                     episode_path, directory / "review.json", directory / "continuation.json")}}
             state["rounds"].append(round_state)
@@ -199,7 +211,7 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
         'proposal_count':len(state.get('proposals',[])),
         'rejected_proposal_count':sum(r['status']=='rejected' for r in state.get('proposals',[])),
         "accepted_count": sum(r["accepted"] for r in records), "elapsed_seconds": state["elapsed_seconds"],
-        "training_started": False, "per_target_weight": 1.0}
+        "training_started": False, "per_target_weight": 1.0, "feedback_policy": POLICY}
     write_json(root / "manifest.json", result)
     # The bound state is the terminal commit marker. Write every output first:
     # a crash must not leave a completed state pointing at a missing manifest.
@@ -212,7 +224,7 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
 def audit_slate_search(root):
     marker = root / "slate-state.json"
     saved = load_json(marker)
-    state = load_bound(marker, identity=saved["identity"])
+    state = load_slate_state(marker, identity=saved["identity"])
     for row in [*state["rounds"], {"files": state.get("output_files", {})}]:
         for raw, digest in row["files"].items():
             path = Path(raw).resolve()

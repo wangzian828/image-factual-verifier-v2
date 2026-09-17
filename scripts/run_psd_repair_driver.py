@@ -350,9 +350,15 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     else:
         output_dir.mkdir(parents=True, exist_ok=False)
         save_bound(config_path, identity=config, payload={"status": "initialized"})
-    site = locate_failure_site(trace, audit, semantic_verification)
+    # Slate search replays the full episode and chooses observed interventions.
+    # Its already-verified failed source must not face a second LLM veto gate.
+    if args.search_mode == "slate":
+        from ifv_training.psd_slate_feedback import slate_replay_anchor
+        site = slate_replay_anchor(trace)
+    else:
+        site = locate_failure_site(trace, audit, semantic_verification)
     search_feedback = public_context.get("repair_search", {})
-    if search_feedback.get("needs_relocalization"):
+    if args.search_mode != "slate" and search_feedback.get("needs_relocalization"):
         site = None
     if site is None and not args.skip_auto_judge:
         from ifv_training.psd_gemini_judge import localize_failure
@@ -387,7 +393,15 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     )
     runtime_root = runtime_store.root
     # An interrupted run remains inspectable/finalizable after each attempt.
-    if not (output_dir / "manifest.json").exists():
+    manifest_path = output_dir / "manifest.json"
+    reopening = (manifest_path.exists()
+        and load_json(manifest_path).get("status") == "no_recoverable_site"
+        and args.search_mode == "slate")
+    if reopening:
+        historical = output_dir / "pre-checker-feedback-manifest.json"
+        if not historical.exists():
+            write_json(historical, load_json(manifest_path))
+    if not manifest_path.exists() or reopening:
         write_json(output_dir / "manifest.json", {
         "schema_version": "ifv-psd-repair-driver-result-v1", "status": "generating",
         "trace": str(args.trace), "runtime_archive": str(runtime_root),

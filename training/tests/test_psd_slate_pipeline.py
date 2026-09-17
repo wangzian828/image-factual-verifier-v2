@@ -163,7 +163,8 @@ def test_psd_child_sampling_is_explicit_and_does_not_change_native_workflow(monk
 
 
 @pytest.mark.parametrize('infrastructure_fault', [False, True])
-def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, tmp_path, infrastructure_fault):
+@pytest.mark.parametrize('plain_retry', [False, True])
+def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, tmp_path, infrastructure_fault, plain_retry):
     import httpx
     import src.integrations.gemini as gemini
     import src.orchestrator.runtime_events as runtime
@@ -211,7 +212,7 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
     proposal_calls = []
     async def request(client, packet, **kw):
         proposal_calls.append(packet)
-        n = 2 if packet["previous_hints"] else 1
+        n = 0 if plain_retry else 2 if packet["previous_hints"] else 1
         return {"hints": [{"position": t["position"], "hint": t["hint"]}
                           for t in make_targets()[:n]]}, {}
     async def review(*a, **kw):
@@ -222,6 +223,8 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
         assemblies.append(kw)
         if len(assemblies) == 1:
             raise RuntimeError("simulated CPU materialization crash")
+        if plain_retry:
+            return [], []
         return [{"candidate_id": "a"}, {"candidate_id": "b"}], [{"accepted": True}, {"accepted": True}]
     monkeypatch.setattr(judge, "_request", request)
     monkeypatch.setattr(search, "review_slate", review)
@@ -238,8 +241,10 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
     assert len(infrastructure_attempts) == (3 if infrastructure_fault else 2)
     if infrastructure_fault:
         assert infrastructure_attempts[0]['hints_by_action'] == infrastructure_attempts[1]['hints_by_action']
-    assert set(calls[0]['hints_by_action']) == {0}
-    assert result["accepted_count"] == 2 and result["complete_reruns"] == 2
+    assert set(calls[0]['hints_by_action']) == (set() if plain_retry else {0})
+    assert result["complete_reruns"] == 2
+    assert result["status"] == ("passed_without_intervention" if plain_retry else "converged")
+    assert result["accepted_count"] == (0 if plain_retry else 2)
     assert all(c["hint"] is None and c["failure_site"].step_index == 0 for c in calls)
     assert search.audit_slate_search(tmp_path)["passed"]
     assert asyncio.run(search.run_slate_search(**options)) == result
