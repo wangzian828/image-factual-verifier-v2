@@ -48,7 +48,8 @@ def prepare_command() -> list[str]:
         "--source-access-policy", binding["source_access_policy"], "--snapshot", binding["snapshot"],
         "--output", str(ROUND), "--round-index", "1", "--attempts", "6",
         "--case-concurrency", "40", "--source-review-concurrency", "4",
-        "--postprocess-workers", "16", "--reuse-completed-source-reviews",
+        "--postprocess-workers", "16", "--candidate-workers", "16",
+        "--reuse-completed-source-reviews",
         "--source-review-prefetch", str(PREFETCH), "--expected-rollouts-per-case", "8",
         "--task-source-selection", "longest_failed", "--repair-mode", "slate",
         "--judge-model", "gemini-3.1-pro-preview", "--teacher-device", "cuda:0", "--defer-topk"]

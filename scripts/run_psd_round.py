@@ -20,7 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "training")]
 from ifv_training.io import load_json, load_jsonl, sha256_file, write_json
 from ifv_training.psd_materialization import completed_package
-from ifv_training.psd_candidates import build_psd_candidate_package, _load_train_case_allowlist
+from ifv_training.psd_candidates import (
+    build_psd_candidate_package,
+    build_psd_candidate_package_parallel,
+    _load_train_case_allowlist,
+)
 from ifv_training.psd_round import (
     PSD_ROLLOUT_GATE_SCHEMA_VERSION,
     complete_psd_round,
@@ -296,8 +300,14 @@ async def prepare(args):
     candidates = bank / "candidates"
     completed_package(output_dir=candidates,
         input_files=[gate, args.train_cases, run_dir / "post_rollout_rewards.jsonl", run_dir / "rollout_groups.jsonl"],
-        build=lambda destination: build_psd_candidate_package(run_dir=run_dir,
-            train_cases_path=args.train_cases, rollout_gate_path=gate, output_dir=destination))
+        build=lambda destination: (
+            build_psd_candidate_package_parallel(run_dir=run_dir,
+                train_cases_path=args.train_cases, rollout_gate_path=gate,
+                output_dir=destination, workers=args.candidate_workers)
+            if getattr(args, "candidate_workers", 1) > 1
+            else build_psd_candidate_package(run_dir=run_dir,
+                train_cases_path=args.train_cases, rollout_gate_path=gate,
+                output_dir=destination)))
     preparation = {"schema_version": "ifv-psd-round-bank-v1", "round_index": args.round_index,
         "training_only": True, "preparation": {"benchmark": str(args.benchmark.resolve()),
             "case_split": str(args.train_cases.resolve()), "private_gold": str(args.private_gold.resolve()),
@@ -391,6 +401,8 @@ def main():
     prepare_parser.add_argument("--source-review-concurrency", type=int, default=4)
     prepare_parser.add_argument("--postprocess-workers", type=int, default=1,
         help="Bounded local worker processes for independent trace audit/postprocessing")
+    prepare_parser.add_argument("--candidate-workers", type=int, default=1,
+        help="Bounded local worker processes for candidate extraction")
     prepare_parser.add_argument("--reuse-completed-source-reviews", action="store_true",
         help="Verify and reuse a complete immutable source-review index; trace binding is rechecked in postprocess")
     prepare_parser.add_argument('--source-review-prefetch', type=Path,

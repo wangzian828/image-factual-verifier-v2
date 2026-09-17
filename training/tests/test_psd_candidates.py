@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ifv_training.psd_candidates import build_psd_candidate_package
+from ifv_training.psd_candidates import (
+    build_psd_candidate_package,
+    build_psd_candidate_package_parallel,
+)
 from ifv_training.io import sha256_file
 from ifv_training.psd_round import PSD_ROLLOUT_GATE_SCHEMA_VERSION
 
@@ -213,6 +216,17 @@ def test_build_psd_candidate_package_separates_public_queues(
         rollout_gate_path=_rollout_gate(run_dir, train_cases),
         output_dir=output,
     )
+    parallel_output = tmp_path / "parallel-candidates"
+    parallel_manifest = build_psd_candidate_package_parallel(
+        run_dir=run_dir,
+        train_cases_path=train_cases,
+        rollout_gate_path=run_dir / "psd-rollout-gate.json",
+        output_dir=parallel_output,
+        workers=2,
+    )
+    assert parallel_manifest == manifest
+    for filename in manifest["artifacts"].values():
+        assert (parallel_output / filename).read_bytes() == (output / filename).read_bytes()
 
     assert manifest["counts"] == {
         "repair_candidates": 2,

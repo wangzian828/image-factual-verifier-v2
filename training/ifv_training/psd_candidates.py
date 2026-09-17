@@ -14,7 +14,11 @@ import json
 import math
 import re
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
+import os
 from pathlib import Path
+import shutil
 from typing import Any, Iterable, Mapping
 
 from .io import (
@@ -456,6 +460,259 @@ def _rejection(
         "episode_id": _text(reward.get("episode_id")),
         "reason": reason,
     }
+
+
+_CANDIDATE_ARTIFACTS = {
+    "repair_candidates": "repair_candidates.jsonl",
+    "preservation_candidates": "preservation_candidates.jsonl",
+    "engineering_requeue": "engineering_requeue.jsonl",
+    "token_capture_requeue": "token_capture_requeue.jsonl",
+    "source_review_pending": "source_review_pending.jsonl",
+    "source_review_abstained": "source_review_abstained.jsonl",
+    "rejections": "rejections.jsonl",
+}
+
+
+def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        write_json(temporary, value)
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _emit_candidate_row(job: Mapping[str, Any], category: str, value: Mapping[str, Any]):
+    row_index = int(job["row_index"])
+    path = Path(job["rows_dir"]) / category / f"{row_index:06d}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(canonical_json(value) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return {"row_index": row_index, "category": category, "path": str(path),
+        "candidate_id": _text(value.get("candidate_id")),
+        "repair_signal": _text(value.get("repair_signal"))}
+
+
+def _parallel_candidate_job(job: Mapping[str, Any]):
+    reward = job["reward"]
+    row_index = int(job["row_index"])
+    case_id = _text(reward.get("case_id"))
+    episode_id = _text(reward.get("episode_id")) or case_id
+    split = job.get("split")
+
+    def reject(reason: str):
+        return _emit_candidate_row(job, "rejections",
+            _rejection(row_index=row_index, reward=reward, reason=reason))
+
+    if not case_id or not episode_id:
+        return reject("missing_case_or_episode_id")
+    if split is None:
+        return reject("case_not_in_explicit_train_allowlist")
+    if str(split).casefold() != "train":
+        return reject(f"source_split_forbidden:{split}")
+    if bool(reward.get("training_prohibited")):
+        return reject("training_prohibited")
+    if bool(reward.get("fatal_engineering_error")):
+        return _emit_candidate_row(job, "engineering_requeue", {
+            "schema_version": PSD_CANDIDATE_SCHEMA_VERSION,
+            "case_id": case_id, "episode_id": episode_id,
+            "queue_reason": "fatal_engineering_error", "source": job["source"]})
+
+    run_dir = Path(job["run_dir"])
+    try:
+        trace_path = _safe_trace_path(run_dir, job.get("trace_path", ""), episode_id)
+        if not trace_path.is_file():
+            raise FileNotFoundError("canonical_trace_missing")
+        raw = trace_path.read_bytes()
+        trace_sha256 = hashlib.sha256(raw).hexdigest()
+        expected_sha256 = _text(job.get("trace_sha256"))
+        if expected_sha256 and trace_sha256 != expected_sha256:
+            raise ValueError("trace_sha256_changed_after_postprocess")
+        trace = json.loads(raw)
+        if not isinstance(trace, dict):
+            raise ValueError("trace_root_not_object")
+        trace_case_id = _trace_case_id(trace)
+        if trace_case_id and trace_case_id != case_id:
+            raise ValueError(f"trace_case_id_mismatch:{trace_case_id}!={case_id}")
+        steps = _policy_steps(trace, episode_id=episode_id)
+        if not steps:
+            raise ValueError("trace_has_no_usable_policy_steps")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return reject(f"trace_rejected:{exc}")
+
+    strict_audit_pass = bool(reward.get("strict_trace_audit_pass"))
+    classification_correct = bool(reward.get("classification_correct"))
+    trace_source = {**job["source"],
+        "source_trace_path": trace_path.relative_to(run_dir).as_posix(),
+        "source_trace_sha256": trace_sha256,
+        "source_runtime_store_path": _trace_runtime_store_path(trace),
+        **({"source_audit": reward["source_audit"]} if reward.get("source_audit") else {})}
+    from .psd_source_review import source_review_reference, validate_source_review
+    review_status = "pending"
+    try:
+        trace_canonical_sha256 = None
+        audit_reference = reward.get("source_audit")
+        if isinstance(audit_reference, Mapping):
+            audit_path = Path(_text(audit_reference.get("path")))
+            if (not audit_path.is_file()
+                    or sha256_file(audit_path) != _text(audit_reference.get("sha256"))):
+                raise ValueError("source audit binding changed")
+            source_audit = load_json(audit_path)
+            if source_audit.get("source_trace_sha256") != trace_sha256:
+                raise ValueError("source audit trace changed")
+            trace_canonical_sha256 = _text(source_audit.get("source_trace_canonical_sha256")) or None
+        source_review = source_review_reference(reward)
+        if source_review is not None:
+            review_status = validate_source_review(source_review, trace=trace,
+                trace_canonical_sha256=trace_canonical_sha256)
+            trace_source["source_task_review"] = reward["source_task_review"]
+            if reward.get("source_task_status") != review_status:
+                raise ValueError("source task status differs from bound review")
+    except (OSError, ValueError, KeyError) as exc:
+        return reject(f"source_review_rejected:{type(exc).__name__}")
+
+    if classification_correct and strict_audit_pass and review_status == "pending":
+        return _emit_candidate_row(job, "source_review_pending", {"case_id": case_id,
+            "episode_id": episode_id, "queue_reason": "source_semantic_review_required",
+            "source": trace_source})
+    if review_status == "unresolved":
+        return _emit_candidate_row(job, "source_review_abstained", {"case_id": case_id,
+            "episode_id": episode_id, "queue_reason": "source_semantic_review_abstained",
+            "source": trace_source})
+    if classification_correct and strict_audit_pass and review_status == "pass":
+        incomplete_steps = [step["step_id"] for step in steps
+            if step["rollout_token_capture"]["status"] != "complete"]
+        if incomplete_steps:
+            return _emit_candidate_row(job, "token_capture_requeue", {
+                "schema_version": PSD_CANDIDATE_SCHEMA_VERSION, "case_id": case_id,
+                "episode_id": episode_id, "queue_reason": "missing_policy_token_capture",
+                "incomplete_step_ids": incomplete_steps, "source": trace_source})
+        candidate = {"schema_version": PSD_CANDIDATE_SCHEMA_VERSION,
+            "candidate_id": _candidate_id(kind="preserve", case_id=case_id,
+                episode_id=episode_id, step_id="episode", source_trace_sha256=trace_sha256),
+            "class": "base_pass_preserve", "candidate_status": "ready_for_teacher_collection",
+            "case_id": case_id, "episode_id": episode_id, "verified_full_task": True,
+            "strict_trace_audit_pass": True, "preservation_steps": steps, "source": trace_source}
+        return _emit_candidate_row(job, "preservation_candidates", candidate)
+
+    protocol_steps = [step for step in steps if step["protocol_rejected"]]
+    if protocol_steps:
+        repair_signal, repair_site = "protocol_rejection", protocol_steps[0]
+    else:
+        localization = _failure_localization(steps=steps, reward=reward)
+        repair_signal = ("strict_trace_audit_failure" if not strict_audit_pass
+            else "source_semantic_failure" if classification_correct and review_status == "fail"
+            else "terminal_outcome_mismatch")
+        repair_site = steps[int(localization["repair_anchor_step_index"])]
+    if repair_site["rollout_token_capture"]["status"] != "complete":
+        return _emit_candidate_row(job, "token_capture_requeue", {
+            "schema_version": PSD_CANDIDATE_SCHEMA_VERSION, "case_id": case_id,
+            "episode_id": episode_id, "queue_reason": "missing_policy_token_capture",
+            "incomplete_step_ids": [repair_site["step_id"]], "source": trace_source})
+    failure_localization = ({**_failure_localization(steps=steps, reward=reward),
+        "repair_signal": repair_signal} if not protocol_steps else {
+        "status": "observed_failure", "basis": "first_protocol_rejection",
+        "requires_privileged_attribution": False,
+        "observed_failure_source_step_indices": [int(protocol_steps[0]["source_step_index"])],
+        "observed_failure_step_indices": [steps.index(protocol_steps[0])],
+        "repair_anchor_step_index": steps.index(protocol_steps[0]),
+        "repair_anchor_source_step_index": int(protocol_steps[0]["source_step_index"]),
+        "repair_anchor_step_id": protocol_steps[0]["step_id"], "repair_signal": repair_signal})
+    candidate = {"schema_version": PSD_CANDIDATE_SCHEMA_VERSION,
+        "candidate_id": _candidate_id(kind="repair", case_id=case_id,
+            episode_id=episode_id, step_id=repair_site["step_id"],
+            source_trace_sha256=trace_sha256), "class": "repair_seed",
+        "candidate_status": "needs_privileged_localization", "case_id": case_id,
+        "episode_id": episode_id, "repair_signal": repair_signal,
+        "failure_localization": failure_localization,
+        "strict_trace_audit_failure_codes": [_text(value)
+            for value in reward.get("strict_trace_audit_failure_codes", []) if _text(value)],
+        "repair_site": repair_site, "source": trace_source}
+    return _emit_candidate_row(job, "repair_candidates", candidate)
+
+
+def build_psd_candidate_package_parallel(*, run_dir: Path, train_cases_path: Path,
+                                         rollout_gate_path: Path, output_dir: Path,
+                                         workers: int = 16) -> dict[str, Any]:
+    if not isinstance(workers, int) or isinstance(workers, bool) or not 1 <= workers <= 32:
+        raise ValueError("PSD candidate workers must be in [1, 32]")
+    run_dir = run_dir.expanduser().resolve()
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"rollout directory does not exist: {run_dir}")
+    rewards_path = run_dir / "post_rollout_rewards.jsonl"
+    if not rewards_path.is_file():
+        raise FileNotFoundError(f"missing post-rollout rewards: {rewards_path}")
+    require_new_or_empty(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rows_dir = output_dir / ".rows"
+    train_cases = _load_train_case_allowlist(train_cases_path)
+    rollout_gate = validate_rollout_gate_for_candidates(
+        rollout_gate_path=rollout_gate_path, run_dir=run_dir,
+        train_cases_path=train_cases_path)
+    run_manifest_path = run_dir / "run_manifest.json"
+    run_manifest = load_json(run_manifest_path) if run_manifest_path.is_file() else {}
+    groups = {_text(item.get("episode_id")): item
+        for item in load_jsonl(run_dir / "rollout_groups.jsonl") if _text(item.get("episode_id"))}
+    source = _source_metadata(run_manifest, rollout_gate=rollout_gate,
+        rollout_gate_path=rollout_gate_path)
+    rewards = load_jsonl(rewards_path)
+    jobs = []
+    for row_index, reward in enumerate(rewards):
+        case_id = _text(reward.get("case_id"))
+        episode_id = _text(reward.get("episode_id")) or case_id
+        group = groups.get(episode_id, {})
+        jobs.append({"row_index": row_index, "reward": reward,
+            "split": train_cases.get(case_id), "run_dir": str(run_dir),
+            "trace_path": _text(group.get("trace_path")),
+            "trace_sha256": _text(group.get("trace_sha256")),
+            "source": source, "rows_dir": str(rows_dir)})
+    progress = output_dir / "candidate-progress.json"
+    _atomic_json(progress, {"status": "running", "completed": 0,
+        "total": len(jobs), "workers": workers})
+    executor = ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"))
+    results = []
+    try:
+        for completed, result in enumerate(executor.map(_parallel_candidate_job, jobs, chunksize=1), 1):
+            results.append(result)
+            if completed % 10 == 0 or completed == len(jobs):
+                _atomic_json(progress, {"status": "running", "completed": completed,
+                    "total": len(jobs), "workers": workers})
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+    candidate_ids = [row["candidate_id"] for row in results if row["candidate_id"]]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise ValueError("PSD candidate IDs must be unique")
+    counts = Counter(row["category"] for row in results)
+    repair_signals = Counter(row["repair_signal"] for row in results
+        if row["category"] == "repair_candidates" and row["repair_signal"])
+    for category, filename in _CANDIDATE_ARTIFACTS.items():
+        with (output_dir / filename).open("wb") as destination:
+            for row in sorted((item for item in results if item["category"] == category),
+                              key=lambda item: item["row_index"]):
+                with Path(row["path"]).open("rb") as source_file:
+                    shutil.copyfileobj(source_file, destination, length=1024 * 1024)
+    shutil.rmtree(rows_dir)
+    manifest = {"schema_version": PSD_CANDIDATE_MANIFEST_SCHEMA_VERSION,
+        "source": {"run_dir": str(run_dir), "post_rollout_rewards": str(rewards_path),
+            "post_rollout_rewards_sha256": sha256_file(rewards_path),
+            "train_cases": str(train_cases_path), "train_cases_sha256": sha256_file(train_cases_path),
+            "rollout_gate": str(rollout_gate_path), "rollout_gate_sha256": sha256_file(rollout_gate_path),
+            **source},
+        "counts": {name: counts.get(name, 0) for name in _CANDIDATE_ARTIFACTS},
+        "repair_signals": dict(sorted(repair_signals.items())),
+        "artifacts": dict(_CANDIDATE_ARTIFACTS),
+        "status": ("ready_for_privileged_localization"
+            if counts.get("repair_candidates") or counts.get("preservation_candidates") else "empty")}
+    write_json(output_dir / "manifest.json", manifest)
+    _atomic_json(progress, {"status": "completed", "completed": len(jobs),
+        "total": len(jobs), "workers": workers})
+    return manifest
 
 
 def build_psd_candidate_package(
