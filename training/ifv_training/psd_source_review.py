@@ -46,6 +46,7 @@ evidence. Pass, fail and unresolved are equally acceptable; do not favor pass.
 This is the single allowed corrective response, not a new policy rollout.
 """
 LITERAL_ERROR = "PSD judge evidence is not a literal observed quote"
+JSON_EVIDENCE_ENCODING = "ifv-psd-literal-json-strings-v1"
 
 
 def _correction_packet(packet, previous):
@@ -70,7 +71,7 @@ def _packet(trace, gold, media, *, include_transport_ids=False):
             "private_reference": gold, "media": media}
 
 
-def _validate_decision(value, packet):
+def _validate_decision(value, packet, *, decode_json_strings=False):
     if (not isinstance(value, dict) or set(value) != set(SCHEMA["required"])
             or not isinstance(value["status"], str) or value["status"] not in {"pass", "fail", "unresolved"}
             or not isinstance(value["explanation"], str) or not value["explanation"].strip()
@@ -79,7 +80,20 @@ def _validate_decision(value, packet):
     if any(row.get("trace") != "source" for row in value["evidence"] if isinstance(row, dict)):
         raise ValueError("source review cannot cite a repaired/private trace")
     validate_evidence(value["evidence"], packet,
-        positive=value["status"] != "unresolved", localization=True)
+        positive=value["status"] != "unresolved", localization=True,
+        decode_json_strings=decode_json_strings)
+
+
+def _validate_final_decision(value, packet, encoding=None):
+    if encoding is None:
+        return _validate_decision(value, packet)
+    if encoding != JSON_EVIDENCE_ENCODING:
+        raise ValueError("unknown PSD source evidence encoding")
+    # Preserve the old strict correction path and every already-valid artifact.
+    # This explicit interpretation is only for a final decision that failed
+    # solely because a quote/observed field contains JSON string serialization.
+    _require_nonliteral_decision(value, packet)
+    _validate_decision(value, packet, decode_json_strings=True)
 
 
 async def judge_source(client, trace, *, gold, image_path, model, cache_dir):
@@ -100,7 +114,14 @@ async def judge_source(client, trace, *, gold, image_path, model, cache_dir):
         attempts.append({"decision": value, "provenance": provenance})
     # Both completed responses are cached before validation. An invalid second
     # response remains pending; resuming never generates a third response.
-    _validate_decision(value, packet)
+    evidence_encoding = None
+    try:
+        _validate_decision(value, packet)
+    except ValueError as error:
+        if str(error) != LITERAL_ERROR:
+            raise
+        _validate_final_decision(value, packet, JSON_EVIDENCE_ENCODING)
+        evidence_encoding = JSON_EVIDENCE_ENCODING
     result = {"schema_version": VERSION, "trace_projection": TRACE_PROJECTION,
         "source_trace_canonical_sha256": _sha(trace),
         "private_reference_sha256": _sha(gold), "media": media, "decision": value,
@@ -108,6 +129,8 @@ async def judge_source(client, trace, *, gold, image_path, model, cache_dir):
         "provenance": provenance}
     if attempts:
         result["source_review_attempts"] = attempts
+    if evidence_encoding:
+        result["evidence_encoding"] = evidence_encoding
     return result
 
 
@@ -156,7 +179,7 @@ def validate_source_review(artifact, *, trace, gold=None):
             raise ValueError("PSD source review response binding missing")
         if gold is not None and binding.get("packet_sha256") != _sha(request_packet):
             raise ValueError("PSD source review packet binding mismatch")
-    _validate_decision(artifact.get("decision"), packet)
+    _validate_final_decision(artifact.get("decision"), packet, artifact.get("evidence_encoding"))
     return artifact["decision"]["status"]
 
 

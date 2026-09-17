@@ -107,7 +107,38 @@ def _strings(value):
             yield from _strings(item)
 
 
-def validate_evidence(evidence, packet, *, positive, localization=False):
+def _json_string_views(value, depth=0):
+    """Literal strings inside complete JSON encodings, never fuzzy text edits."""
+    for text in _strings(value):
+        yield text
+        if depth >= 3:
+            continue
+        try:
+            parsed = json.loads(text)
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(parsed, (dict, list, str)) and parsed != text:
+            yield from _json_string_views(parsed, depth + 1)
+
+
+def _quote_in_step(quote, step, *, decode_json_strings=False):
+    if any(_literal_excerpt(quote, text) for text in _strings(step)) or quote in json.dumps(step, ensure_ascii=False):
+        return True
+    if not decode_json_strings:
+        return False
+    quotes = [quote]
+    try:
+        decoded = json.loads(quote)
+    except (ValueError, RecursionError):
+        decoded = None
+    if isinstance(decoded, str) and decoded.strip():
+        quotes.append(decoded)
+    # No changing indices, cross-field joins, case/whitespace folding, quote
+    # substitution or numeric edits. JSON decoding is the only extra view.
+    return any(_literal_excerpt(q, text) for text in _json_string_views(step) for q in quotes)
+
+
+def validate_evidence(evidence, packet, *, positive, localization=False, decode_json_strings=False):
     seen = set()
     for row in evidence:
         if not isinstance(row, dict) or set(row) != {"trace", "step_index", "quote"}:
@@ -117,8 +148,7 @@ def validate_evidence(evidence, packet, *, positive, localization=False):
             raise ValueError("invalid PSD judge evidence location")
         steps = {step["index"]: step for step in packet.get(trace + "_steps", [])}
         if (index not in steps or not isinstance(quote, str) or not quote.strip()
-                or not (any(_literal_excerpt(quote, text) for text in _strings(steps[index]))
-                        or quote in json.dumps(steps[index], ensure_ascii=False))):
+                or not _quote_in_step(quote, steps[index], decode_json_strings=decode_json_strings)):
             raise ValueError("PSD judge evidence is not a literal observed quote")
         seen.add(trace)
     required = {"source"} if localization else {"source", "repaired"}

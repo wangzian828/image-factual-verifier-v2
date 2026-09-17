@@ -79,6 +79,53 @@ def test_corrective_review_stops_after_one_invalid_correction(tmp_path, monkeypa
     assert client.calls == 2
 
 
+@pytest.mark.parametrize('encoding', ['json_field', 'json_quoted_excerpt'])
+def test_json_literal_interpretation_recovers_cached_final_without_resampling(tmp_path, monkeypatch, encoding):
+    trace, gold = source_trace(), {'case_id':'a','factual_status':'supported'}
+    if encoding == 'json_field':
+        text = 'The record says "2019", not "2018".'
+        trace['state']['all_steps'][0]['tool_result'] = json.dumps({'evidence':text})
+        quote = text
+    else:
+        trace['state']['all_steps'][0]['tool_result'] = 'Prefix: the record states 2019. More follows.'
+        quote = json.dumps('the record states 2019.')
+    expected = artifact(trace, status='fail', gold=gold)
+    monkeypatch.setattr(source,'review_images',lambda *a,**kw:([],expected['media']))
+    decision = {**expected['decision'],'evidence':[{'trace':'source','step_index':0,'quote':quote}]}
+    client = Client(decision)
+    args = dict(gold=gold,image_path=tmp_path/'unused',model='test',cache_dir=tmp_path/'cache')
+    value = asyncio.run(source.judge_source(client,trace,**args))
+    assert client.calls == 2 and len(value['source_review_attempts']) == 2
+    assert value['decision'] == decision and value['evidence_encoding'] == source.JSON_EVIDENCE_ENCODING
+    assert source.validate_source_review(value,trace=trace,gold=gold) == 'fail'
+    assert asyncio.run(source.judge_source(client,trace,**args)) == value and client.calls == 2
+    value.pop('evidence_encoding')
+    with pytest.raises(ValueError,match='literal observed quote'):
+        source.validate_source_review(value,trace=trace,gold=gold)
+
+
+def test_json_interpretation_does_not_replace_previously_valid_corrective_decision(tmp_path,monkeypatch):
+    trace,gold=source_trace(),{'case_id':'a','factual_status':'supported'}
+    trace['state']['all_steps'][0]['tool_result']=json.dumps({'evidence':'He said "2019".'})
+    expected=artifact(trace,status='fail',gold=gold)
+    monkeypatch.setattr(source,'review_images',lambda *a,**kw:([],expected['media']))
+    first={**expected['decision'],'status':'pass','evidence':[{'trace':'source','step_index':0,'quote':'He said "2019".'}]}
+    class SequenceClient(Client):
+        async def create(self,**kwargs):
+            self.decision=first if self.calls==0 else expected['decision']
+            return await super().create(**kwargs)
+    client=SequenceClient(None)
+    value=asyncio.run(source.judge_source(client,trace,gold=gold,image_path=tmp_path/'unused',model='test',cache_dir=tmp_path))
+    assert value['decision']==expected['decision'] and 'evidence_encoding' not in value
+    assert client.calls==2 and source.validate_source_review(value,trace=trace,gold=gold)=='fail'
+
+
+def test_unknown_json_evidence_encoding_rejected():
+    trace=source_trace();value=artifact(trace);value['evidence_encoding']='allow-paraphrase'
+    with pytest.raises(ValueError,match='unknown PSD source evidence encoding'):
+        source.validate_source_review(value,trace=trace)
+
+
 @pytest.mark.parametrize("status", ["pass", "fail", "unresolved"])
 def test_bound_source_review_and_cached_decision(tmp_path, monkeypatch, status):
     trace, gold = source_trace(), {"case_id": "a", "factual_status": "supported"}

@@ -155,6 +155,26 @@ def test_literal_json_field_quote_is_valid_observed_evidence():
     assert asyncio.run(judge.judge_repair(Client(data), packet()))["passed"]
 
 
+@pytest.mark.parametrize('quote', ['The record says "2018".', 'The Record says "2019".',
+    'The record  says "2019".', 'The record says “2019”.', 'The record says "2019". absent'])
+def test_json_literal_view_does_not_accept_text_edits(quote):
+    step={'tool_result':json.dumps({'evidence':'The record says "2019".'})}
+    assert not judge._quote_in_step(quote,step,decode_json_strings=True)
+
+
+def test_json_literal_view_is_opt_in_and_stays_in_one_observed_field():
+    step={'tool_result':json.dumps({'a':'The record says "2019".','b':'Another observation.'})}
+    quote='The record says "2019".'
+    assert not judge._quote_in_step(quote,step)
+    assert judge._quote_in_step(quote,step,decode_json_strings=True)
+    assert not judge._quote_in_step(quote+' Another observation.',step,decode_json_strings=True)
+    assert not judge._quote_in_step(quote,{'tool_result':'prefix '+step['tool_result']},decode_json_strings=True)
+    packet={'source_steps':[{'index':1,**step},{'index':2,'tool_result':'unrelated'}]}
+    with pytest.raises(ValueError,match='literal observed quote'):
+        judge.validate_evidence([{'trace':'source','step_index':2,'quote':quote}],packet,
+            positive=True,localization=True,decode_json_strings=True)
+
+
 def test_proposer_receives_native_images_not_base64_json_prose():
     import base64
     from ifv_training.psd_media import proposer_image_inputs
