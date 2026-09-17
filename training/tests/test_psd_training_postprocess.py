@@ -40,6 +40,20 @@ def test_private_training_derivation_does_not_export_other_datasets(tmp_path, mo
     assert result["source_review_abstained"] == 0
 
 
+def test_postprocess_reuses_loaded_trace_for_audit(tmp_path, monkeypatch):
+    args = setup_case(tmp_path, monkeypatch)
+    expected = module.load_json(args["run_dir"] / "traces/a.json")
+    observed = {}
+
+    def audit(_path, **kwargs):
+        observed["payload"] = kwargs.get("payload")
+        return SimpleNamespace(failures=lambda **kw: [])
+
+    monkeypatch.setattr(module, "audit_trace", audit)
+    module.postprocess(**args)
+    assert observed["payload"] == expected
+
+
 @pytest.mark.parametrize("status,verified,pending,abstained", [
     ("pass", 1, 0, 0), ("fail", 0, 0, 0), ("unresolved", 0, 0, 1)])
 def test_semantic_source_admission_propagates_into_rewards(

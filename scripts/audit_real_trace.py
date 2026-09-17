@@ -1164,13 +1164,15 @@ def audit_trace(
     *,
     enforce_source_access_policy: bool = True,
     source_access_policy: SourceAccessPolicy | None = None,
+    payload: Mapping[str, Any] | None = None,
 ) -> TraceReport:
     report = TraceReport(path=str(path))
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        _issue(report, "TRACE_JSON_INVALID", f"cannot read trace JSON: {exc}")
-        return report
+    if payload is None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            _issue(report, "TRACE_JSON_INVALID", f"cannot read trace JSON: {exc}")
+            return report
     if not isinstance(payload, Mapping):
         _issue(report, "TRACE_ROOT_INVALID", "trace JSON root must be an object")
         return report

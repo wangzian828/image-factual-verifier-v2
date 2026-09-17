@@ -63,18 +63,20 @@ def postprocess(*, run_dir, train_cases, private_gold, source_access_policy, sou
             trace = load_json(path)
             if _trace_case_id(trace) != case:
                 raise ValueError("PSD trace case identity mismatch")
+            trace_sha256 = sha256_file(path)
             metrics, score = score_process_trace(trace, gold[case])
             policy_failure = repairable_terminal_model_failure(trace)
-            audit = audit_trace(path, source_access_policy=policy)
+            audit = audit_trace(path, source_access_policy=policy, payload=trace)
             failures = [asdict(item) for item in audit.failures(strict_scheduler=True)]
-            report = {"case_id": case, "episode_id": episode, "source_trace_sha256": sha256_file(path),
+            report = {"case_id": case, "episode_id": episode, "source_trace_sha256": trace_sha256,
                       "passed": not failures, "failures": failures}
             from ifv_training.psd_repair import _sha
             report["source_trace_canonical_sha256"] = _sha(trace)
             audit_path = run_dir / "psd-audits" / (path.stem + ".json")
             write_json(audit_path, report)
-            audits.append({"episode_id": episode, "path": str(audit_path), "sha256": sha256_file(audit_path)})
-            reward["source_audit"] = {"path": str(audit_path.resolve()), "sha256": sha256_file(audit_path)}
+            audit_sha256 = sha256_file(audit_path)
+            audits.append({"episode_id": episode, "path": str(audit_path), "sha256": audit_sha256})
+            reward["source_audit"] = {"path": str(audit_path.resolve()), "sha256": audit_sha256}
             reward.update(classification_correct=bool(metrics.get("result_correct")),
                 fatal_engineering_error=bool(metrics.get("engineering_error")) and not bool(policy_failure),
                 source_policy_failure_kind=policy_failure,
@@ -84,7 +86,7 @@ def postprocess(*, run_dir, train_cases, private_gold, source_access_policy, sou
                 step_ids=trajectory_policy_step_ids(trace, episode_id=episode),
                 process_components=score.get("components", {}))
             scores.append({**metrics, "episode_id": episode, "prompt_group_id": group})
-            member["trace_sha256"] = sha256_file(path)
+            member["trace_sha256"] = trace_sha256
             # A label/format pass is not evidence-grounded task success.
             reward["source_task_status"] = "pending"
             if source_reviews is not None:
