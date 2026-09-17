@@ -1,6 +1,6 @@
 # PSD 夜间正式推进（2026-09-16）
 
-## 2026-09-17 12:39 自动补评分部署，采集不等待 judge（当前入口）
+## 2026-09-17 12:45 自动补评分已运行，实际40槽采集恢复（当前入口）
 
 - 用户要求失败评分自动重跑，并追问为什么GPU只有guard在计算。真实原因是CODE41恢复采集时
   `import_prior_slots`串行解压、哈希、完整性核验全部旧结果，之后才导入并启动首批；不是GPU故障，
@@ -8,16 +8,19 @@
   原预算与4个历史allowance继承，0新增额度；所有旧原文保留。不要再重启collector重复这段核验。
 - 当前collector仍CODE41/v6，receipt `v6/process.json`初始PID1318931；12:41 first40 gate已passed，
   已进入collecting_remaining_3160，完整2292/3200、normal_errors=0、pending_infrastructure=0，
-  其中2289旧结果复用、3条真实补采成功；40路并发继续。
+  其中2289旧结果复用、3条真实补采成功。之后短暂被storage measurement CalledProcessError挡住，
+  12:44:38自动成功重测、admission_open=true；12:45:29逐槽确认running=40，非仅配置值，
+  gateway四副本各9在途模型请求，GPU利用率100/99/99/92%。不是只剩guard，未绕过存储门禁。
+  临时测量错误具体stderr仍在只读追查，不能据此说个人quota已知或存储曾真的满。
   CODE41父目录原`handoff-process.json`/`completion-policy-handoff.json`负责接compactor，勿双开。
 - 新CODE42=`/volume/ybo/wza/training-artifacts/psd-review-autoretry-20260917-v42/code`，
   本地提交`cbcf5ba`已push；43项本地定向测试、490项服务器PSD回归通过，`src/**/*.py`相对CODE41
   全部逐字相同。**未重启collector/vLLM/guard，未改变Agent或评分prompt/schema。**
 - 新助手CODE42父目录`handoff-process.json`（初始PID1321562），入口
   `scripts/server/advance_psd_source_review_retries.py`，状态`review-handoff.json`、日志`handoff.log`。
-  当前`waiting_for_old_paid_reviews_to_drain`：等v5评分active=queued=0且waiting、v6恢复证明存在、
-  v5 collector已退出，才停止旧评分并启动v6新评分。助手已启动，**尚不能说新重试已实际运行**。
-  不要在助手等待时手工另起评分，不中断已付费调用。
+  当前`v6_reviewer_autoretry_running`：已等v5评分active=queued=0且waiting、v6恢复证明存在、
+  v5 collector已退出后安全完成切换。新评分PID1322009，12:45实际progress retry_errors=true，
+  retrying=7、exhausted_transport=0。助手已完成，不要重启或手工双开评分。
 - 唯一新输出为`v6/source-review-prefetch-v2-auto-retry`，receipt仍`v6/source-review-prefetch-process.json`，
   日志`v6/source-review-prefetch-v2-auto-retry.log`；精确复用v5/source-review-prefetch-v1缓存，
   Gemini3.1ProPreview/high/out8192、16worker及HTTPgate16不变。
@@ -29,7 +32,10 @@
   不能据此说始终有16个HTTP请求。
 - 12:40对29个ValueError做禁网缓存重放：21条为一次允许纠正后仍非逐字证据引用，8条为
   unsupported PSD judge image type；0次外部调用。它们不是429，需分别解决评分证据契约和媒体
-  传输支持，不能宣称普通网络重试已修好。旧评分12:41 queued=0、active=8，仍正常等待排空。
+  传输支持，不能宣称普通网络重试已修好。抽查unsupported的main-05936：原任务图AVIF/RGB/1000x760，
+  归档policy请求用JPEG；需保证原图身份/内容和评分transport对应，不能删图假装评分成功。
+  旧评分最终2296条中1288fail/569pass/18unresolved/421pending_error；新进度重建绑定时从0计数，
+  **旧有效评分没有丢弃、不会重复付费**，仍逐条读精确缓存并验hash。
 - 后续正式prepare/repair/teacher/DP4统一用CODE42，prefetch参数显式指向上述v2输出，
   不再照旧段落启动v6/source-review-prefetch-v1。采集3200完整、评分排空、所有正式gate仍不可跳过；
   最终bank四卡global32短步及恢复验收、5epoch不变。训练optimizer_steps仍0。
