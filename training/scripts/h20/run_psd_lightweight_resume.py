@@ -14,8 +14,8 @@ import time
 ROOT = Path("/volume/ybo/wza")
 RUN = ROOT / "runs/psd-production400x8-20260917-v6"
 ROUND = ROOT / "runs/psd-production-round1-20260917-v1"
-CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v6"
-DEPLOY = ROOT / "training-artifacts/psd-external-env-gate-20260917-v53"
+CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v7"
+DEPLOY = ROOT / "training-artifacts/psd-streaming-materialization-20260917-v54"
 CODE = DEPLOY / "code"
 PREFETCH = RUN / "source-review-prefetch-v2-auto-retry"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
@@ -73,7 +73,7 @@ def external_environment() -> tuple[dict[str, str], dict[str, bool]]:
     }
     if not all(checks.values()):
         raise RuntimeError("PSD external credential preflight is incomplete")
-    parsed["GEMINI_MAX_INFLIGHT_REQUESTS"] = "4"
+    parsed["GEMINI_MAX_INFLIGHT_REQUESTS"] = "16"
     return parsed, checks
 
 
@@ -132,7 +132,7 @@ def launch() -> None:
         raise RuntimeError("lightweight PSD controller already exists")
     state = load(DEPLOY / "stage-state.json")
     if (state.get("deployment_ready_not_live") is not True
-            or state.get("commit") != "882b97a"):
+            or state.get("commit") != "a8ee56c"):
         raise RuntimeError("lightweight PSD deployment is not validated")
     old_owners = []
     for process in Path("/proc").glob("[0-9]*/cmdline"):
@@ -154,7 +154,7 @@ def launch() -> None:
     receipt = owner.spawn(command, env, CONTROL / "controller.log")
     save(CONTROL / "process.json", receipt)
     save(CONTROL / "state.json", {"phase": "launched", "external_checks": checks,
-        "gemini_max_inflight_requests": 4, "time": time.time()})
+        "gemini_max_inflight_requests": 16, "time": time.time()})
     print(json.dumps({"pid": receipt["pid"], "mode": "lightweight_resume"}))
 
 
