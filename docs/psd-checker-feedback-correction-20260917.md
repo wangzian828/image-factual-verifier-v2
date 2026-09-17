@@ -171,6 +171,9 @@ conditions without changing the PSD method or accepting weaker targets:
   budgets and case selection are not reset.
 
 The v60 handoff waits behind v59 and then for v59's current prepare pass to
-finish. It does not interrupt active investigations. Local targeted tests:
-**98 passed**. Server staging and the immutable deployment receipt remain
-required before this section can be treated as live.
+finish. It does not interrupt active investigations. Local and H20 targeted
+tests: **98 passed**. The immutable deployment is
+`/volume/ybo/wza/training-artifacts/psd-tail-recovery-20260918-v60`; delayed
+handoff PID 1421031 is only a receipt hint. Read its `handoff-state.json` and
+the upstream v59 state before identifying the live owner. Staging does not mean
+the corrections are live until that completed-pass handoff succeeds.
