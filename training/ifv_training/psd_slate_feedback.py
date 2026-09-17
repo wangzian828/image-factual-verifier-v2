@@ -21,12 +21,18 @@ CRITERIA = (
 )
 
 
-def checker_feedback(review, trace, *, repaired=False, hints=None):
+def checker_feedback(review, trace, *, repaired=False, hints=None, source_failure=None):
     """Copy only independently validated public quotes, including hint audits."""
     from .psd_gemini_judge import trace_steps, _quote_in_step
     from .psd_slate import decision_map
     decision = (review or {}).get("decision", {})
-    if decision and decision.get("status") != "fail":
+    # Source admission combines semantic, deterministic verdict and structural
+    # checks. A semantic pass must not veto an independently verified failure.
+    independently_failed = (not repaired and isinstance(source_failure, dict)
+        and source_failure.get("passed") is True
+        and (source_failure.get("result_correct") is False
+             or source_failure.get("structural_failure") is True))
+    if decision and decision.get("status") != "fail" and not independently_failed:
         raise ValueError("slate repair feedback requires a failed checker decision")
     steps = {row["index"]: row for row in trace_steps(trace)}
     positions = decision_map(trace)
@@ -48,6 +54,8 @@ def checker_feedback(review, trace, *, repaired=False, hints=None):
         citations.append({"step_index": index, "quote": quote})
     return {"policy": POLICY, "status": "fail", "criteria": CRITERIA,
             "cited_observations": citations,
+            "semantic_reviewer_status": decision.get("status", "not_available"),
+            "independent_task_check_failed": independently_failed,
             "reference_explanation_withheld": True}
 
 

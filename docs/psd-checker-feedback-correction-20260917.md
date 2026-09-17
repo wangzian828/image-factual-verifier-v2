@@ -78,3 +78,39 @@ After source repair completes: assemble accepted repair/preservation targets,
 frozen-teacher exact top-20 scoring, final four-GPU global-batch-32 short-step
 acceptance, then the planned five-epoch PSD run in a new output directory.
 This code correction alone is **not** completion of that training pipeline.
+
+## Live handoff and follow-up boundary
+
+v58 was committed/pushed locally as `a0826e6` and switched into the existing
+formal search. Controller receipt is
+`/volume/ybo/wza/runs/psd-formal-prepare-controller-20260917-checker-feedback-v1/process.json`
+(launch PID 1412183 is a hint, not an identity check). The scoped controller
+restart recorded 27 interrupted in-flight infrastructure attempts; all completed
+results were retained and the interrupted attempts use the ordinary persisted
+recovery budget. Thirteen formerly vetoed cases had reopened at the next check.
+
+Live inspection exposed a boundary missing from the v58 feedback projection:
+source admission also accepts deterministic verdict/structural failures when
+the semantic reviewer said pass. The projection must use the **already verified
+overall source failure**, not incorrectly demand semantic fail as well. v59
+passes that proof to the projection without serializing expected verdicts or
+private explanations. Local/H20 targeted tests: **57 passed**, plus the earlier
+55 local repair/source tests. Three affected saved real sources also pass the
+corrected gate, with **zero new provider calls**.
+
+v59 deployment is `/volume/ybo/wza/training-artifacts/psd-source-gate-20260917-v59`.
+`scripts/server/resume_psd_source_gate.py` waits for the current v58 prepare pass
+to finish, verifies there is no remaining prepare child, and only then replaces
+the controller with `psd-formal-prepare-controller-20260917-checker-feedback-v2`.
+It does not interrupt running investigations or restart models. Read its
+`handoff-state.json` before deciding which controller owns the run.
+
+Remaining pre-existing paused cases are **not** all transient provider errors:
+some cached slate reviews violate literal-quote/position contracts; some retry
+ledgers have unresolved/nonretryable attempts. One strict-assembly rejection
+(`30bdc9a8739a2eb7`, main-06268) is a semantic-review pass conflicting with the
+deterministic private verdict check (`private_gold_verdict_mismatch`). It remains
+rejected, not a training target. These need bounded corrective feedback/recovery
+before the final bank can be complete; blindly replaying the same invalid cache
+does not solve them. Do not erase them, weaken admission, or report that every
+PSD issue/full training is finished. Continue while other valid cases progress.

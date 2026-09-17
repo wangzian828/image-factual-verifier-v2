@@ -54,6 +54,21 @@ def test_repair_feedback_can_quote_the_actual_previous_hint():
     assert len(feedback["cited_observations"]) == 1
 
 
+@pytest.mark.parametrize("basis", [{"result_correct": False}, {"structural_failure": True}])
+def test_semantic_pass_does_not_override_verified_source_failure(basis):
+    data = review()
+    data["decision"]["status"] = "pass"
+    proof = {"passed": True, "expected_verdict": "SECRET_PRIVATE_LABEL", **basis}
+    feedback = checker_feedback(data, trace(), source_failure=proof)
+    assert feedback["status"] == "fail" and feedback["semantic_reviewer_status"] == "pass"
+    assert feedback["independent_task_check_failed"] is True
+    assert "SECRET_PRIVATE_LABEL" not in json.dumps(feedback)
+    with pytest.raises(ValueError):
+        checker_feedback(data, trace(), source_failure={**proof, "passed": False})
+    with pytest.raises(ValueError):
+        checker_feedback(data, trace(), repaired=True, source_failure=proof)
+
+
 def test_only_exact_legacy_numeric_key_hash_is_accepted(tmp_path):
     from ifv_training.psd_repair_storage import save_bound
     identity = {"version": "slate-search-v3-observed-positions", "inputs": "bound"}

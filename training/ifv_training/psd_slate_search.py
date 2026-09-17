@@ -53,7 +53,8 @@ async def propose_with_budget(*, state, round_index, budget, persist, judge, kwa
 
 
 async def run_slate_search(*, args, adapter, site, candidate, trace, gold, private_context,
-                           source_task_review, source_audit, source_policy, roles, profile, config):
+                           source_task_review, source_audit, source_policy, roles, profile, config,
+                           source_failure=None):
     from src.integrations.gemini import GeminiInteractionsClient
     from src.orchestrator.runtime_events import CaseRuntimeStore
     from .psd_gemini_judge import review_images, trace_steps
@@ -88,7 +89,7 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
         audit_slate_search(root)
         return load_json(root / "manifest.json")
     initial_state, _ = adapter._initial_runtime_state(base_trace=trace, failure_site=site)
-    source_feedback = checker_feedback(source_task_review, trace)
+    source_feedback = checker_feedback(source_task_review, trace, source_failure=source_failure)
     initial = (diagnostic_position(source_feedback, trace) if source_task_review else
                24 if site.stage == "unified_judgment" else initial_state.action_count)
     state["active_feedback_policy"] = POLICY

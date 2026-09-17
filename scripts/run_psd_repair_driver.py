@@ -487,6 +487,7 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
         if args.search_mode == "slate":
             from ifv_training.psd_slate_search import run_slate_search
             return await run_slate_search(args=args, adapter=adapter, site=site, candidate=candidate,
+                source_failure=source_verification,
                 trace=trace, gold=gold, private_context=private_context, source_task_review=source_task_review,
                 source_audit=source_audit, source_policy=source_policy, roles=model_roles,
                 profile=policy_profile, config=config)
