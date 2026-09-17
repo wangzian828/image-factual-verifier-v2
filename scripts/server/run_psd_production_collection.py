@@ -134,6 +134,7 @@ def launch(o):
         controller_sha256=o.sha(Path(__file__)),
         reuse_run=str(REUSE_RUN) if REUSE_RUN else None,
         numerical_recovery=o.load(NUMERICAL_RECOVERY) if NUMERICAL_RECOVERY else None,
+        source_completion_policy='ifv-psd-complete-source-v1',
         files={str(Path(source[key])): o.sha(Path(source[key])) for key in
             ('benchmark', 'train_cases', 'private_gold', 'source_access_policy')})
     o.save(RUN/'binding.json', binding)
@@ -206,7 +207,8 @@ def execute(o):
                 from ifv_training.psd_collection_recovery import import_prior_slots
                 imported = import_prior_slots(source=Path(binding['reuse_run'])/'episodes',
                     destination=RUN/'episodes', episode_ids=image_ids, seeds=sampling_seeds,
-                    numerical_recovery=binding.get('numerical_recovery'))
+                    numerical_recovery=binding.get('numerical_recovery'),
+                    require_complete=binding.get('source_completion_policy') == 'ifv-psd-complete-source-v1')
                 o.save(RUN/'slot-recovery.json', imported)
                 reused_results.update({r['episode_id']: r['cached_result'] for r in imported['records']
                                        if r['action'] == 'reuse_exact_outcome'})

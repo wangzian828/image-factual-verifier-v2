@@ -1,7 +1,7 @@
 """Bounded full-episode recovery, never answer-conditioned resampling.
 
-Only exceptions marked at the policy-model transport/numerical boundary are
-retryable. Tool failures, bad answers, length limits and format errors are not.
+Transport/numerical failures and explicitly validated incomplete source results
+are retryable. Complete wrong answers and recovered tool failures are not.
 The frozen Agent and the gateway's no-POST-replay contract stay unchanged.
 """
 from __future__ import annotations
@@ -208,7 +208,7 @@ def guard_policy_backend(backend):
 
 
 async def retry_episode(*, root, identity, generate, max_attempts=MAX_ATTEMPTS,
-                        sleep=asyncio.sleep):
+                        sleep=asyncio.sleep, validate_result=None):
     """generate(attempt_directory) returns a JSON-serializable result.
 
     Persist the budget and successful result before returning. Crashes with an
@@ -225,9 +225,12 @@ async def retry_episode(*, root, identity, generate, max_attempts=MAX_ATTEMPTS,
     with search_lock(root):
         state = load_bound(marker, identity=binding) if marker.exists() else {"attempts": []}
         if result_path.exists():
-            return load_bound(result_path, identity=binding)
+            cached = load_bound(result_path, identity=binding)
+            if validate_result is not None and validate_result(cached):
+                raise ValueError('Cached source is incomplete; migrate without changing the original ledger')
+            return cached
         attempts = state["attempts"]
-        if attempts and attempts[-1]["status"] != "infrastructure_failed":
+        if attempts and attempts[-1]["status"] not in {"infrastructure_failed", "trajectory_failed"}:
             raise RuntimeError("PSD previous attempt is unresolved; inspect it before redispatch")
         while len(attempts) < max_attempts:
             if attempts:
@@ -248,6 +251,16 @@ async def retry_episode(*, root, identity, generate, max_attempts=MAX_ATTEMPTS,
                            else "nonretryable_error", error_type=type(error).__name__)
                 save_bound(marker, identity=binding, payload=state)
                 raise
+            reason = validate_result(result) if validate_result is not None else None
+            if reason:
+                # Keep all failed outcomes as immutable attempt artifacts. No gold
+                # or judge score is involved in selecting a usable source result.
+                rejected = directory/'incomplete-result.json'
+                save_bound(rejected, identity=binding, payload=result)
+                row.update(status='trajectory_failed', reason=reason,
+                           result_path=str(rejected), result_sha256=sha256_file(rejected))
+                save_bound(marker, identity=binding, payload=state)
+                continue
             save_bound(result_path, identity=binding, payload=result)
             row["status"] = "completed"
             save_bound(marker, identity=binding, payload=state)

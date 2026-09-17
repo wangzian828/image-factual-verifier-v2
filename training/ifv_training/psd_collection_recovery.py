@@ -42,7 +42,8 @@ def numerical_failure_evidence(trace, *, inputs, source_slot):
     return {'reason': 'model_http_400_nonfinite_serialization', 'request_receipts': receipts}
 
 
-def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_recovery=None):
+def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_recovery=None,
+                       require_complete=False):
     source, destination = Path(source).resolve(), Path(destination).resolve()
     if len(episode_ids) != len(seeds) or len(set(episode_ids)) != len(episode_ids):
         raise ValueError('Invalid destination slot identities')
@@ -79,7 +80,7 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
             if (len(attempts) not in (4, 5) or attempts[:3] != original_attempts
                     or [a.get('index') for a in attempts] != list(range(1, len(attempts)+1))
                     or attempts[-1].get('status') != 'completed'
-                    or any(a.get('status') != 'infrastructure_failed' for a in attempts[:-1])):
+                    or any(a.get('status') not in {'infrastructure_failed', 'trajectory_failed'} for a in attempts[:-1])):
                 raise ValueError('Extended bank must be completed with all original attempts charged')
         result_path = marker.parent/'result.json'
         if (not result_path.exists() and numerical_recovery is not None
@@ -104,6 +105,15 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
         evidence = numerical_failure_evidence(result, inputs=inputs, source_slot=marker.parent)
         if carried_allowance is not None and evidence is not None:
             raise ValueError('Completed extended bank has unresolved numerical failure; no further extension')
+        if require_complete and evidence is None:
+            from .psd_source_completion import source_completion_failure, VERSION as COMPLETION_POLICY
+            reason = source_completion_failure(result)
+            if reason:
+                evidence = {'kind': 'source_completeness', 'reason': reason,
+                    'completion_policy': COMPLETION_POLICY,
+                    'source_trace': {'path': str(trace_path), 'sha256': sha256_file(trace_path)}}
+                if len(state['attempts']) >= identity['max_attempts']:
+                    raise ValueError('Incomplete source has no remaining attempts; no automatic budget reset')
         originals = [marker, result_path, trace_path]
         if carried_allowance is not None:
             originals.append(marker.parent/'recovery-allowance.json')
@@ -135,7 +145,8 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
                 'originals': {str(marker): sha256_file(marker)}, 'recovery_allowance': evidence})
             continue
         if evidence is not None:
-            payload['attempts'][-1].update(status='infrastructure_failed', reason=evidence['reason'])
+            payload['attempts'][-1].update(status='trajectory_failed' if evidence.get('kind') == 'source_completeness'
+                else 'infrastructure_failed', reason=evidence['reason'], recovery_evidence=evidence)
         if carried_allowance is not None:
             from .io import write_json
             write_json(target/'recovery-allowance.json', carried_allowance)
@@ -161,7 +172,8 @@ def import_prior_slots(*, source, destination, episode_ids, seeds, numerical_rec
             'originals': originals,
             'cached_result': compact if evidence is None else None,
             'carried_recovery_allowance': carried_allowance is not None,
-            'numerical_failure_evidence': evidence})
+            'numerical_failure_evidence': evidence if evidence and evidence.get('kind') != 'source_completeness' else None,
+            'completion_failure_evidence': evidence if evidence and evidence.get('kind') == 'source_completeness' else None})
     return {'schema_version': 'ifv-psd-slot-recovery-v1', 'slots': len(records),
         'reused': sum(r['action'] == 'reuse_exact_outcome' for r in records),
         'retry_remaining': sum(r['action'] == 'retry_remaining_budget' for r in records),

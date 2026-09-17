@@ -71,8 +71,8 @@ class PSDWorkflow(VerificationWorkflow):
                 except PolicyInfrastructureFailure:
                     raise
                 except Exception as error:
-                    # Preserve ordinary model/contract failures as PSD sources.
-                    # They are not a reason to sample again until the answer improves.
+                    # Preserve the native failed trace, then let the answer-blind
+                    # completion validator decide whether the slot needs recovery.
                     result = getattr(error, "_ifv_result", None)
                     if not isinstance(result, dict):
                         raise
@@ -82,7 +82,9 @@ class PSDWorkflow(VerificationWorkflow):
                 await child.aclose()
 
         try:
-            result = await retry_episode(root=slot, identity=identity, generate=generate)
+            from ifv_training.psd_source_completion import source_completion_failure
+            result = await retry_episode(root=slot, identity=identity, generate=generate,
+                                         validate_result=source_completion_failure)
         except InfrastructureRetriesExhausted as error:
             # No canonical trace for a poisoned/unresolved slot. The native result
             # table still records the episode, keeping the denominator explicit.
@@ -123,6 +125,8 @@ def main():
     manifest["agent"]["psd_sampling"] = {"temperature": 0.7, "rollouts_per_case": 8,
         "capture_policy_tokens": True, "policy_topk": 20,
         "collector_sha256": sha256_file(Path(__file__)), "stages": ["UNIFIED_REACT", "UNIFIED_JUDGMENT"]}
+    from ifv_training.psd_source_completion import VERSION as COMPLETION_POLICY
+    manifest['agent']['psd_sampling']['source_completion_policy'] = COMPLETION_POLICY
     from ifv_training.psd_infrastructure_retry import VERSION, MAX_ATTEMPTS
     slots = list((Path(args.output_dir) / "psd-infrastructure-attempts").glob("*/retry-state.json"))
     unresolved = [str(p.parent) for p in slots if not (p.parent / "result.json").is_file()]

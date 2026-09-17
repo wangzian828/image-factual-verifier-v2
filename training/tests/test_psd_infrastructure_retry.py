@@ -191,7 +191,8 @@ def test_collector_restarts_full_episode_without_touching_native_agent(monkeypat
         assert image_path == str(image) and image_id == 'case--r003'
         if mode == 'exhaust' or (mode == 'recover' and len(calls) == 1):
             raise PolicyInfrastructureFailure('model_http_503')
-        result = {'image_id': image_id, 'termination': 'success', 'verdict': 'fake'}
+        from test_psd_source_completion import complete_trace
+        result = {**complete_trace(), 'image_id': image_id}
         if mode == 'format_failure':
             error = RuntimeError('Final report contract failed')
             error._ifv_result = {**result, 'termination': 'error', 'error': str(error)}
@@ -206,17 +207,15 @@ def test_collector_restarts_full_episode_without_touching_native_agent(monkeypat
         resume_from='old_context_must_not_be_used')
     workflow = PSDWorkflow(config)
     result = asyncio.run(workflow.run_single(str(image), 'case--r003'))
-    assert len(calls) == {'recover': 2, 'exhaust': 3, 'format_failure': 1}[mode]
+    assert len(calls) == {'recover': 2, 'exhaust': 3, 'format_failure': 3}[mode]
     assert len(closed) == len(calls) and len({id(row[0]) for row in calls}) == len(calls)
     assert all(row[2:] == (71, None) for row in calls)
     assert len({row[1] for row in calls}) == len(calls)
     assert config.output_dir == str(tmp_path/'run/traces')
     canonical = tmp_path/'run/traces/case--r003.json'
-    assert canonical.exists() == (mode != 'exhaust')
-    if mode == 'exhaust':
+    assert canonical.exists() == (mode == 'recover')
+    if mode in ('exhaust', 'format_failure'):
         assert result['psd_infrastructure_pending']
-    elif mode == 'format_failure':
-        assert result['termination'] == 'error'
 
 
 def test_collection_cannot_pass_with_a_quarantined_slot():

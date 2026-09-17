@@ -159,6 +159,7 @@ def validate_run_scope(run):
     predecessors = {
         'psd-production400x8-20260917-v4': 'psd-production400x8-20260917-v3',
         'psd-production400x8-20260917-v5': 'psd-production400x8-20260917-v4',
+        'psd-production400x8-20260917-v6': 'psd-production400x8-20260917-v5',
     }
     if run.name in predecessors:
         binding = json.loads((run/'binding.json').read_text())

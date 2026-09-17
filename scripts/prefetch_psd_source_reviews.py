@@ -78,20 +78,47 @@ def load_scope(*, run_dir, benchmark, train_cases, private_gold, model):
             'run_dir': run_dir, 'expected': {r['episode_id']: r for r in specs}}
 
 
-def bind_output(output, scope):
+def bind_output(output, scope, cache_source=None):
     output = Path(output).resolve()
     marker = output/'inputs.json'
-    if marker.exists(): load_bound(marker, identity=scope['identity'])
+    source_name = str(Path(cache_source).resolve()) if cache_source is not None else None
+    if marker.exists():
+        payload = load_bound(marker, identity=scope['identity'])
+        if payload.get('cache_source') != source_name: raise ValueError('Prefetch cache source changed')
     else:
         if (output/'records').exists() or (output/'judge-cache').exists():
             raise ValueError('Unbound prefetch data already exists')
-        save_bound(marker, identity=scope['identity'], payload={'training_only': True, 'admission_complete': False})
+        save_bound(marker, identity=scope['identity'], payload={'training_only': True,
+            'admission_complete': False, 'cache_source': source_name})
 
 
 def validate_prefetch_cache(output, **kwargs):
     scope = load_scope(**kwargs)
     output = Path(output).resolve()
-    load_bound(output/'inputs.json', identity=scope['identity'])
+    saved = load_json(output/'inputs.json')['identity']
+    if saved.get('run_dir') != scope['identity']['run_dir']:
+        original_run = Path(saved['run_dir']).resolve()
+        current = scope['run_dir'].parent; seen = set()
+        while current != original_run.parent:
+            if current in seen: raise ValueError('Recovery lineage cycle')
+            seen.add(current)
+            previous = load_json(current/'binding.json').get('reuse_run')
+            if not previous: raise ValueError('Prefetch cache is not from a recovery ancestor')
+            current = Path(previous).resolve()
+            if current.parent != scope['run_dir'].parent.parent: raise ValueError('Recovery lineage escaped run root')
+        original = load_scope(**{**kwargs, 'run_dir': original_run})
+        for key in ('model', 'prompt_sha256', 'schema_sha256', 'trace_projection', 'generation', 'policy'):
+            if original['identity'][key] != scope['identity'][key]: raise ValueError('Recovered review policy differs')
+        if (load_json(original_run.parent/'binding.json')['policy_revision'] !=
+                load_json(scope['run_dir'].parent/'binding.json')['policy_revision']
+                or sha256_file(original_run.parent/'snapshot/checkpoint-manifest.json') !=
+                sha256_file(scope['run_dir'].parent/'snapshot/checkpoint-manifest.json')):
+            raise ValueError('Recovered source checkpoint differs')
+        scope = original
+    payload = load_bound(output/'inputs.json', identity=scope['identity'])
+    if payload.get('cache_source'):
+        if Path(payload['cache_source']).resolve() == output: raise ValueError('Prefetch cache cycle')
+        return validate_prefetch_cache(payload['cache_source'], **{**kwargs, 'run_dir': scope['run_dir']})
     return output/'judge-cache'
 
 
@@ -142,7 +169,7 @@ def completed_source(scope, episode):
 
 
 async def prefetch(*, run_dir, benchmark, train_cases, private_gold, output, model,
-                   concurrency=16, follow=False, limit=None, poll_seconds=30, client=None):
+                   concurrency=16, follow=False, limit=None, poll_seconds=30, client=None, cache_source=None):
     if type(concurrency) is not int or not 1 <= concurrency <= 64: raise ValueError('Invalid concurrency')
     if limit is not None and (type(limit) is not int or limit < 1): raise ValueError('Invalid prefetch limit')
     if poll_seconds <= 0: raise ValueError('Polling interval must be positive')
@@ -150,7 +177,12 @@ async def prefetch(*, run_dir, benchmark, train_cases, private_gold, output, mod
     output = Path(output).resolve()
     # Separate lock directory keeps the private reviewer independent of source writing.
     with search_lock(output/'process-lock'):
-        bind_output(output, scope)
+        cache_dir = output/'judge-cache'
+        if cache_source is not None:
+            cache_dir = validate_prefetch_cache(cache_source, run_dir=run_dir, benchmark=benchmark,
+                train_cases=train_cases, private_gold=private_gold, model=model)
+            with search_lock(Path(cache_source)/'process-lock'): pass
+        bind_output(output, scope, cache_source)
         records = {}
         for path in (output/'records').glob('*.json'):
             raw = load_json(path); value = load_bound(path, identity=raw['identity'])
@@ -190,7 +222,7 @@ async def prefetch(*, run_dir, benchmark, train_cases, private_gold, output, mod
                             await asyncio.sleep(.25)
                     save_bound(record_path, identity=binding, payload={'status': 'in_progress', 'time': time.time()})
                     artifact = await judge_source(client, trace, gold=scope['gold'][scope['expected'][episode]['case_id']],
-                        image_path=image, model=model, cache_dir=output/'judge-cache')
+                        image_path=image, model=model, cache_dir=cache_dir)
                     status = validate_source_review(artifact, trace=trace,
                         gold=scope['gold'][scope['expected'][episode]['case_id']])
                     if await asyncio.to_thread(sha256_file, trace_path) != binding['trace_sha256']:
@@ -260,6 +292,8 @@ def main():
     parser.add_argument('--follow', action='store_true')
     parser.add_argument('--limit', type=int)
     parser.add_argument('--poll-seconds', type=float, default=30)
+    parser.add_argument('--cache-source', type=Path,
+        help='Reuse exact response cache from an idle, validated recovery ancestor')
     print(json.dumps(asyncio.run(prefetch(**vars(parser.parse_args())))), flush=True)
 
 

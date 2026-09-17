@@ -32,8 +32,9 @@ def main():
     parser.add_argument('--recovery-compactor', action='store_true')
     parser.add_argument('--uncapped-storage', action='store_true')
     parser.add_argument('--source-review-prefetch', action='store_true')
+    parser.add_argument('--complete-source', action='store_true')
     args = parser.parse_args()
-    if sum((args.storage_cache, args.storage_spool, args.completed_recovery, args.final_bank_gate, args.slow_storage, args.storage_lineage, args.recovery_compactor, args.uncapped_storage, args.source_review_prefetch)) > 1:
+    if sum((args.storage_cache, args.storage_spool, args.completed_recovery, args.final_bank_gate, args.slow_storage, args.storage_lineage, args.recovery_compactor, args.uncapped_storage, args.source_review_prefetch, args.complete_source)) > 1:
         parser.error('Choose one immutable snapshot variant')
     if args.storage_cache:
         OUT = ROOT / 'training-artifacts/psd-storage-reader-20260917-v31'
@@ -83,6 +84,14 @@ def main():
         BASE = ROOT / 'training-artifacts/psd-uncapped-storage-20260917-v38/code'
         FILES = {'scripts': ['prefetch_psd_source_reviews.py', 'review_psd_sources.py', 'run_psd_round.py'],
                  'training/tests': ['test_psd_source_review_prefetch.py']}
+    if args.complete_source:
+        OUT = ROOT / 'training-artifacts/psd-complete-source-20260917-v40'
+        BASE = ROOT / 'training-artifacts/psd-source-review-prefetch-20260917-v39/code'
+        FILES = {'training/ifv_training': ['psd_source_completion.py', 'psd_infrastructure_retry.py', 'psd_collection_recovery.py'],
+                 'training/tests': ['test_psd_source_completion.py', 'test_psd_infrastructure_retry.py', 'test_psd_source_review_prefetch.py'],
+                 'scripts': ['collect_psd_rollouts.py', 'prefetch_psd_source_reviews.py'],
+                 'scripts/server': ['run_psd_production_collection.py', 'compact_psd_completed_storage.py',
+                     'drain_psd_v5_for_source_completion.py', 'finish_psd_completion_handoff.py']}
     os.umask(0o077)
     code = OUT / 'code'
     if code.exists():

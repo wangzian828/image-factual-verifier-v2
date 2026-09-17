@@ -178,3 +178,27 @@ def test_follower_picks_up_new_completed_slots(bank):
         return value
     assert asyncio.run(asyncio.wait_for(run(), timeout=3))['reviewed'] == 2
     assert client.calls == 2
+
+
+def test_recovery_ancestor_cache_is_reused_but_unrelated_bank_rejected(bank):
+    import shutil
+    args, _, complete, client, manifest = bank
+    for i in range(8): complete(i)
+    asyncio.run(script.prefetch(**args, client=client)); assert client.calls == 8
+    previous = args['run_dir'].parent
+    new = previous.parent/'recovered'
+    shutil.copytree(previous, new)
+    binding = load_json(new/'binding.json')
+    binding.update(snapshot=str(new/'snapshot'), reuse_run=str(previous))
+    write_json(new/'binding.json', binding)
+    updated = {**args, 'run_dir': new/'episodes', 'output': new/'prefetch', 'cache_source': args['output']}
+    assert asyncio.run(script.prefetch(**updated, client=client))['reviewed'] == 8
+    assert client.calls == 8
+    cache = script.validate_prefetch_cache(new/'prefetch', **{k:v for k,v in updated.items()
+        if k not in ('output','cache_source')})
+    assert cache == args['output']/'judge-cache'
+    binding['reuse_run'] = None; write_json(new/'binding.json', binding)
+    with pytest.raises(ValueError, match='ancestor'):
+        script.validate_prefetch_cache(args['output'], **{k:v for k,v in updated.items()
+            if k not in ('output','cache_source')})
+    assert client.calls == 8
