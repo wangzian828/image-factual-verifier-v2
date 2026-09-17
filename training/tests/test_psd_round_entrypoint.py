@@ -9,6 +9,13 @@ from scripts import run_psd_round
 from ifv_training.io import sha256_file, write_json, write_jsonl
 
 
+@pytest.mark.parametrize("name", ["..", "../old", "old/new", "old\\new", "C:old", ""])
+def test_changed_repair_scope_cannot_escape_round(tmp_path, name):
+    import asyncio
+    with pytest.raises(ValueError, match="single directory"):
+        asyncio.run(run_psd_round.prepare(SimpleNamespace(output=tmp_path, search_name=name)))
+
+
 def test_reuse_completed_source_reviews_verifies_index_and_files(tmp_path):
     root = tmp_path / "source-reviews"
     review = root / "reviews" / "review.json"

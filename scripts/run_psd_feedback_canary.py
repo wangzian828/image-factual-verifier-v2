@@ -174,8 +174,12 @@ async def run(args):
     else:
         repair_sources = _iter_jsonl(candidates_path)
     search_started = time.monotonic()
+    def save_case_error(candidate, diagnostic):
+        key = hashlib.sha256(candidate["candidate_id"].encode()).hexdigest()[:16]
+        _atomic_json(output / "case-errors" / (key + ".json"),
+            {"case_id": candidate["case_id"], "time": time.time(), **diagnostic})
     async for index, candidate, outcome, error in completed_cases(repair_sources,
-            repair_case, concurrency=args.case_concurrency):
+            repair_case, concurrency=args.case_concurrency, on_error=save_case_error):
         completed_after_seconds = time.monotonic() - search_started
         summary["search_wall_seconds"] = previous_wall_seconds + completed_after_seconds
         summary["search_invocations"] = [*previous_invocations, {

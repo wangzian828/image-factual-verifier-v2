@@ -242,6 +242,11 @@ def attest(args):
 
 async def prepare(args):
     root = args.output.resolve()
+    search_name = getattr(args, "search_name", "search")
+    if (not search_name or search_name in {".", ".."}
+            or any(character in search_name for character in ("/", "\\", ":"))):
+        raise ValueError("PSD search name must be a single directory name")
+    search_root = root / search_name
     snapshot = args.snapshot.resolve()
     serving, checkpoint = snapshot / "serving-profile.json", snapshot / "checkpoint-manifest.json"
     run_dir = args.run_dir.resolve()
@@ -316,14 +321,14 @@ async def prepare(args):
     if prepared.exists() and load_json(prepared) != preparation:
         raise ValueError("PSD source preparation changed")
     write_json(prepared, preparation)
-    result = await run_feedback(SimpleNamespace(source=bank, output=root / "search", snapshot=snapshot,
+    result = await run_feedback(SimpleNamespace(source=bank, output=search_root, snapshot=snapshot,
         attempts=args.attempts, case_concurrency=args.case_concurrency, judge_model=args.judge_model,
         task_source_selection=getattr(args, "task_source_selection", "all"),
         repair_mode=getattr(args, "repair_mode", "feedback"),
         score_missing_topk=not getattr(args, "defer_topk", False), teacher_device=args.teacher_device))
     if result["status"] != "search_complete_datums_materialized":
-        return {"status": result["status"], "training_started": False, "search": str(root / "search/progress.json")}
-    datums = root / "search/datums/datums.jsonl"
+        return {"status": result["status"], "training_started": False, "search": str(search_root / "progress.json")}
+    datums = search_root / "datums/datums.jsonl"
     manifest = datums.parent / "manifest.json"
     profile = load_json(serving)
     base = profile.get("engine_model_path") or profile["model_path"]
@@ -412,6 +417,8 @@ def main():
     prepare_parser.add_argument("--task-source-selection", choices=("all", "longest_failed"), default="longest_failed")
     prepare_parser.add_argument("--repair-mode", choices=("slate", "feedback"), default="slate")
     prepare_parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
+    prepare_parser.add_argument("--search-name", default="search",
+        help="Isolate changed repair model/configuration while reusing the completed source bank")
     prepare_parser.add_argument("--teacher-device", default="cpu")
     prepare_parser.add_argument("--defer-topk", action="store_true",
         help="Finish source review/repair/target assembly before a separate GPU teacher handoff; rerun without this flag to score the same frozen targets")

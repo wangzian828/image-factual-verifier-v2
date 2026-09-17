@@ -43,6 +43,22 @@ def test_case_failure_does_not_cancel_other_cases_or_expose_exception_text():
     asyncio.run(scenario())
 
 
+def test_error_diagnostic_preserves_http_status_without_secret_body():
+    class ProviderError(RuntimeError):
+        status_code = 429
+    diagnostics = []
+    async def scenario():
+        async def worker(item):
+            raise ProviderError("SECRET API KEY AND RESPONSE BODY")
+        return [row async for row in completed_cases([1], worker,
+            on_error=lambda item, diagnostic: diagnostics.append((item, diagnostic)))]
+    rows = asyncio.run(scenario())
+    assert rows[0][3] == "ProviderError"
+    assert diagnostics[0][1]["http_status"] == 429
+    assert diagnostics[0][1]["frames"][-1]["function"] == "worker"
+    assert "SECRET" not in str(diagnostics)
+
+
 def test_stopping_consumer_cancels_inflight_workers():
     async def scenario():
         entered = asyncio.Event()

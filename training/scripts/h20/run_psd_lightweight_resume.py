@@ -15,9 +15,10 @@ import time
 ROOT = Path("/volume/ybo/wza")
 RUN = ROOT / "runs/psd-production400x8-20260917-v6"
 ROUND = ROOT / "runs/psd-production-round1-20260917-v1"
-CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v10"
-DEPLOY = ROOT / "training-artifacts/psd-streaming-materialization-20260917-v54"
+CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-flash-high-v1"
+DEPLOY = ROOT / "training-artifacts/psd-flash-high-20260917-v55"
 CODE = DEPLOY / "code"
+SEARCH_NAME = "search-gemini37-flash-high"
 PREFETCH = RUN / "source-review-prefetch-v2-auto-retry"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
 PRIVATE_ENV = ROOT / "private/runtime.env"
@@ -75,7 +76,7 @@ def external_environment() -> tuple[dict[str, str], dict[str, bool]]:
     }
     if not all(checks.values()):
         raise RuntimeError("PSD external credential preflight is incomplete")
-    parsed["GEMINI_MAX_INFLIGHT_REQUESTS"] = "4"
+    parsed["GEMINI_MAX_INFLIGHT_REQUESTS"] = "16"
     return parsed, checks
 
 
@@ -155,13 +156,14 @@ def prepare_command() -> list[str]:
         "--reuse-completed-source-reviews",
         "--source-review-prefetch", str(PREFETCH), "--expected-rollouts-per-case", "8",
         "--task-source-selection", "longest_failed", "--repair-mode", "slate",
-        "--judge-model", "gemini-3.1-pro-preview", "--teacher-device", "cuda:0", "--defer-topk"]
+        "--search-name", SEARCH_NAME,
+        "--judge-model", "gemini-3.7-flash", "--teacher-device", "cuda:0", "--defer-topk"]
 
 
 def current_status() -> str:
     if (ROUND / "ready.json").exists():
         return "ready_for_training"
-    progress = ROUND / "search/progress.json"
+    progress = ROUND / SEARCH_NAME / "progress.json"
     if progress.exists():
         return str(load(progress).get("status") or "")
     postprocess = RUN / "episodes/psd-postprocess-progress.json"
@@ -171,7 +173,6 @@ def current_status() -> str:
 
 
 def worker() -> None:
-    reconcile_controlled_interruptions()
     retryable = {"", "postprocess_running", "paused_search_requires_resume"}
     for attempt in range(1, 33):
         save(CONTROL / "state.json", {"phase": "formal_prepare", "attempt": attempt,
@@ -199,7 +200,8 @@ def launch() -> None:
         raise RuntimeError("lightweight PSD controller already exists")
     state = load(DEPLOY / "stage-state.json")
     if (state.get("deployment_ready_not_live") is not True
-            or state.get("commit") != "a8ee56c"):
+            or state.get("repair_model") != "gemini-3.7-flash"
+            or state.get("thinking_level") != "high"):
         raise RuntimeError("lightweight PSD deployment is not validated")
     old_owners = []
     for process in Path("/proc").glob("[0-9]*/cmdline"):
@@ -221,7 +223,8 @@ def launch() -> None:
     receipt = owner.spawn(command, env, CONTROL / "controller.log")
     save(CONTROL / "process.json", receipt)
     save(CONTROL / "state.json", {"phase": "launched", "external_checks": checks,
-        "gemini_max_inflight_requests": 4, "time": time.time()})
+        "gemini_max_inflight_requests": 16, "repair_model": "gemini-3.7-flash",
+        "thinking_level": "high", "time": time.time()})
     print(json.dumps({"pid": receipt["pid"], "mode": "lightweight_resume"}))
 
 
