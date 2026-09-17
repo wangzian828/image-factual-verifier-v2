@@ -14,8 +14,8 @@ import time
 ROOT = Path("/volume/ybo/wza")
 RUN = ROOT / "runs/psd-production400x8-20260917-v6"
 ROUND = ROOT / "runs/psd-production-round1-20260917-v1"
-CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v3"
-DEPLOY = ROOT / "training-artifacts/psd-lightweight-postprocess-20260917-v50"
+CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v4"
+DEPLOY = ROOT / "training-artifacts/psd-lightweight-candidates-20260917-v51"
 CODE = DEPLOY / "code"
 PREFETCH = RUN / "source-review-prefetch-v2-auto-retry"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
@@ -95,7 +95,7 @@ def launch() -> None:
         raise RuntimeError("lightweight PSD controller already exists")
     state = load(DEPLOY / "stage-state.json")
     if (state.get("deployment_ready_not_live") is not True
-            or state.get("commit") != "c6d9bbb"):
+            or state.get("commit") != "50e089d"):
         raise RuntimeError("lightweight PSD deployment is not validated")
     old_owners = []
     for process in Path("/proc").glob("[0-9]*/cmdline"):
