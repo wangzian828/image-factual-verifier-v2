@@ -1,5 +1,33 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 13:36 找到并修复JSON引用误报，CODE44已做真实缓存验收
+
+- 活跃collector仍CODE41/v6、prefetch仍CODE42/v2-auto-retry，不重启、不热改；2476/3200完整，
+  0normal_error/0pending_infrastructure。评分2101有效、39pending、16worker、0传输额度耗尽，
+  原错误自动重试在继续。存储admission_open=true、按inode去重117.77GiB，个人quota仍未知。
+  13:27朋友Pro160成功/45失败/231未尝试继续串行；模型服务与guard精确身份正常。
+- 将旧21条引用错误逐条禁网重放，原来27处bad quote均不是索引错位；进一步检查发现其中19条
+  只是**工具结果中的完整JSON字符串未解码**（如真实引号存成反斜杠转义），或quote自身是JSON编码的
+  带外引号子串。并非19条都在编造证据。证据在CODE43父目录literal-evidence-diagnostic.json和
+  literal-json-encoding-diagnostic.json，未发新provider请求。
+- CODE44=`/volume/ybo/wza/training-artifacts/psd-literal-json-20260917-v44/code`，含CODE43 AVIF修复；
+  代码`2940ff8`已本地push，89本地定向/510服务器PSD回归通过，Agent逐字不变，父目录stage-state及
+  code-binding齐全。新增显式`evidence_encoding=ifv-psd-literal-json-strings-v1`，仅在原严格路径和
+  单次纠正后的最终决定仍因literal错误被拒时，允许机械读取完整JSON的字符串值（最多3层）及
+  quote的单层JSON字符串编码。原step_index不变，仍要求同一字段内逐字/原有显式省略规则匹配；
+  不折叠空格/大小写、不改数字、不换标点、不跨字段拼接、不模糊匹配，不修改Gemini判决或引用原文。
+  新解释标记可复验；旧有效artifact及原严格纠正链完全保持，不重新选择之前已被拒的首个判决。
+- CODE44父目录`real-json-evidence-canary.json`：21条真实轨迹中19条验收恢复、2条仍pending，
+  0新provider调用；恢复的artifact另存offline-source-reviews，旧记录不改。4条plain+4条原corrected
+  有效对照逐字相同。后续正常formal review会从相同原缓存重现这些artifact，不要手改活跃prefetch记录。
+- 剩余2条确有词语改写：一个把原文“the athlete's bib displays”写成“The bib shows”，另一个漏掉
+  “visual”。仍拒绝，不用最长相似子串补证据；需要后续有边界的引用修复方案，不能伪装已全部解决。
+  新增轨迹可能有其他格式错误，应按相同严格方法诊断，不能假定所有39pending都由这19条解释。
+- 当前不要为升级评分而中断在途调用。安全排空/正式prepare时使用CODE44（替代候选CODE43），
+  仍指向v6/source-review-prefetch-v2-auto-retry以复用缓存；AVIF固定轨迹真实Gemini验收尚待空闲额度，
+  不额外叠加第17路。最终bank DP4 deployment改为psd-literal-json-20260917-v44且必须显式ready。
+  源评分/完整bank/冻结raw教师/global32恢复/5epoch门槛全部不变，optimizer_steps仍0。
+
 ## 2026-09-17 13:10 常规推进；AVIF评分传输修复已备好，未热切换
 
 - 实时collector仍CODE41/v6，2377/3200完整、0normal_error/0pending_infrastructure；四副本健康。
