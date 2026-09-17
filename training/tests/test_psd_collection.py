@@ -2,7 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ifv_training.psd_collection import select_task_repair_sources, verify_collection
+from ifv_training.psd_collection import (build_task_repair_selection_parallel,
+    select_task_repair_sources, verify_collection)
 from ifv_training.psd_collection import require_token_capture_environment
 from src.eval.rollout import rollout_specs
 from src.eval.result_records import run_result_record
@@ -91,3 +92,35 @@ def test_longest_failed_episode_selected_per_task_without_discarding_sources():
     assert selected == [rows[1]]
     assert len(rows) == 2
     assert audit["tasks"][0]["unselected_episode_ids"] == ["short"]
+
+
+def test_parallel_longest_selection_streams_exact_selected_rows(tmp_path):
+    import hashlib
+    import json
+    from ifv_training.io import load_json, load_jsonl, write_jsonl
+
+    run_dir = tmp_path / "run"
+    candidates = []
+    for case_id, episode_id, count in [("b", "b-short", 2), ("a", "a-long", 9),
+                                       ("a", "a-short", 3), ("b", "b-long", 8)]:
+        trace = run_dir / "traces" / f"{episode_id}.json"
+        trace.parent.mkdir(parents=True, exist_ok=True)
+        raw = json.dumps({"state": {"all_steps": [{}] * count}}).encode()
+        trace.write_bytes(raw)
+        candidates.append({"class": "repair_seed", "candidate_id": f"candidate:{episode_id}",
+            "case_id": case_id, "episode_id": episode_id,
+            "large": list(range(count * 100)), "source": {
+                "source_trace_path": trace.relative_to(run_dir).as_posix(),
+                "source_trace_sha256": hashlib.sha256(raw).hexdigest()}})
+    candidate_path = tmp_path / "candidates.jsonl"
+    write_jsonl(candidate_path, candidates)
+    result = build_task_repair_selection_parallel(candidates_path=candidate_path,
+        run_dir=run_dir, output_dir=tmp_path / "selected", workers=2)
+    chosen = load_jsonl(tmp_path / "selected/selected_candidates.jsonl")
+    assert [(row["case_id"], row["episode_id"]) for row in chosen] == [
+        ("a", "a-long"), ("b", "b-long")]
+    selection = load_json(tmp_path / "selected/selection.json")
+    assert selection["original_candidates"] == 4
+    assert selection["selected_tasks"] == 2
+    assert result["selected_candidates_sha256"] == hashlib.sha256(
+        (tmp_path / "selected/selected_candidates.jsonl").read_bytes()).hexdigest()

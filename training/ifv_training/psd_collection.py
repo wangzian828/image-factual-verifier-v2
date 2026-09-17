@@ -1,5 +1,12 @@
 """Explicit grouped sampling and upstream failed-episode selection for PSD."""
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
+import hashlib
+import json
+from multiprocessing import get_context
+import os
+from pathlib import Path
+import shutil
 from types import SimpleNamespace
 
 from src.eval.rollout import rollout_specs
@@ -194,3 +201,141 @@ def select_task_repair_sources(candidates, *, load_trace):
             "unselected_episode_ids": [r["episode_id"] for _, r in ranked[1:]]})
     return selected, {"policy": "longest_failed_episode_per_task; episode_id_tie_break",
         "original_candidates": len(candidates), "selected_tasks": len(selected), "tasks": records}
+
+
+def _measure_repair_source(job):
+    path = Path(job["trace_path"])
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != job["trace_sha256"]:
+        raise ValueError("PSD source changed before task selection")
+    trace = json.loads(raw)
+    steps = trace.get("state", {}).get("all_steps") if isinstance(trace, dict) else None
+    if not isinstance(steps, list) or not steps:
+        raise ValueError("repair source lacks recorded steps")
+    return {**job, "source_steps": len(steps)}
+
+
+def _atomic_json(path, value):
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+                             encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def build_task_repair_selection_parallel(*, candidates_path, run_dir, output_dir,
+                                         workers=16):
+    """Select one longest failed trace per task without loading the source bank.
+
+    Candidate rows can contain hundreds of thousands of token IDs.  Keep only
+    small identities while measuring traces, then copy the chosen original rows
+    byte-for-byte in deterministic task order.
+    """
+    from .io import require_new_or_empty, sha256_file, write_json
+
+    if type(workers) is not int or not 1 <= workers <= 32:
+        raise ValueError("PSD task-selection workers must be in [1, 32]")
+    candidates_path = Path(candidates_path).resolve()
+    run_dir = Path(run_dir).resolve()
+    output_dir = Path(output_dir)
+    require_new_or_empty(output_dir)
+    jobs, seen_ids = [], set()
+    with candidates_path.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            candidate_id = row.get("candidate_id")
+            case_id, episode_id = row.get("case_id"), row.get("episode_id")
+            binding = row.get("source") if isinstance(row.get("source"), dict) else {}
+            if (row.get("class") != "repair_seed" or not candidate_id or not case_id
+                    or not episode_id or candidate_id in seen_ids):
+                raise ValueError(f"invalid PSD repair seed at line {line_number}")
+            seen_ids.add(candidate_id)
+            trace = (run_dir / str(binding.get("source_trace_path") or "")).resolve()
+            try:
+                trace.relative_to(run_dir)
+            except ValueError as exc:
+                raise ValueError("repair source escaped rollout directory") from exc
+            digest = binding.get("source_trace_sha256")
+            if not trace.is_file() or not isinstance(digest, str) or len(digest) != 64:
+                raise ValueError("repair source binding is incomplete")
+            jobs.append({"candidate_id": candidate_id, "case_id": case_id,
+                "episode_id": episode_id, "trace_path": str(trace),
+                "trace_sha256": digest})
+
+    progress = output_dir / "selection-progress.json"
+    _atomic_json(progress, {"status": "measuring", "completed": 0,
+        "total": len(jobs), "workers": workers})
+    measured = []
+    executor = ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"))
+    try:
+        for completed, result in enumerate(
+                executor.map(_measure_repair_source, jobs, chunksize=1), 1):
+            measured.append(result)
+            if completed % 10 == 0 or completed == len(jobs):
+                _atomic_json(progress, {"status": "measuring", "completed": completed,
+                    "total": len(jobs), "workers": workers})
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    groups = defaultdict(list)
+    for row in measured:
+        groups[row["case_id"]].append(row)
+    selected_ids, records = [], []
+    for case_id, group in sorted(groups.items()):
+        if len({row["episode_id"] for row in group}) != len(group):
+            raise ValueError("duplicate repair source episode")
+        ranked = sorted(group, key=lambda row: (-row["source_steps"], row["episode_id"]))
+        chosen = ranked[0]
+        selected_ids.append(chosen["candidate_id"])
+        records.append({"case_id": case_id,
+            "selected_episode_id": chosen["episode_id"],
+            "source_steps": chosen["source_steps"],
+            "failed_episodes": len(group),
+            "unselected_episode_ids": [row["episode_id"] for row in ranked[1:]]})
+    selection = {"policy": "longest_failed_episode_per_task; episode_id_tie_break",
+        "original_candidates": len(jobs), "selected_tasks": len(selected_ids),
+        "tasks": records}
+
+    selected = set(selected_ids)
+    shards = output_dir / ".rows"
+    found = set()
+    with candidates_path.open(encoding="utf-8") as source:
+        for line in source:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            candidate_id = row.get("candidate_id")
+            if candidate_id not in selected:
+                continue
+            shard = shards / f"{candidate_id.replace(':', '-')}.jsonl"
+            shard.parent.mkdir(parents=True, exist_ok=True)
+            shard.write_text(line if line.endswith("\n") else line + "\n", encoding="utf-8")
+            found.add(candidate_id)
+    if found != selected:
+        raise ValueError("selected PSD repair source disappeared during streaming copy")
+    selected_path = output_dir / "selected_candidates.jsonl"
+    with selected_path.open("wb") as destination:
+        for candidate_id in selected_ids:
+            shard = shards / f"{candidate_id.replace(':', '-')}.jsonl"
+            with shard.open("rb") as source:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+    shutil.rmtree(shards)
+    write_json(output_dir / "selection.json", selection)
+    manifest = {"schema_version": "ifv-psd-task-source-selection-v1",
+        "source_candidates": str(candidates_path),
+        "source_candidates_sha256": sha256_file(candidates_path),
+        "selected_candidates": "selected_candidates.jsonl",
+        "selected_candidates_sha256": sha256_file(selected_path),
+        "selection": "selection.json", "workers": workers,
+        "original_candidates": len(jobs), "selected_tasks": len(selected_ids)}
+    write_json(output_dir / "manifest.json", manifest)
+    _atomic_json(progress, {"status": "completed", "completed": len(jobs),
+        "total": len(jobs), "workers": workers,
+        "selected_tasks": len(selected_ids)})
+    return manifest

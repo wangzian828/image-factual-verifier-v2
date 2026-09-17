@@ -24,7 +24,20 @@ from ifv_training.psd import build_psd_target_package
 from ifv_training.psd_datums import build_sparse_topk_package
 from ifv_training.psd_case_pool import completed_cases
 from ifv_training.psd_materialization import materialize_bank
+from ifv_training.psd_materialization import completed_package
+from ifv_training.psd_collection import build_task_repair_selection_parallel
 from scripts.run_psd_repair_driver import _parser, _run
+
+
+def _iter_jsonl(path):
+    with Path(path).open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError(f"{path}:{line_number} must be a JSON object")
+            yield row
 
 
 async def run(args):
@@ -144,21 +157,22 @@ async def run(args):
         result = await _run(_parser().parse_args(cli))
         return {"case_id": case, "directory": str(directory), "result": result}
 
-    repair_sources = load_jsonl(candidates_path)
+    repair_sources = None
     if task_source_selection == "longest_failed":
-        from ifv_training.psd_collection import select_task_repair_sources
-        def source_trace(candidate):
-            path = (run_dir / candidate["source"]["source_trace_path"]).resolve()
-            path.relative_to(run_dir.resolve())
-            if sha256_file(path) != candidate["source"]["source_trace_sha256"]:
-                raise ValueError("PSD source changed before task selection")
-            return load_json(path)
-        repair_sources, selection = select_task_repair_sources(repair_sources, load_trace=source_trace)
+        selection_root = output / "task-source-selection"
+        completed_package(output_dir=selection_root, input_files=[candidates_path],
+            build=lambda destination: build_task_repair_selection_parallel(
+                candidates_path=candidates_path, run_dir=run_dir,
+                output_dir=destination, workers=min(args.case_concurrency, 16)))
+        selection = load_json(selection_root / "selection.json")
+        repair_sources = _iter_jsonl(selection_root / "selected_candidates.jsonl")
         selection_path = output / "task-source-selection.json"
         if selection_path.exists() and load_json(selection_path) != selection:
             raise ValueError("PSD task source selection changed")
         write_json(selection_path, selection)
         summary["task_source_selection"] = {k: v for k, v in selection.items() if k != "tasks"}
+    else:
+        repair_sources = _iter_jsonl(candidates_path)
     search_started = time.monotonic()
     async for index, candidate, outcome, error in completed_cases(repair_sources,
             repair_case, concurrency=args.case_concurrency):
