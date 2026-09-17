@@ -1,5 +1,24 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 16:55 全量采集尾声与正式repair自动接续
+
+- 正式400×8采集已到3199/3200，0 normal error、0 pending infrastructure；最后一条处于原有
+  3000秒整轨迹预算内，基础设施失败仍由既有有界重试处理。四卡服务、真实计算guard、compactor、
+  source reviewer均保留，未因尾部样本重启或改变采样身份。
+- CODE45=`/volume/ybo/wza/training-artifacts/psd-abstention-quote-repair-20260917-v45/code`，
+  代码`440621f`，服务器515项PSD回归通过，冻结Agent逐字不变。有效`unresolved`现作为有绑定记录的
+  terminal abstention保留并排除PSD loss，只有`pending_error`阻塞；不会把无法确定的私有标签硬塞进
+  repair/preservation，也不删除3200条源轨迹。两次完整判决若只剩非逐字引用，可追加一次quote-only
+  请求；它不能改变status、explanation、证据数、trace或step index，只能从指定原step复制字面子串。
+- 固定两条非逐字缓存案例中第一条已真实完成quote-only修复并通过全绑定验收；第二条首次真实请求
+  收到HTTP429，原失败目录保留。没有重抽判决。正式接续控制器会在16路prefetch完全排空后，仅对第二条
+  在新目录做最多4次有界重试，再进入正式流程。
+- 已启动CODE46自动接续控制器（本地提交`037e6f8`，远端PID初值1369138）：它只从当前可信reviewer
+  进程继承凭据到内存，不把密钥写盘；等待collector和prefetch精确receipt退出并复验3200槽、完整性gate
+  及prefetch lock后，自动用CODE45启动round1。正式source-review尾部降至4路以清429，repair仍按原计划
+  最长失败轨迹/每题最多6次完整尝试、40 case并发，进程级Gemini上限16，先`--defer-topk`构建冻结目标。
+  不会提前停四卡服务、启动raw-teacher或optimizer；到`requires_frozen_teacher_topk`才进行下一次受控切换。
+
 ## 2026-09-17 16:06 PSD评分优先，朋友Pro在当前样本后暂时排空
 
 - PSD collector仍健康，16:04为3020/3200、0 normal error、0 pending infrastructure，
