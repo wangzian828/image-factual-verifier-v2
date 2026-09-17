@@ -150,3 +150,27 @@ rejected, not a training target. These need bounded corrective feedback/recovery
 before the final bank can be complete; blindly replaying the same invalid cache
 does not solve them. Do not erase them, weaken admission, or report that every
 PSD issue/full training is finished. Continue while other valid cases progress.
+
+## Bounded tail recovery (v60, staged 2026-09-18)
+
+Live inspection of the resumed formal pass separated two additional tail
+conditions without changing the PSD method or accepting weaker targets:
+
+- Completed slate-review responses can have a valid semantic decision but
+  nonliteral/misbound citations. A separately bound evidence-only correction
+  now freezes `status`, `failed_position`, `passing_positions`, and
+  `explanation`; it may only copy literal repaired-trace substrings and bind
+  them to valid native positions/step indices. If that immutable decision
+  cannot be supported, the case remains rejected. No fail/pass decision is
+  resampled.
+- Direct tokenizer/live-serving httpx transport exceptions could bypass the
+  backend wrapper and be persisted as `nonretryable_error`. They now consume
+  the same existing infrastructure-attempt budget as wrapped transport errors.
+  At a completed-pass boundary only, exact legacy transport error types are
+  reclassified after byte-for-byte backup and hashing. Attempts remain charged;
+  budgets and case selection are not reset.
+
+The v60 handoff waits behind v59 and then for v59's current prepare pass to
+finish. It does not interrupt active investigations. Local targeted tests:
+**98 passed**. Server staging and the immutable deployment receipt remain
+required before this section can be treated as live.

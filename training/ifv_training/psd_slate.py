@@ -313,6 +313,28 @@ REVIEW_SCHEMA = {"type": "object", "properties": {
     "required": ["status", "failed_position", "passing_positions", "explanation", "evidence"],
     "additionalProperties": False}
 
+EVIDENCE_CORRECTION_PROMPT = """You are repairing only the evidence-citation
+serialization of one completed private PSD slate review. The supplied status,
+failed_position, passing_positions and explanation are immutable DATA. They are
+not ground truth and must not be changed or re-judged. Copy literal, non-empty
+substrings from repaired_steps and bind each quote to its real step_index and
+one required native decision position. Evidence for a decision may cite only a
+step available no later than that decision. Cover every required position and
+do not cite any other position. Do not use the private reference, add a new
+claim, paraphrase a quote, normalize wording, or favor pass. If the immutable
+decision cannot be supported under these constraints, return repairable=false
+and an empty evidence array. Return JSON only.
+"""
+EVIDENCE_CORRECTION_SCHEMA = {"type": "object", "properties": {
+    "repairable": {"type": "boolean"},
+    "evidence": {"type": "array", "items": {"type": "object", "properties": {
+        "position": {"type": "integer"}, "step_index": {"type": "integer"},
+        "trace": {"type": "string", "enum": ["repaired"]}, "quote": {"type": "string"}},
+        "required": ["position", "step_index", "trace", "quote"],
+        "additionalProperties": False}}},
+    "required": ["repairable", "evidence"], "additionalProperties": False}
+EVIDENCE_CORRECTION_VERSION = "ifv-psd-slate-evidence-correction-v1"
+
 
 def decision_map(trace):
     result, action = {}, 0
@@ -327,8 +349,7 @@ def decision_map(trace):
     return result
 
 
-def validate_slate_review(value, *, packet):
-    from .psd_gemini_judge import validate_evidence
+def _validate_slate_review_semantics(value, *, packet):
     if (not isinstance(value, dict) or set(value) != set(REVIEW_SCHEMA["required"])
             or value["status"] not in {"pass", "fail", "unresolved"}
             or type(value["failed_position"]) is not int
@@ -353,6 +374,12 @@ def validate_slate_review(value, *, packet):
     if not isinstance(value["evidence"], list) or any(not isinstance(r, dict)
             or set(r) != {"position", "trace", "step_index", "quote"} for r in value["evidence"]):
         raise ValueError("invalid PSD slate evidence fields")
+    return positions, passing, failed
+
+
+def validate_slate_review(value, *, packet):
+    from .psd_gemini_judge import validate_evidence
+    positions, passing, failed = _validate_slate_review_semantics(value, packet=packet)
     # Reuse the literal-quote validator in its one-trace mode; this mapping is
     # local validation only, not a change to stored source/repaired lineage.
     validate_evidence([{**{k: r[k] for k in ("step_index", "quote")}, "trace": "source"}
@@ -372,6 +399,41 @@ def validate_slate_review(value, *, packet):
     if not required <= covered:
         raise ValueError("PSD slate verifier did not support every claimed position")
     return value
+
+
+def _slate_evidence_correction_packet(packet, decision):
+    positions, passing, failed = _validate_slate_review_semantics(decision, packet=packet)
+    required = sorted(passing | ({failed} if decision["status"] == "fail" else set()))
+    return {"repaired_steps": packet["repaired_steps"],
+        "decision_map": {str(position): positions[position] for position in sorted(positions)},
+        "required_positions": required,
+        "immutable_decision": {name: decision[name] for name in (
+            "status", "failed_position", "passing_positions", "explanation")},
+        "invalid_evidence": decision["evidence"]}
+
+
+def _apply_slate_evidence_correction(decision, correction, packet):
+    # Only evidence-contract failures are eligible.  A valid decision is never
+    # resampled, and malformed/conflicting semantic fields remain rejected.
+    _validate_slate_review_semantics(decision, packet=packet)
+    try:
+        validate_slate_review(decision, packet=packet)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("valid PSD slate reviews must never be corrected")
+    if (not isinstance(correction, dict)
+            or set(correction) != set(EVIDENCE_CORRECTION_SCHEMA["required"])
+            or type(correction["repairable"]) is not bool
+            or not isinstance(correction["evidence"], list)):
+        raise ValueError("invalid PSD slate evidence correction")
+    if not correction["repairable"]:
+        if correction["evidence"]:
+            raise ValueError("unrepairable PSD slate review returned evidence")
+        raise ValueError("PSD slate evidence is not repairable")
+    repaired = {**decision, "evidence": correction["evidence"]}
+    validate_slate_review(repaired, packet=packet)
+    return repaired
 
 
 async def review_slate(client, *, source, episode, gold, image_path, model, cache_dir, targets):
@@ -399,11 +461,30 @@ async def review_slate(client, *, source, episode, gold, image_path, model, cach
         "private_reference": gold, "media": media}
     value, provenance = await _request(client, packet, prompt=REVIEW_PROMPT,
         schema=REVIEW_SCHEMA, model=model, images=images, cache_dir=cache_dir)
-    validate_slate_review(value, packet=packet)
-    return {"schema_version": "ifv-psd-slate-review-v3", "decision": value,
+    evidence_correction = None
+    try:
+        validate_slate_review(value, packet=packet)
+    except ValueError:
+        # Preserve the semantic decision and the completed primary response.
+        # A separately bound request may only repair literal citations and
+        # native position/step bindings.  It cannot turn fail into pass.
+        correction_packet = _slate_evidence_correction_packet(packet, value)
+        correction, correction_provenance = await _request(client, correction_packet,
+            prompt=EVIDENCE_CORRECTION_PROMPT, schema=EVIDENCE_CORRECTION_SCHEMA,
+            model=model, cache_dir=cache_dir)
+        invalid_decision = value
+        value = _apply_slate_evidence_correction(invalid_decision, correction, packet)
+        evidence_correction = {"version": EVIDENCE_CORRECTION_VERSION,
+            "invalid_decision_sha256": _sha(invalid_decision), "response": correction,
+            "provenance": correction_provenance,
+            "packet_sha256": _sha(correction_packet)}
+    result = {"schema_version": "ifv-psd-slate-review-v3", "decision": value,
         "hints_sha256": _sha(hints),
         "episode_sha256": _sha(episode), "private_reference_sha256": _sha(gold),
         "provenance": provenance, "media": media, "packet_sha256": _sha(packet)}
+    if evidence_correction is not None:
+        result["evidence_correction"] = evidence_correction
+    return result
 
 
 def assemble_slate_attempts(*, seed, source, source_hash, episode, targets, review,

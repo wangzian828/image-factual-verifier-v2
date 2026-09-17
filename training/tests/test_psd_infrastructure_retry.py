@@ -145,7 +145,7 @@ def test_budget_persists_and_exhausted_slot_is_never_accepted(tmp_path):
 
 
 @pytest.mark.parametrize('error', [RuntimeError('bad tool syntax'), ValueError('wrong verdict'),
-    OSError('disk full'), httpx.ConnectError('tool service unavailable'), asyncio.CancelledError()])
+    OSError('disk full'), asyncio.CancelledError()])
 def test_unmarked_errors_and_cancellation_are_not_retried(tmp_path, error):
     calls = []
     async def generate(directory):
@@ -156,6 +156,23 @@ def test_unmarked_errors_and_cancellation_are_not_retried(tmp_path, error):
     with pytest.raises(RuntimeError, match='unresolved'):
         asyncio.run(retry_episode(root=tmp_path, identity={}, generate=generate, sleep=no_sleep))
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('error', [httpx.ConnectError('policy service unavailable'),
+    httpx.ReadError('policy connection reset'), httpx.ConnectTimeout('policy connect timeout'),
+    httpx.ReadTimeout('policy read timeout')])
+def test_direct_transport_errors_use_the_existing_infrastructure_budget(tmp_path, error):
+    calls = []
+    async def generate(directory):
+        calls.append(directory)
+        if len(calls) == 1:
+            raise error
+        return {'termination': 'success'}
+    result = asyncio.run(retry_episode(root=tmp_path, identity={}, generate=generate, sleep=no_sleep))
+    assert result == {'termination': 'success'} and len(calls) == 2
+    attempts = json.loads((tmp_path/'retry-state.json').read_text())['payload']['attempts']
+    assert [row['status'] for row in attempts] == ['infrastructure_failed', 'completed']
+    assert attempts[0]['error_type'] == type(error).__name__
 
 
 def test_parallel_same_slot_cannot_double_dispatch(tmp_path):

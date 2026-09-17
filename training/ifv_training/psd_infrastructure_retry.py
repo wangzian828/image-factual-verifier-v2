@@ -247,6 +247,19 @@ async def retry_episode(*, root, identity, generate, max_attempts=MAX_ATTEMPTS,
                 save_bound(marker, identity=binding, payload=state)
                 continue
             except BaseException as error:
+                # A few policy requests bypass the backend wrapper (for
+                # example tokenizer and live-serving probes).  They can still
+                # raise the same concrete httpx transport exceptions.  Classify
+                # those by exception provenance here instead of permanently
+                # poisoning the persisted ledger as a policy/code failure.
+                # This does not inspect generated text, checker outcomes or
+                # labels, and it consumes the ordinary infrastructure budget.
+                reason = None if isinstance(error, asyncio.CancelledError) else _transport_reason(error)
+                if reason is not None:
+                    row.update(status="infrastructure_failed", reason=reason,
+                               error_type=type(error).__name__)
+                    save_bound(marker, identity=binding, payload=state)
+                    continue
                 row.update(status="interrupted" if isinstance(error, asyncio.CancelledError)
                            else "nonretryable_error", error_type=type(error).__name__)
                 save_bound(marker, identity=binding, payload=state)

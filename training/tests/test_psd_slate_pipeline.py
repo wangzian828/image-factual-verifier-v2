@@ -7,7 +7,7 @@ import pytest
 
 from ifv_training.psd_repair import _sha, build_hint_proposal, verify_repair
 from ifv_training.psd_slate import (validate_slate_review, assemble_slate_attempts,
-    validate_prefix_lineage, propose_slate)
+    validate_prefix_lineage, propose_slate, review_slate)
 from ifv_training.psd_repairs import _validate_attempt
 from test_psd_repairs import _repair_candidate, _attempt
 
@@ -36,6 +36,63 @@ def test_slate_review_requires_observed_support_for_every_position():
             data["episode_complete"] = False
         with pytest.raises(ValueError):
             validate_slate_review(bad, packet=data)
+
+
+def test_slate_review_repairs_only_bound_evidence_not_the_decision(monkeypatch, tmp_path):
+    import ifv_training.psd_gemini_judge as judge
+    source = {"state": {"all_steps": [
+        {"stage": "unified_react", "action_type": "tool_call", "thought": "inspect the visible sign"},
+        {"stage": "unified_judgment", "action_type": "output", "output": "final report"}]}}
+    episode = copy.deepcopy(source)
+    episode.update(termination="success", psd_repair={"slate": {"used_positions": [0]}})
+    target = {"position": 0, "hint": "Check the visible text.",
+        "hint_record": {"text": "Check the visible text."}}
+    primary = {"status": "pass", "failed_position": -1, "passing_positions": [0],
+        "explanation": "The hinted action is grounded.", "evidence": [
+            {"position": 0, "trace": "repaired", "step_index": 0, "quote": "paraphrased text"}]}
+    correction = {"repairable": True, "evidence": [
+        {"position": 0, "trace": "repaired", "step_index": 0,
+         "quote": "inspect the visible sign"}]}
+    calls = []
+    async def request(client, packet, **kwargs):
+        calls.append((packet, kwargs))
+        return (primary if len(calls) == 1 else correction), {
+            "request_binding": {"model": "judge"}, "response_sha256": str(len(calls))}
+    monkeypatch.setattr(judge, "_request", request)
+    monkeypatch.setattr(judge, "review_images", lambda *a, **kw: ([], {}))
+    result = asyncio.run(review_slate(None, source=source, episode=episode, gold={},
+        image_path=tmp_path/'unused.png', model='judge', cache_dir=tmp_path, targets=[target]))
+    assert len(calls) == 2
+    assert result['decision']['status'] == primary['status']
+    assert result['decision']['failed_position'] == primary['failed_position']
+    assert result['decision']['passing_positions'] == primary['passing_positions']
+    assert result['decision']['explanation'] == primary['explanation']
+    assert result['decision']['evidence'] == correction['evidence']
+    assert result['evidence_correction']['invalid_decision_sha256'] == _sha(primary)
+    assert calls[1][0]['immutable_decision']['status'] == 'pass'
+    assert 'private_reference' not in calls[1][0]
+
+
+def test_slate_review_does_not_correct_a_semantically_conflicting_decision(monkeypatch, tmp_path):
+    import ifv_training.psd_gemini_judge as judge
+    source = {"state": {"all_steps": [
+        {"stage": "unified_react", "action_type": "tool_call", "thought": "inspect"},
+        {"stage": "unified_judgment", "action_type": "output", "output": "report"}]}}
+    episode = copy.deepcopy(source)
+    episode.update(termination="success", psd_repair={"slate": {"used_positions": [0]}})
+    target = {"position": 0, "hint": "Check it.", "hint_record": {"text": "Check it."}}
+    invalid = {"status": "pass", "failed_position": -1, "passing_positions": [],
+        "explanation": "Does not cover the hint.", "evidence": []}
+    calls = []
+    async def request(*args, **kwargs):
+        calls.append(1)
+        return invalid, {"request_binding": {"model": "judge"}}
+    monkeypatch.setattr(judge, "_request", request)
+    monkeypatch.setattr(judge, "review_images", lambda *a, **kw: ([], {}))
+    with pytest.raises(ValueError, match="cover the full task"):
+        asyncio.run(review_slate(None, source=source, episode=episode, gold={},
+            image_path=tmp_path/'unused.png', model='judge', cache_dir=tmp_path, targets=[target]))
+    assert calls == [1]
 
 
 def make_targets():
