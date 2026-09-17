@@ -221,6 +221,7 @@ def test_build_psd_candidate_package_separates_public_queues(
         "rejections": 2,
         "token_capture_requeue": 0,
         "source_review_pending": 0,
+        "source_review_abstained": 0,
     }
     repairs = [
         json.loads(line)

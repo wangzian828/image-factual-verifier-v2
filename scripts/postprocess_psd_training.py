@@ -108,8 +108,10 @@ def postprocess(*, run_dir, train_cases, private_gold, source_access_policy, sou
         "strict_pass": sum(row["strict_trace_audit_pass"] for row in rewards),
         "engineering_errors": sum(row["fatal_engineering_error"] for row in rewards),
         "verified_full_task": sum(row.get("verified_full_task") is True for row in rewards),
-        "source_review_pending": sum(row.get("source_task_status", "pending") in {"pending", "unresolved"}
+        "source_review_pending": sum(row.get("source_task_status", "pending") == "pending"
                                      for row in rewards if not row["fatal_engineering_error"]),
+        "source_review_abstained": sum(row.get("source_task_status") == "unresolved"
+                                       for row in rewards if not row["fatal_engineering_error"]),
         "inputs": {"train_cases_sha256": sha256_file(train_cases), "private_gold_sha256": sha256_file(private_gold),
                    "source_access_policy_sha256": sha256_file(source_access_policy)}, "audits": audits}
     write_json(run_dir / "psd-postprocess.json", result)

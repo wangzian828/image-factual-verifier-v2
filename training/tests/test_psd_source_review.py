@@ -66,7 +66,7 @@ def test_corrective_review_accepts_first_valid_fail_and_is_cached(tmp_path, monk
         source.validate_source_review(value, trace=trace, gold=gold)
 
 
-def test_corrective_review_stops_after_one_invalid_correction(tmp_path, monkeypatch):
+def test_quote_repair_rejects_malformed_response_without_resampling_decision(tmp_path, monkeypatch):
     trace, gold = source_trace(), {"case_id": "a", "factual_status": "supported"}
     expected = artifact(trace, gold=gold)
     monkeypatch.setattr(source, "review_images", lambda *a, **kw: ([], expected["media"]))
@@ -74,9 +74,36 @@ def test_corrective_review_stops_after_one_invalid_correction(tmp_path, monkeypa
     client = Client(invalid)
     args = dict(gold=gold, image_path=tmp_path / 'unused', model='test', cache_dir=tmp_path / 'cache')
     for _ in range(2):
-        with pytest.raises(ValueError, match='literal observed quote'):
+        with pytest.raises(ValueError, match='invalid PSD source evidence quote repair'):
             asyncio.run(source.judge_source(client, trace, **args))
-    assert client.calls == 2
+    assert client.calls == 3
+
+
+def test_quote_only_repair_cannot_change_decision_or_location(tmp_path, monkeypatch):
+    trace, gold = source_trace(), {"case_id": "a", "factual_status": "supported"}
+    expected = artifact(trace, status="fail", gold=gold)
+    monkeypatch.setattr(source, "review_images", lambda *a, **kw: ([], expected["media"]))
+    invalid = {**expected["decision"], "evidence": [
+        {"trace": "source", "step_index": 0, "quote": "the search failed"}]}
+    literal = expected["decision"]["evidence"][0]["quote"]
+    repair = {"repairable": True, "quotes": [{"evidence_index": 0, "quote": literal}]}
+    class SequenceClient(Client):
+        async def create(self, **kwargs):
+            self.decision = invalid if self.calls < 2 else repair
+            return await super().create(**kwargs)
+    client = SequenceClient(None)
+    args = dict(gold=gold, image_path=tmp_path / "unused", model="test", cache_dir=tmp_path / "cache")
+    value = asyncio.run(source.judge_source(client, trace, **args))
+    assert value["decision"] == expected["decision"]
+    assert value["source_review_attempts"][-1]["decision"] == invalid
+    assert value["evidence_quote_repair"]["response"] == repair
+    assert source.validate_source_review(value, trace=trace, gold=gold) == "fail"
+    assert client.calls == 3
+    assert asyncio.run(source.judge_source(client, trace, **args)) == value
+    assert client.calls == 3
+    value["decision"]["status"] = "pass"
+    with pytest.raises(ValueError, match="invalid bound source evidence quote repair"):
+        source.validate_source_review(value, trace=trace, gold=gold)
 
 
 @pytest.mark.parametrize('encoding', ['json_field', 'json_quoted_excerpt'])
@@ -214,7 +241,7 @@ def test_correct_label_semantic_repair_reaches_complete_causal_gate(monkeypatch)
 
 
 @pytest.mark.parametrize("status,queue", [("pass", "preservation_candidates"),
-    ("fail", "repair_candidates"), ("unresolved", "source_review_pending"), (None, "source_review_pending")])
+    ("fail", "repair_candidates"), ("unresolved", "source_review_abstained"), (None, "source_review_pending")])
 def test_candidate_routing_requires_semantics(tmp_path, status, queue):
     from test_psd_candidates import _trace, _write_json, _write_jsonl, _rollout_gate
     from ifv_training.psd_candidates import build_psd_candidate_package
@@ -233,6 +260,9 @@ def test_candidate_routing_requires_semantics(tmp_path, status, queue):
     result = build_psd_candidate_package(run_dir=run, train_cases_path=cases,
         rollout_gate_path=_rollout_gate(run, cases, add_review=False), output_dir=tmp_path / "out")
     assert result["counts"][queue] == 1
+    if status == "unresolved":
+        row = load_jsonl(tmp_path / "out/source_review_abstained.jsonl")[0]
+        assert row["queue_reason"] == "source_semantic_review_abstained"
     if status == "fail":
         row = load_jsonl(tmp_path / "out/repair_candidates.jsonl")[0]
         assert row["repair_signal"] == "source_semantic_failure"
@@ -289,3 +319,33 @@ def test_review_run_resume_keeps_decisions_and_does_not_label_transport_failure(
     with pytest.raises(ValueError, match="membership"):
         asyncio.run(script.review_sources(**args))
     assert len(calls) == 2
+
+
+def test_review_run_treats_bound_unresolved_as_terminal_abstention(tmp_path, monkeypatch):
+    from scripts import review_psd_sources as script
+    from ifv_training.io import write_json, write_jsonl
+    import hashlib
+    run = tmp_path / "run"
+    image = tmp_path / "a.png"
+    image.write_bytes(b"synthetic image fixture; native media helper is mocked")
+    trace = source_trace()
+    trace["state"]["runtime_case"]["image_sha256"] = hashlib.sha256(image.read_bytes()).hexdigest()
+    write_json(run / "run_manifest.json", {"status": "completed"})
+    write_json(run / "traces/a.json", trace)
+    write_jsonl(run / "run_results.jsonl", [{"case_id": "a"}])
+    write_jsonl(tmp_path / "public.jsonl", [{"case_id": "a", "image_path": "a.png"}])
+    write_jsonl(tmp_path / "split.jsonl", [{"case_id": "a", "split": "train"}])
+    gold = {"case_id": "a", "factual_status": "supported"}
+    write_jsonl(tmp_path / "gold.jsonl", [gold])
+    async def provider(*args, **kwargs):
+        result = artifact(trace, status="unresolved", gold=gold)
+        result["trace_projection"] = source.TRACE_PROJECTION
+        result["provenance"]["request_binding"]["packet_sha256"] = _sha(
+            source._packet(trace, gold, result["media"], include_transport_ids=True))
+        return result
+    monkeypatch.setattr(script, "judge_source", provider)
+    result = asyncio.run(script.review_sources(run_dir=run, benchmark=tmp_path / "public.jsonl",
+        train_cases=tmp_path / "split.jsonl", private_gold=tmp_path / "gold.jsonl",
+        output=tmp_path / "review", model="test", client=object()))
+    assert result["pending"] == 0 and result["abstained"] == 1
+    assert result["status"] == "source_reviews_complete_with_abstentions"

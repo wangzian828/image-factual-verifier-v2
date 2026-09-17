@@ -30,7 +30,7 @@ from .psd_round import validate_rollout_gate_for_candidates
 
 
 PSD_CANDIDATE_SCHEMA_VERSION = "ifv-psd-candidate-v1"
-PSD_CANDIDATE_MANIFEST_SCHEMA_VERSION = "ifv-psd-candidate-manifest-v1"
+PSD_CANDIDATE_MANIFEST_SCHEMA_VERSION = "ifv-psd-candidate-manifest-v2"
 
 _FORBIDDEN_PRIVATE_KEYS = frozenset(
     {
@@ -499,6 +499,7 @@ def build_psd_candidate_package(
     engineering_requeue: list[dict[str, Any]] = []
     token_capture_requeue: list[dict[str, Any]] = []
     source_review_pending: list[dict[str, Any]] = []
+    source_review_abstained: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
     source = _source_metadata(
         run_manifest,
@@ -608,9 +609,13 @@ def build_psd_candidate_package(
             rejections.append(_rejection(row_index=row_index, reward=reward,
                 reason=f"source_review_rejected:{type(exc).__name__}"))
             continue
-        if classification_correct and strict_audit_pass and review_status in {"pending", "unresolved"}:
+        if classification_correct and strict_audit_pass and review_status == "pending":
             source_review_pending.append({"case_id": case_id, "episode_id": episode_id,
                 "queue_reason": "source_semantic_review_required", "source": trace_source})
+            continue
+        if review_status == "unresolved":
+            source_review_abstained.append({"case_id": case_id, "episode_id": episode_id,
+                "queue_reason": "source_semantic_review_abstained", "source": trace_source})
             continue
         if classification_correct and strict_audit_pass and review_status == "pass":
             incomplete_steps = [
@@ -742,6 +747,7 @@ def build_psd_candidate_package(
     write_jsonl(output_dir / "engineering_requeue.jsonl", engineering_requeue)
     write_jsonl(output_dir / "token_capture_requeue.jsonl", token_capture_requeue)
     write_jsonl(output_dir / "source_review_pending.jsonl", source_review_pending)
+    write_jsonl(output_dir / "source_review_abstained.jsonl", source_review_abstained)
     write_jsonl(output_dir / "rejections.jsonl", rejections)
     manifest = {
         "schema_version": PSD_CANDIDATE_MANIFEST_SCHEMA_VERSION,
@@ -761,6 +767,7 @@ def build_psd_candidate_package(
             "engineering_requeue": len(engineering_requeue),
             "token_capture_requeue": len(token_capture_requeue),
             "source_review_pending": len(source_review_pending),
+            "source_review_abstained": len(source_review_abstained),
             "rejections": len(rejections),
         },
         "repair_signals": dict(
@@ -776,6 +783,7 @@ def build_psd_candidate_package(
             "engineering_requeue": "engineering_requeue.jsonl",
             "token_capture_requeue": "token_capture_requeue.jsonl",
             "source_review_pending": "source_review_pending.jsonl",
+            "source_review_abstained": "source_review_abstained.jsonl",
             "rejections": "rejections.jsonl",
         },
         "status": (

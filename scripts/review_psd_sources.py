@@ -97,11 +97,15 @@ async def review_sources(*, run_dir, benchmark, train_cases, private_gold, outpu
             results.append(result if error is None else {"case_id": item[0], "episode_id": item[1],
                 "status": "pending_error", "error_type": error})
             _atomic_json(output / "progress.json", {"selected": len(work), "completed": len(results),
-                "pending": sum(r["status"] in {"pending_error", "unresolved"} for r in results)})
+                "pending": sum(r["status"] == "pending_error" for r in results),
+                "abstained": sum(r["status"] == "unresolved" for r in results)})
         results.sort(key=lambda r: r["episode_id"])
-        pending = sum(r["status"] in {"pending_error", "unresolved"} for r in results)
+        pending = sum(r["status"] == "pending_error" for r in results)
+        abstained = sum(r["status"] == "unresolved" for r in results)
         summary = {"schema_version": VERSION, "selected": len(work), "pending": pending,
-            "status": "paused_source_review_requires_resolution" if pending else "source_reviews_complete",
+            "abstained": abstained,
+            "status": "paused_source_review_requires_resolution" if pending else
+                "source_reviews_complete_with_abstentions" if abstained else "source_reviews_complete",
             "counts": {s: sum(r["status"] == s for r in results) for s in ("pass", "fail", "unresolved", "pending_error")},
             "reviews": results, "training_started": False}
         _atomic_json(output / "summary.json", summary)
