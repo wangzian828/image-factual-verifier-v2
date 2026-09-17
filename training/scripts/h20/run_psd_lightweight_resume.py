@@ -15,13 +15,13 @@ import time
 ROOT = Path("/volume/ybo/wza")
 RUN = ROOT / "runs/psd-production400x8-20260917-v6"
 ROUND = ROOT / "runs/psd-production-round1-20260917-v1"
-CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v9"
+CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v10"
 DEPLOY = ROOT / "training-artifacts/psd-streaming-materialization-20260917-v54"
 CODE = DEPLOY / "code"
 PREFETCH = RUN / "source-review-prefetch-v2-auto-retry"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
 PRIVATE_ENV = ROOT / "private/runtime.env"
-INTERRUPTION_RECEIPT = DEPLOY / "controlled-interruptions-v1.json"
+INTERRUPTION_RECEIPT = DEPLOY / "controlled-interruptions-v2.json"
 EXTERNAL_ENV_KEYS = {
     "GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_WIRE_API",
     "GEMINI_MODEL", "GEMINI_VISION_MODEL", "SERPER_API_KEY",
@@ -75,7 +75,7 @@ def external_environment() -> tuple[dict[str, str], dict[str, bool]]:
     }
     if not all(checks.values()):
         raise RuntimeError("PSD external credential preflight is incomplete")
-    parsed["GEMINI_MAX_INFLIGHT_REQUESTS"] = "8"
+    parsed["GEMINI_MAX_INFLIGHT_REQUESTS"] = "4"
     return parsed, checks
 
 
@@ -221,7 +221,7 @@ def launch() -> None:
     receipt = owner.spawn(command, env, CONTROL / "controller.log")
     save(CONTROL / "process.json", receipt)
     save(CONTROL / "state.json", {"phase": "launched", "external_checks": checks,
-        "gemini_max_inflight_requests": 8, "time": time.time()})
+        "gemini_max_inflight_requests": 4, "time": time.time()})
     print(json.dumps({"pid": receipt["pid"], "mode": "lightweight_resume"}))
 
 
