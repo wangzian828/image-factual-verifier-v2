@@ -1,5 +1,26 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 10:17 v5 接续完成，无人为容量上限的新采样已验证
+
+- 自动接续已实际完成，`v38/storage-policy-handoff.json`为
+  `verified_new_sampling_without_run_cap`；一次性drain/handoff助手正常结束，不再启动它们。
+- 当前RUN仍是`/volume/ybo/wza/runs/psd-production400x8-20260917-v5`、CODE38不变。
+  旧1860槽全部原样复用、0新增重试额度、4个既有allowance继承，first40再次passed。
+  已完成1898/3200，其中38条为v5真实新采样，40在途、7历史普通错误、0待解infra。
+  截至本次，v5新增基础设施失败为0；并非保证未来没有NaN/超时。
+- `binding.storage_ceiling_bytes`和最新`storage.ceiling_bytes`均为null，
+  `admission_open=true`、`measurement_status=complete`。当前run及全部恢复祖先去重后
+  约87.5GiB；仍测量占用和shared free16GiB保护，**不得恢复128GiB或另一任意run上限**。
+- 当前collector receipt为RUN/process.json（初始1301181），compactor receipt为
+  RUN/storage-compaction-process.json（初始1302668），已核精确身份活动，不双开。
+  新compactor实际处理25个v5 native槽，该轮无损回收831590748 bytes；旧图片/轨迹/权重不动。
+- 新近4份v5原生轨迹strict audit全部通过：64个完整有限capture、57次成功工具调用。
+  三epoch export/fullstate保护核验通过；四卡单次利用率100/100/100/87%，守护仍在。
+- 后续继续v5的3200全槽采集，再CODE38完成source checker/slate修复/保留目标/raw教师评分，
+  最终bank四卡global32与原生恢复验收后5epoch。**现在仍是采集，optimizer 0步**。
+- 朋友Pro正常继续141成功、28失败、267未尝试。旧judge不重交。下文“仍在排空/等待复用”
+  均为历史状态，不能按旧段落重复启动任何助手。
+
 ## 2026-09-17 09:53 自动排空完成，v5 正在校验复用1860槽
 
 - 排空助手已自动完成：v4的1860槽全部completed、0在途，canonical/progress一致，
