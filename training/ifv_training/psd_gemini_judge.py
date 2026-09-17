@@ -225,24 +225,21 @@ def trace_steps(trace, *, include_transport_ids=True):
 
 def review_images(traces, *, image_path):
     """Bind the task image and every archived policy-visible image, without refetch."""
-    from PIL import Image
+    from .psd_judge_media import judge_image_transport
     from .psd_media import image_bytes
     from . import _repo_import  # noqa: F401
     from src.orchestrator.runtime_events import reconstruct_archived_request
 
     blobs = {}
     sources = []
+    conversions = []
 
     def add(blob):
         digest = hashlib.sha256(blob).hexdigest()
         if digest not in blobs:
-            with Image.open(io.BytesIO(blob)) as im:
-                mime = Image.MIME.get(im.format)
-                im.verify()
-            if mime not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
-                raise ValueError("unsupported PSD judge image type")
-            blobs[digest] = {"type": "image", "mime_type": mime,
-                             "data": base64.b64encode(blob).decode()}
+            blobs[digest], conversion = judge_image_transport(blob)
+            if conversion is not None:
+                conversions.append(conversion)
         return digest
 
     primary_sha = add(Path(image_path).read_bytes())
@@ -269,7 +266,10 @@ def review_images(traces, *, image_path):
     images = []
     for digest, block in blobs.items():
         images.extend([{"type": "text", "text": "Archived image SHA-256: " + digest}, block])
-    return images, {"task_image_sha256": primary_sha, "policy_images": sources}
+    media = {"task_image_sha256": primary_sha, "policy_images": sources}
+    if conversions:
+        media['transport_conversions'] = conversions
+    return images, media
 
 
 async def localize_failure(client, trace, *, gold, image_path, model, cache_dir, feedback=None):
