@@ -1,5 +1,20 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 08:08 v4 已恢复新采样，压缩助手已接上
+
+- 原1538槽全部通过恢复校验并原样复用；`slot-recovery.json`记录1538 reused、0新增预算、
+  4个历史allowance继承，首40在线门槛再次通过。v4仍是当前RUN，CODE37仍是当前代码。
+- 已实际产出2条**新生成**轨迹，合计1540/3200、40在途、6普通错误、0待解infra。
+  两条新轨迹strict audit均通过，9个完整有限native capture、7次成功工具调用、0warning；
+  原三epoch export/fullstate保护检查通过。四卡恢复模型请求，08:06单次利用率均100%。
+- v4压缩助手已启动并完成首轮，receipt=`RUN/storage-compaction-process.json`，
+  初始PID1289349仅线索；日志`storage-compaction-v37-controller.log`。不要重复启动。
+  首轮处理1个新完成槽，无损回收8,839,712 bytes；原1538复用槽/native旧目录不重处理。
+- 空间准入已实测`measurement_status=complete`、`admission_open=true`，约71.9GiB，
+  这是v4及所有恢复祖先合并去重后的口径，不能与旧v3单目录66GiB当作新增占用比较。
+  修复没有抬高128GiB限额，继续关注增长。仅采集恢复，source checker/repair/optimizer仍未开始。
+- 朋友Pro最近107成功、27失败、302未尝试，原串行队列继续；旧judge不重交。
+
 ## 2026-09-17 07:50 慢磁盘扫描修复与 v4 接续（当前权威入口）
 
 - v3在1538条已完成、0在途时安全停止，6条普通模型错误照常保留；没有重采成功样本。
