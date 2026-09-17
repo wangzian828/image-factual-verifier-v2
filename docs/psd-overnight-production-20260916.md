@@ -13,6 +13,11 @@
   成功证据`source-drain.json`。测量TimeoutExpired在此维护窗口是预期，不是新的磁盘故障。
   若助手失败，其finally会恢复精确owned测量子进程；诊断后再做接续，不能盲目重采。
 - 排空后在v4 compactor的300秒sleep窗口按receipt精确停止，避免恢复校验时改缓存。
+  **接续助手已启动**：CODE38父目录`handoff-process.json`（初始PID1299396仅线索），
+  入口`finish_psd_uncapped_handoff.py`，阶段文件`storage-policy-handoff.json`、日志`handoff.log`。
+  它等待排空证据后自动停旧compactor、启动v5、等复用验证/首40通过、接新compactor并验证
+  无上限的新采样。助手活动时不要手动执行下面命令或双开compactor；若失败先读其阶段和日志。
+  代码`4b70c8b`已本地push；它不杀在途轨迹、不重启模型服务/guard、不删数据。
   下一RUN=`/volume/ybo/wza/runs/psd-production400x8-20260917-v5`，从v4原样复用，
   CODE38父目录`run_psd_production_collection.py launch --run-name psd-production400x8-20260917-v5
   --code-directory CODE38 --reuse-run /volume/ybo/wza/runs/psd-production400x8-20260917-v4`。
