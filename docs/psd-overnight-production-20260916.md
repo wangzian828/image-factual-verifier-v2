@@ -1,5 +1,40 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 11:15 外部 source checker 16路与采集并行（当前最高优先级）
+
+- 用户批准16路外部评分。CODE39=`/volume/ybo/wza/training-artifacts/psd-source-review-prefetch-20260917-v39/code`，
+  代码`04c17ff`已从本地push；38项本地定向测试、561项服务器回归通过，冻结Agent源码逐文件不变。
+  当前采集RUN仍为`/volume/ybo/wza/runs/psd-production400x8-20260917-v5`；collector及compactor
+  **继续使用CODE38，不重启、不热换**。旧drain/handoff已经完成，禁止按下文历史段落重启。
+- 新入口`CODE39/scripts/prefetch_psd_source_reviews.py`只读取durable completed source槽：核验
+  seed、训练成员、policy/snapshot、task image、ledger/result/canonical一致性，使用同一原有
+  `judge_source`完整轨迹/图片/transport-ID投影。不会宣布采集完成、提前筛修复任务或开训。
+  Gemini模型`gemini-3.1-pro-preview`、high/out8192未变；16 worker和显式HTTP gate16，
+  timeout240/max_retries2；不是仅修改外层并发却仍卡在客户端默认4路。
+- 首批16已真实完成（约127秒）：14 fail、2 unresolved、0 transport/schema error；这是前两题
+  的8次采样，不代表全体质量比例。两个unresolved已核实均为原轨迹termination=error、确实无最终报告，
+  **不是漏传材料，不可当pass或改标签**；留待正式source-resolution处理。
+  4条真实轨迹的缓存复用验证（含unresolved）在禁止网络的客户端下逐字一致、0新provider调用，
+  证明`RUN/source-review-prefetch-v1/cache-reuse-canary.json`。
+- 持续评分已启动，独立receipt=`RUN/source-review-prefetch-process.json`（初始PID1313480仅线索），
+  日志`RUN/source-review-prefetch-follow.log`；状态`RUN/source-review-prefetch-v1/progress.json`，
+  `--follow --concurrency16`，CUDA_VISIBLE_DEVICES为空。先核精确cmdline/pgid，不双开。
+  首批canary receipt另存`RUN/source-review-prefetch-canary-process.json`（已退出），不要重启。
+- `RUN/source-review-prefetch-v1`为私有缓存：按输入/模型/prompt/schema/全部图片精确hash复用
+  Gemini响应，包括无效已完成响应；不按标签反复评分直到通过。records的pending_error和unresolved
+  与普通policy fail分开，缓存/缺口不得擅自删掉重抽。worker存储异常会终止而非卡死queue.join。
+  source采集发生intervention时停止新评分调度、排空已排队工作；不影响source进程本身。
+- 11:10源轨迹已2117/3200，四卡40路继续；不是开始optimizer。全部3200后先等prefetch排空并退出，
+  用**CODE39**正常`run_psd_round.py prepare`，原参数不变，额外显式传
+  `--source-review-prefetch RUN/source-review-prefetch-v1 --source-review-concurrency16`。
+  完整采集/全部成员校验照常；正式review重新生成完整bank绑定，复用相同请求缓存，避免再付一轮费用。
+  禁止绕过pending gate、伪造completed manifest或只拿已评分子集开训。
+- 此后的slate/preservation/raw teacher和最终bank DP4使用CODE39；DP4参数deployment为
+  `psd-source-review-prefetch-20260917-v39`，仍必须显式传本轮最终`--ready`。
+  原三epoch SFT及完整state保留、repair每题最多6次/12提案、最终global32验收及5epoch均不变。
+  修复实耗取决于入选任务数及成功前尝试次数，最多400任务×6，并非3200×6；不能用source吞吐
+  直接承诺修复ETA。16路评分与40路GPU采集重叠仅减少可并行等待，不降低质量/预算门槛。
+
 ## 2026-09-17 10:17 v5 接续完成，无人为容量上限的新采样已验证
 
 - 自动接续已实际完成，`v38/storage-policy-handoff.json`为
