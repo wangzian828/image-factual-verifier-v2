@@ -31,6 +31,11 @@
   `no_handoff_needed`并退出；仅当旧controller已返回`paused_source_review_requires_resolution`的休眠边界，
   才冻结并复核状态、停止其精确进程组，然后用CODE47续同一绑定round输出。状态与receipt在
   `runs/psd-formal-prepare-controller-20260917-v2`；不得手工双开prepare。
+- 17:50首遍完成：1008 pass、2158 fail、30 unresolved、4 pending（3条HTTP错误、1条ConnectError），
+  没有把传输错误误标成policy fail。旧v1 controller已在`formal_prepare_result`安全休眠边界被CODE48
+  复核并停止，v2成为唯一owner；没有双开provider或prepare。CODE47续跑已在18:01推进到1854/3200，
+  当前前缀0 pending、14 abstained，约为旧同步恢复路径的2.8倍；已保存review仍逐条做完整绑定验证，
+  不是跳过验证或删掉错误项。source review完全无pending后同一进程会直接进入正式repair。
 
 ## 2026-09-17 16:06 PSD评分优先，朋友Pro在当前样本后暂时排空
 
