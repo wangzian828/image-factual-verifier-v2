@@ -1,6 +1,7 @@
 """Bounded, uncached paired latency probe; never changes live PSD outputs."""
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
@@ -77,14 +78,18 @@ async def probe(model, kind, payload, schema=None):
     emit({'event': 'request_finished', **result})
 
 
-async def main():
+async def main(models, case_key=None):
     os.umask(0o077)
     OUTPUT.mkdir(parents=True, exist_ok=True)
     load_dotenv(ROOT / 'private/runtime.env', override=True)
-    models = ('gemini-3.7-flash', 'gemini-3.8-flash')
     # Read/prepare once, so both models see identical text, archived images and settings.
-    error_path = next(path for path in sorted((SEARCH / 'case-errors').glob('*.json'))
-                      if load(path).get('http_status') == 429)
+    if case_key is not None:
+        if not re.fullmatch(r'[0-9a-f]{16}', case_key):
+            raise ValueError('case key must be the 16-character frozen input directory name')
+        error_path = SEARCH / 'case-errors' / (case_key + '.json')
+    else:
+        error_path = next(path for path in sorted((SEARCH / 'case-errors').glob('*.json'))
+                          if load(path).get('http_status') == 429)
     inputs = SEARCH / 'case-inputs' / error_path.stem
     candidate, gold = load(inputs / 'candidate.json'), load(inputs / 'gold.json')
     trace = load(ROOT / 'runs/psd-production400x8-20260917-v6/episodes' / candidate['source']['source_trace_path'])
@@ -95,7 +100,7 @@ async def main():
     packet = {'source_steps': trace_steps(trace), 'private_reference': gold, 'media': media}
     text = LOCALIZE_PROMPT + '\nMATERIAL:\n' + json.dumps(packet, ensure_ascii=False)
     payload = [{'type': 'text', 'text': text}, *images]
-    emit({'event': 'prepared', 'case_id': candidate['case_id'], 'text_chars': len(text),
+    emit({'event': 'prepared', 'case_id': candidate['case_id'], 'models': models, 'text_chars': len(text),
           'image_count': sum(block.get('type') == 'image' for block in images),
           'note': 'same archived PSD localization input; no production cache or target writes'})
     await asyncio.gather(*(probe(model, 'tiny', 'Return only OK') for model in models))
@@ -103,4 +108,12 @@ async def main():
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--models', nargs='+',
+                        choices=['gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash'],
+                        default=['gemini-3.7-flash', 'gemini-3.8-flash'])
+    parser.add_argument('--case-key')
+    args = parser.parse_args()
+    if len(args.models) > 2 or len(set(args.models)) != len(args.models):
+        parser.error('select one or two distinct models to keep the probe bounded')
+    asyncio.run(main(args.models, args.case_key))
