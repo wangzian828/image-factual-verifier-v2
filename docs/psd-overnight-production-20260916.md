@@ -1,5 +1,47 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 11:44 用户要求不完整轨迹也自动重跑，CODE41有序接续已启动
+
+- 用户明确扩大恢复范围：没有完整可用轨迹就补跑，不能只覆盖NaN/超时。新模块
+  `psd_source_completion.py`检查terminal success、完整最终报告schema/最终输出回合、完整有限token capture；
+  不读取gold/judge、不以答案正确率选择。完整但答错、正常完成调查中保留的失败/空工具结果不重抽。
+  无最终报告、异常终止、不可用工具动作引起的中断等会记`trajectory_failed`，总预算仍3次，
+  旧attempt照记、失败原文保留；耗尽仍pending而非伪装完整，不擅自新增额度。
+- 对检查时2235条已完成源轨迹全量检查：2228完整可用、7条中断；包含用户指出的两条。
+  其余5条为main-02757 r001、main-07325 r003、main-07778 r002、main-08866 r002、main-09228 r002。
+  完整清单/原trace哈希在v40/source-completion-inventory.json，CODE41目录有绑定引用。
+  v40仅未上线测试候选，**不要启动v40控制器**；它与v41的completeness validator字节一致。
+- CODE41=`/volume/ybo/wza/training-artifacts/psd-complete-source-20260917-v41/code`；
+  本地代码`1eadc91`、`0a57a1b`已push，142本地定向测试、573服务器回归通过，冻结Agent逐文件不变。
+  v38旧compactor曾因prefetch持有completed-slot锁而以BlockingIOError退出（未损坏内容）。
+  v41改为跳过busy槽、下一轮再处理，有冲突/释放后继续压缩的回归测试。不要复活未修复的旧helper。
+- 自动排空助手已启动：CODE41父目录`drain-process.json`（初始PID1316620仅线索），
+  入口`drain_psd_v5_for_source_completion.py`，进度`drain-progress.json`。只暂停精确owned du
+  子进程阻止新槽，已发出的Agent照常完成；0在途且ledger/canonical/progress一致后才停止旧v5。
+  所有模型副本与guard不动，失败会恢复被暂停的测量，不杀在途Agent。
+- 自动接续助手也已启动：CODE41父目录`handoff-process.json`（初始1316621仅线索），
+  `completion-policy-handoff.json`与`handoff.log`；等待排空证明`source-drain.json`，
+  跳过已退出的v38 compactor，以CODE41启动新RUN=`/volume/ybo/wza/runs/psd-production400x8-20260917-v6`
+  并`--reuse-run ...v5`，重新核验全部旧缓存；只把不完整槽标为待补，完整结果硬链接原样复用。
+  已失败1次的槽从attempt-002续预算，不覆盖旧run。助手活动期间勿重复launch/启动compactor。
+  新first40通过后自动接CODE41 compactor，并核新采样进展。**当前是有序切换，不能称7条已重跑完成。**
+- 原16路评分暂继续处理v5已完成轨迹，不杀在途API。v5排空后，当原prefetch进程
+  `active=0, queued=0`且进入waiting_for_completed_sources，按精确receipt停止它。
+  随后用CODE41在v6启动新的prefetch：原benchmark/train/gold/model不变，`--concurrency16 --follow`
+  `--output v6/source-review-prefetch-v1 --cache-source v5/source-review-prefetch-v1`，
+  trusted helper环境CODE41/GATEWAY19025，CUDA_VISIBLE_DEVICES为空，显式HTTP gate16；
+  receipt存v6/source-review-prefetch-process.json，独占新日志。不能让两个prefetch同时使用共享cache。
+  新入口验证恢复祖先链、checkpoint/输入/评分配置，按精确请求缓存复用旧完整评分；重跑后变了的轨迹
+  自然产生新key，绝不把旧残缺轨迹的unresolved挂到新轨迹上，也不删除旧评分。
+- 后续全部3200完整后，CODE41正常prepare并传v6的`--source-review-prefetch`，16路评分排空后
+  进入原slate/preservation/raw teacher/global32最终bank验收/5epoch；DP4 deployment改为
+  `psd-complete-source-20260917-v41`并显式传本轮ready。旧SFT/fullstate只读保护，不重交旧评测judge。
+- 存储核查：11:38 PSD当前run及五级恢复祖先按inode去重约104.4GiB（不含SFT权重），
+  当时2245条canonical的逻辑大小44.09GiB，中位样本18.89MiB、p90样本31.99MiB；
+  metadata含大量逐token概率及重复policy_input，还有原生请求归档、图片和重试缓存。
+  压缩历史93轮累计估计回收82.24GiB；这是无损压缩/共享副本，不是删除轨迹、图片或权重。
+  个人quota仍未知，不拿共享49TB free冒充个人可用空间，不恢复任意128GiB门槛。
+
 ## 2026-09-17 11:15 外部 source checker 16路与采集并行（当前最高优先级）
 
 - 用户批准16路外部评分。CODE39=`/volume/ybo/wza/training-artifacts/psd-source-review-prefetch-20260917-v39/code`，
