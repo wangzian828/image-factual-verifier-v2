@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -14,12 +15,13 @@ import time
 ROOT = Path("/volume/ybo/wza")
 RUN = ROOT / "runs/psd-production400x8-20260917-v6"
 ROUND = ROOT / "runs/psd-production-round1-20260917-v1"
-CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v8"
+CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-v9"
 DEPLOY = ROOT / "training-artifacts/psd-streaming-materialization-20260917-v54"
 CODE = DEPLOY / "code"
 PREFETCH = RUN / "source-review-prefetch-v2-auto-retry"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
 PRIVATE_ENV = ROOT / "private/runtime.env"
+INTERRUPTION_RECEIPT = DEPLOY / "controlled-interruptions-v1.json"
 EXTERNAL_ENV_KEYS = {
     "GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_WIRE_API",
     "GEMINI_MODEL", "GEMINI_VISION_MODEL", "SERPER_API_KEY",
@@ -77,6 +79,70 @@ def external_environment() -> tuple[dict[str, str], dict[str, bool]]:
     return parsed, checks
 
 
+def reconcile_controlled_interruptions() -> dict:
+    """Close attempts left running by an attested whole-controller restart.
+
+    This preserves every partial attempt and charges it to the normal bounded
+    infrastructure budget.  It never inspects judge/model outcomes.
+    """
+    if not INTERRUPTION_RECEIPT.is_file():
+        return {"status": "not_requested", "reconciled": 0}
+    receipt = load(INTERRUPTION_RECEIPT)
+    if (receipt.get("schema_version") != "ifv-psd-controlled-interruptions-v1"
+            or Path(str(receipt.get("round"))).resolve() != ROUND.resolve()):
+        raise RuntimeError("controlled interruption receipt is invalid")
+    pids = receipt.get("terminated_prepare_pids")
+    if (not isinstance(pids, list) or not pids
+            or any(type(pid) is not int or pid < 2 for pid in pids)):
+        raise RuntimeError("controlled interruption receipt has invalid PIDs")
+    if any(Path("/proc", str(pid)).exists() for pid in pids):
+        raise RuntimeError("controlled prepare process is still live")
+    for process in Path("/proc").glob("[0-9]*/cmdline"):
+        try:
+            command = process.read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        if "run_psd_round.py prepare" in command and str(ROUND) in command:
+            raise RuntimeError("cannot reconcile while formal prepare is live")
+
+    sys.path[:0] = [str(CODE), str(CODE / "training")]
+    from ifv_training.psd_repair_storage import load_bound, save_bound
+    receipt_hash = hashlib.sha256(INTERRUPTION_RECEIPT.read_bytes()).hexdigest()
+    reconciled = []
+    pattern = "search/repairs/*/slate-rounds/*/infrastructure-attempts/retry-state.json"
+    for marker in sorted(ROUND.glob(pattern)):
+        saved = load(marker)
+        identity = saved.get("identity")
+        if not isinstance(identity, dict):
+            raise RuntimeError("retry ledger identity is invalid")
+        state = load_bound(marker, identity=identity)
+        attempts = state.get("attempts")
+        if not isinstance(attempts, list) or not attempts:
+            continue
+        latest = attempts[-1]
+        if latest.get("status") != "running":
+            continue
+        if (marker.parent / "result.json").exists():
+            raise RuntimeError("running retry ledger already has a committed result")
+        latest.update(
+            status="infrastructure_failed",
+            reason="controlled_prepare_restart",
+            interruption_receipt_sha256=receipt_hash,
+        )
+        save_bound(marker, identity=identity, payload=state)
+        reconciled.append(str(marker.relative_to(ROUND)))
+    report = {
+        "schema_version": "ifv-psd-interruption-reconciliation-v1",
+        "receipt": str(INTERRUPTION_RECEIPT),
+        "receipt_sha256": receipt_hash,
+        "reconciled": len(reconciled),
+        "ledgers": reconciled,
+        "time": time.time(),
+    }
+    save(CONTROL / "interruption-reconciliation.json", report)
+    return report
+
+
 def prepare_command() -> list[str]:
     binding = load(RUN / "binding.json")
     return [sys.executable, "-u", str(CODE / "scripts/run_psd_round.py"), "prepare",
@@ -105,6 +171,7 @@ def current_status() -> str:
 
 
 def worker() -> None:
+    reconcile_controlled_interruptions()
     retryable = {"", "postprocess_running", "paused_search_requires_resume"}
     for attempt in range(1, 33):
         save(CONTROL / "state.json", {"phase": "formal_prepare", "attempt": attempt,
