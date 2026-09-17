@@ -1,5 +1,32 @@
 # PSD 夜间正式推进（2026-09-16）
 
+## 2026-09-17 13:10 常规推进；AVIF评分传输修复已备好，未热切换
+
+- 实时collector仍CODE41/v6，2377/3200完整、0normal_error/0pending_infrastructure；四副本健康。
+  prefetch仍CODE42/v2-auto-retry，1189有效、28pending、16worker，429共享冷却已触发，
+  exhausted_transport=0。有效旧缓存重新绑定进度不是全局已评分总数，不能说旧评分丢失。
+  13:02存储admission_open=true、当前及恢复祖先按inode去重约111.8GiB；之后独立du复测成功且stderr空，
+  先前CalledProcessError具体原因未复现。collector/reviewer/compactor/guard receipt精确身份通过。
+- 朋友Pro继续原串行：13:02为159成功/42失败/235未尝试，未中断；Flash已完成不重跑。
+- 单独修复评分AVIF传输，不改原始图片、Agent或活跃快照。新增`psd_judge_media.py`，
+  仅单帧RGB/RGBA AVIF转PNG，逐像素、尺寸、通道、EXIF与ICC往返校验，原sha用于任务/轨迹身份，
+  PNG wire sha及原sha映射进入绑定的media包；不缩图、不有损重压、不丢alpha/动画。
+  原JPEG/PNG/WEBP/GIF字节、media结构与缓存key完全不变；未知格式/多帧AVIF仍拒绝。
+  依据[Gemini官方图片输入文档](https://ai.google.dev/gemini-api/docs/image-understanding)：PNG受支持，
+  AVIF不在其内联支持列表，不能只改MIME字符串冒充支持。
+- 代码`90373e6`已本地提交push。候选CODE43=`/volume/ybo/wza/training-artifacts/psd-avif-transport-20260917-v43/code`，
+  79本地定向/500服务器PSD回归通过，Agent逐字未变；父目录有stage-state.json及code-binding.json。
+  `real-media-canary.json`证明原先8条AVIF轨迹全部完整组包成功、原文件不变；另外一条既有有效评分
+  在禁网client下逐字复用成功，0provider调用。**尚未做真实Gemini转码请求验收，不宣称8条评分补齐。**
+- 不中断CODE42在途评分、不为这一项再次重启collector。后续在16路预算允许的安全窗口，先用CODE43
+  在独立可复用cache对上述固定AVIF轨迹做真实完整source judge，不添加视觉简化probe、不反复抽label。
+  通过后正式prepare/repair/raw teacher/最终bank DP4可使用CODE43，deployment为
+  `psd-avif-transport-20260917-v43`，仍显式传v6/source-review-prefetch-v2-auto-retry与最终ready。
+  切换前必须核当前输出/缓存绑定与进程，不能照历史段落重启旧reviewer。21条非逐字证据问题仍需
+  逐条诊断，不能放宽或绕过；本次AVIF改动不解决这类证据错误。正式优化step仍0。
+- 已通过自动化工具刷新同一15分钟heartbeat的说明，清除过时v4/v5启动指令；没有新建重复任务，
+  不改变安静监控意图。这次按OpenAI Docs查阅官方定时任务说明后更新，频率/目标任务保持不变。
+
 ## 2026-09-17 12:45 自动补评分已运行，实际40槽采集恢复（当前入口）
 
 - 用户要求失败评分自动重跑，并追问为什么GPU只有guard在计算。真实原因是CODE41恢复采集时
