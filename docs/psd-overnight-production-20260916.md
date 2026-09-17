@@ -22,6 +22,15 @@
   结果和请求缓存完整保留。17:01 round1 formal source review已启动，以4路只补尾项，其余精确缓存逐条
   重验；首28条已落盘且0 pending。不会提前停四卡服务、启动raw-teacher或optimizer；到
   `requires_frozen_teacher_topk`才进行下一次受控切换。
+- 17:25首轮formal review仍正常推进到1522/3200，当前3 pending、12 abstained。发现恢复时已保存review的
+  本地验证原来在async case pool内同步执行，会把少量API尾项的第二遍全量重验串行为约1条/秒；不影响
+  判决正确性，但会无谓拖慢重试。代码`e02cea0`只将这个已保存artifact的本地哈希/图片/归档验证交给
+  原有有界线程池，provider并发仍4，prompt/schema/cache/Agent均不变；49项本地定向和CODE47服务器PSD
+  全套回归通过。CODE47=`/volume/ybo/wza/training-artifacts/psd-review-resume-perf-20260917-v47/code`。
+- 未中断正在运行的CODE45首遍。独立CODE48条件handoff已启动：如果首遍pending=0就记录
+  `no_handoff_needed`并退出；仅当旧controller已返回`paused_source_review_requires_resolution`的休眠边界，
+  才冻结并复核状态、停止其精确进程组，然后用CODE47续同一绑定round输出。状态与receipt在
+  `runs/psd-formal-prepare-controller-20260917-v2`；不得手工双开prepare。
 
 ## 2026-09-17 16:06 PSD评分优先，朋友Pro在当前样本后暂时排空
 
