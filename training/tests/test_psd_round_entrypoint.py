@@ -9,6 +9,22 @@ from scripts import run_psd_round
 from ifv_training.io import sha256_file, write_json, write_jsonl
 
 
+def test_reuse_completed_source_reviews_verifies_index_and_files(tmp_path):
+    root = tmp_path / "source-reviews"
+    review = root / "reviews" / "review.json"
+    write_json(review, {"decision": {"status": "pass"}})
+    summary = {"status": "source_reviews_complete", "selected": 1, "pending": 0,
+        "counts": {"pass": 1, "fail": 0, "unresolved": 0, "pending_error": 0},
+        "reviews": [{"case_id": "case-1", "episode_id": "episode-1",
+            "path": str(review.resolve()), "sha256": sha256_file(review)}]}
+    write_json(root / "summary.json", summary)
+    results = [{"case_id": "case-1", "episode_id": "episode-1"}]
+    assert run_psd_round._reuse_completed_source_reviews(root, results) == summary
+    write_json(review, {"decision": {"status": "fail"}})
+    with pytest.raises(ValueError, match="binding changed"):
+        run_psd_round._reuse_completed_source_reviews(root, results)
+
+
 def test_training_entrypoint_carries_adapter_and_same_round_resume(monkeypatch, tmp_path):
     ready = {"round_index": 2, "serving_profile": str(tmp_path / "serving.json"),
         "checkpoint_manifest": str(tmp_path / "checkpoint.json"),

@@ -36,6 +36,47 @@ from scripts.postprocess_psd_training import postprocess
 from scripts.run_psd_feedback_canary import run as run_feedback
 
 
+def _reuse_completed_source_reviews(source_reviews, results):
+    """Verify a finished review index without rereading every large trace.
+
+    Postprocessing still validates each bound review against its exact trace and
+    private reference.  This check only avoids repeating that work before the
+    one-pass postprocessor immediately performs it again.
+    """
+    summary_path = source_reviews / "summary.json"
+    summary = load_json(summary_path)
+    expected = {
+        str(row.get("episode_id") or row["case_id"]): row["case_id"]
+        for row in results
+    }
+    if (len(expected) != len(results) or summary.get("pending") != 0
+            or summary.get("selected") != len(expected)
+            or not str(summary.get("status", "")).startswith("source_reviews_complete")):
+        raise ValueError("completed PSD source-review summary is incomplete")
+    reviews = summary.get("reviews")
+    counts = summary.get("counts")
+    if (not isinstance(reviews, list) or len(reviews) != len(expected)
+            or not isinstance(counts, dict)
+            or sum(counts.get(name, 0) for name in ("pass", "fail", "unresolved", "pending_error")) != len(expected)
+            or counts.get("pending_error") != 0):
+        raise ValueError("completed PSD source-review counts are invalid")
+    review_root = (source_reviews / "reviews").resolve()
+    seen = set()
+    for row in reviews:
+        if not isinstance(row, dict):
+            raise ValueError("completed PSD source-review index row is invalid")
+        episode = row.get("episode_id")
+        path = Path(str(row.get("path", ""))).resolve()
+        if (episode in seen or expected.get(episode) != row.get("case_id")
+                or path.parent != review_root or not path.is_file()
+                or sha256_file(path) != row.get("sha256")):
+            raise ValueError("completed PSD source-review binding changed")
+        seen.add(episode)
+    if seen != set(expected):
+        raise ValueError("completed PSD source-review coverage changed")
+    return summary
+
+
 def load_ready(path):
     saved = load_json(path)
     ready = load_bound(path, identity=saved["identity"])
@@ -225,12 +266,15 @@ async def prepare(args):
     if expected_rollouts is not None:
         identity["expected_rollouts_per_case"] = expected_rollouts
     root.mkdir(parents=True, exist_ok=True)
-    from scripts.review_psd_sources import review_sources
     source_reviews = root / "source-reviews"
-    review_summary = await review_sources(run_dir=run_dir, benchmark=args.benchmark,
-        train_cases=args.train_cases, private_gold=args.private_gold, output=source_reviews,
-        model=args.judge_model, concurrency=getattr(args, "source_review_concurrency", 4),
-        prefetch=getattr(args, "source_review_prefetch", None))
+    if getattr(args, "reuse_completed_source_reviews", False):
+        review_summary = _reuse_completed_source_reviews(source_reviews, results)
+    else:
+        from scripts.review_psd_sources import review_sources
+        review_summary = await review_sources(run_dir=run_dir, benchmark=args.benchmark,
+            train_cases=args.train_cases, private_gold=args.private_gold, output=source_reviews,
+            model=args.judge_model, concurrency=getattr(args, "source_review_concurrency", 4),
+            prefetch=getattr(args, "source_review_prefetch", None))
     if review_summary["pending"]:
         return {"status": "paused_source_review_requires_resolution", "training_started": False,
                 "source_reviews": str(source_reviews / "summary.json"), "pending": review_summary["pending"]}
@@ -347,6 +391,8 @@ def main():
     prepare_parser.add_argument("--source-review-concurrency", type=int, default=4)
     prepare_parser.add_argument("--postprocess-workers", type=int, default=1,
         help="Bounded local worker processes for independent trace audit/postprocessing")
+    prepare_parser.add_argument("--reuse-completed-source-reviews", action="store_true",
+        help="Verify and reuse a complete immutable source-review index; trace binding is rechecked in postprocess")
     prepare_parser.add_argument('--source-review-prefetch', type=Path,
         help='Reuse exact source-review responses after the independent prefetch process has drained')
     prepare_parser.add_argument("--expected-rollouts-per-case", type=int, default=8,
