@@ -243,10 +243,80 @@ def wait_boundary():
     save(PREVIOUS / 'flash37-handoff.json', {'new_controller': str(CONTROL), 'time': time.time()})
 
 
+def hard_switch():
+    """Stop exactly the current v60 prepare group and continue on v61."""
+    manager = base().owner()
+    previous = load(PREVIOUS / 'process.json')
+    expected_parent = [sys.executable, '-u', str(OLD / 'code/scripts/server/resume_psd_tail_recovery.py'), 'worker']
+    if previous.get('command') != expected_parent:
+        raise RuntimeError('unexpected v60 owner')
+    manager.checked(previous)
+    group = []
+    for entry in Path('/proc').glob('[0-9]*'):
+        try:
+            pid = int(entry.name)
+            if os.getpgid(pid) != previous['pid'] or not alive(pid):
+                continue
+            command = [part.decode() for part in (entry / 'cmdline').read_bytes().split(b'\0') if part]
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        tracker = (len(command) == 3 and command[:2] == [sys.executable, '-c'] and
+                   re.fullmatch(r'from multiprocessing\.resource_tracker import main;main\(\d+\)', command[2]))
+        prepare = (len(command) >= 4 and command[:4] == [sys.executable, '-u',
+                   str(OLD / 'code/scripts/run_psd_round.py'), 'prepare'] and str(ROUND) in command)
+        if command != expected_parent and not tracker and not prepare:
+            raise RuntimeError('unexpected active member in v60 group')
+        group.append({'pid': pid, 'command': command})
+    if not group:
+        raise RuntimeError('v60 process group is empty')
+    progress = load(SEARCH / 'progress.json')
+    save(DEPLOY / 'hard-switch.json', {'previous': previous, 'group': group,
+        'previous_state': load(PREVIOUS / 'state.json'),
+        'completed_cases': len(progress.get('cases', [])),
+        'reason': 'user_requested_hard_switch_to_gemini37',
+        'external_model': 'gemini-3.7-flash', 'external_concurrency': 8,
+        'source_and_completed_results_preserved': True, 'time': time.time()})
+    os.killpg(previous['pid'], signal.SIGTERM)
+    for _ in range(80):
+        if not any(alive(row['pid']) for row in group):
+            break
+        time.sleep(.25)
+    else:
+        os.killpg(previous['pid'], signal.SIGKILL)
+        for _ in range(20):
+            if not any(alive(row['pid']) for row in group):
+                break
+            time.sleep(.25)
+        else:
+            raise RuntimeError('v60 group did not terminate after hard stop')
+    save(DEPLOY / 'controlled-interruptions.json', {
+        'schema_version': 'ifv-psd-controlled-interruptions-v1',
+        'round': str(ROUND), 'terminated_prepare_pids': [row['pid'] for row in group],
+        'reason': 'explicit_external_model_hard_switch_to_gemini37', 'time': time.time()})
+    launch = base().launcher()
+    reconciled = launch.reconcile_controlled_interruptions()
+    migration = migrate_transport_ledgers()
+    if CONTROL.exists():
+        raise RuntimeError('v61 controller already exists')
+    CONTROL.mkdir(exist_ok=False)
+    receipt = manager.spawn([
+        sys.executable, '-u', str(CODE / 'scripts/server/resume_psd_flash37_recovery.py'),
+        'worker'], base().environment(), CONTROL / 'controller.log')
+    save(CONTROL / 'process.json', receipt)
+    save(CONTROL / 'state.json', {'phase': 'launched', 'external_model': 'gemini-3.7-flash',
+        'thinking_level': 'high', 'external_concurrency': 8,
+        'reconciled_interrupted_attempts': reconciled['reconciled'],
+        'migrated_transport_ledgers': migration['migrated'], 'time': time.time()})
+    save(PREVIOUS / 'flash37-hard-switch.json', {'new_controller': str(CONTROL),
+        'reconciled': reconciled['reconciled'], 'time': time.time()})
+    print(json.dumps({'controller_pid': receipt['pid'],
+        'reconciled_interrupted_attempts': reconciled['reconciled']}), flush=True)
+
+
 if __name__ == '__main__':
     os.umask(0o077)
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=['stage', 'start', 'wait-boundary', 'worker'])
+    parser.add_argument('mode', choices=['stage', 'start', 'wait-boundary', 'hard-switch', 'worker'])
     mode = parser.parse_args().mode
     if mode == 'stage':
         stage()
@@ -254,5 +324,7 @@ if __name__ == '__main__':
         start()
     elif mode == 'wait-boundary':
         wait_boundary()
+    elif mode == 'hard-switch':
+        hard_switch()
     else:
         base().launcher().worker()
