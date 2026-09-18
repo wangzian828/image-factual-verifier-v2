@@ -510,6 +510,86 @@ def verify_source_rollout_failure(
     }
 
 
+def prepare_causal_episode_static(
+    hinted_trace: Mapping[str, Any],
+    *,
+    source_trace: Mapping[str, Any],
+    gold: Mapping[str, Any],
+    source_trace_sha256: str,
+    score_metadata: Mapping[str, Any] | None = None,
+    source_access_policy: Any = None,
+    source_task_review: Mapping[str, Any] | None = None,
+    source_audit: Mapping[str, Any] | None = None,
+    source_result: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compute checks shared by every local target in one teacher episode.
+
+    A slate can contain several corrected positions, but all of them bind to
+    the same canonical episode.  Keep the strict gate intact while avoiding a
+    full recursive audit and private-gold score for every position.
+    """
+
+    _assert_no_private_fields(hinted_trace)
+    static: dict[str, Any] = {
+        "source_result": dict(source_result or verify_source_rollout_failure(
+            source_trace,
+            gold=gold,
+            score_metadata=score_metadata,
+            source_task_review=source_task_review,
+            source_audit=source_audit,
+        )),
+        "reasons": [],
+        "strict_pass": False,
+        "metrics": {},
+        "expected_verdict": "",
+        "recorded_verdict": _text(hinted_trace.get("verdict")),
+        "has_report": False,
+        "has_terminal_output": False,
+        "source_trace_sha256": source_trace_sha256,
+        "episode_sha256": _sha(hinted_trace),
+    }
+    path = _write_trace(hinted_trace)
+    try:
+        # Keep the legacy audit hook contract when no source policy is
+        # supplied; the expensive file/recursive audit still runs only once
+        # for the whole episode.
+        report = (audit_trace(path, source_access_policy=source_access_policy)
+                  if source_access_policy is not None else audit_trace(path))
+        failures = report.failures(strict_scheduler=True)
+        static["reasons"].extend(f"audit:{item.code}" for item in failures)
+        static["strict_pass"] = not failures
+        metrics, _score = score_process_trace(
+            hinted_trace,
+            gold,
+            score_metadata=score_metadata,
+        )
+        static["metrics"] = metrics
+        static["expected_verdict"] = _text(metrics.get("expected_verdict"))
+        judgment = _mapping(
+            hinted_trace.get("judgment")
+            or _mapping(hinted_trace.get("state")).get("judgment")
+        )
+        static["has_report"] = isinstance(judgment.get("fact_check_report"), Mapping)
+        static["has_terminal_output"] = any(
+            str(step.get("stage", "")).strip() == "unified_judgment"
+            and str(step.get("action_type", "")).strip() == "output"
+            for step in _rows(_mapping(hinted_trace.get("state")).get("all_steps"))
+        )
+        if metrics.get("result_correct") is not True:
+            static["reasons"].append("private_gold_verdict_mismatch")
+        if metrics.get("engineering_error") is True:
+            static["reasons"].append("engineering_error")
+        if not static["has_terminal_output"]:
+            static["reasons"].append("terminal_judgment_missing")
+        if not static["has_report"]:
+            static["reasons"].append("fact_check_report_missing")
+    except Exception as exc:
+        static["reasons"].append(f"verification_error:{type(exc).__name__}:{exc}")
+    finally:
+        path.unlink(missing_ok=True)
+    return static
+
+
 def verify_causal_episode(
     hinted_trace: Mapping[str, Any],
     *,
@@ -526,6 +606,8 @@ def verify_causal_episode(
     source_access_policy: Any = None,
     source_task_review: Mapping[str, Any] | None = None,
     source_audit: Mapping[str, Any] | None = None,
+    cached_source_result: Mapping[str, Any] | None = None,
+    cached_episode_static: Mapping[str, Any] | None = None,
 ) -> VerificationResult:
     """Verify one hinted frozen-policy continuation against its failed source.
 
@@ -535,14 +617,23 @@ def verify_causal_episode(
     artifact bound to the selected repair step.
     """
 
-    _assert_no_private_fields(hinted_trace)
-    source_result = verify_source_rollout_failure(
-        source_trace,
-        gold=gold,
-        score_metadata=score_metadata,
-        source_task_review=source_task_review,
-        source_audit=source_audit,
-    )
+    if cached_episode_static is None:
+        static = prepare_causal_episode_static(
+            hinted_trace,
+            source_trace=source_trace,
+            gold=gold,
+            source_trace_sha256=source_trace_sha256,
+            score_metadata=score_metadata,
+            source_access_policy=source_access_policy,
+            source_task_review=source_task_review,
+            source_audit=source_audit,
+            source_result=cached_source_result,
+        )
+    else:
+        # This cache is created immediately before the per-target loop by the
+        # slate assembler and is never persisted or accepted from callers.
+        static = dict(cached_episode_static)
+    source_result = dict(static["source_result"])
     local_result = validate_local_verification(
         local_verification,
         repair_step_id=repair_step_id,
@@ -551,9 +642,7 @@ def verify_causal_episode(
         teacher_prompt_sha256=teacher_prompt_sha256,
         teacher_completion_sha256=teacher_completion_sha256,
     )
-    path = _write_trace(hinted_trace)
-    reasons: list[str] = []
-    reasons.extend(source_result["reasons"])
+    reasons: list[str] = list(source_result["reasons"])
     reasons.extend(f"local:{item}" for item in local_result["errors"])
     if local_result["valid"] and not local_result["passed"]:
         reasons.append("hinted_local_verifier_failed")
@@ -582,50 +671,21 @@ def verify_causal_episode(
         reasons.append("teacher_token_binding_missing")
     elif not token_binding_pass:
         reasons.append("hinted_episode_teacher_token_binding_mismatch")
-    try:
-        report = audit_trace(path, source_access_policy=source_access_policy) if source_access_policy is not None else audit_trace(path)
-        failures = report.failures(strict_scheduler=True)
-        if failures:
-            reasons.extend(f"audit:{item.code}" for item in failures)
-        strict_pass = not failures
-        metrics, _score = score_process_trace(
-            hinted_trace,
-            gold,
-            score_metadata=score_metadata,
-        )
-        expected_verdict = _text(metrics.get("expected_verdict"))
-        if metrics.get("result_correct") is not True:
-            reasons.append("private_gold_verdict_mismatch")
-        if metrics.get("engineering_error") is True:
-            reasons.append("engineering_error")
-        judgment = _mapping(
-            hinted_trace.get("judgment")
-            or _mapping(hinted_trace.get("state")).get("judgment")
-        )
-        has_report = isinstance(judgment.get("fact_check_report"), Mapping)
-        has_terminal_output = any(
-            str(step.get("stage", "")).strip() == "unified_judgment"
-            and str(step.get("action_type", "")).strip() == "output"
-            for step in _rows(
-                _mapping(hinted_trace.get("state")).get("all_steps")
-            )
-        )
-        full_pass = bool(
-            strict_pass
-            and metrics.get("result_correct") is True
-            and has_report
-            and has_terminal_output
-            and recorded_verdict in {"real", "fake"}
-            and token_binding_pass
-        )
-        if not has_terminal_output:
-            reasons.append("terminal_judgment_missing")
-        if not has_report:
-            reasons.append("fact_check_report_missing")
-    except Exception as exc:
-        reasons.append(f"verification_error:{type(exc).__name__}:{exc}")
-    finally:
-        path.unlink(missing_ok=True)
+    reasons.extend(static["reasons"])
+    strict_pass = bool(static["strict_pass"])
+    metrics = static["metrics"]
+    expected_verdict = _text(static["expected_verdict"])
+    recorded_verdict = _text(static["recorded_verdict"])
+    has_report = bool(static["has_report"])
+    has_terminal_output = bool(static["has_terminal_output"])
+    full_pass = bool(
+        strict_pass
+        and metrics.get("result_correct") is True
+        and has_report
+        and has_terminal_output
+        and recorded_verdict in {"real", "fake"}
+        and token_binding_pass
+    )
     return verify_repair(
         source_rollout_failed=source_result["passed"],
         hinted_local_pass=local_result["passed"],

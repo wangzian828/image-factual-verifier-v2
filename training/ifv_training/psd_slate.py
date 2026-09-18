@@ -495,7 +495,11 @@ def assemble_slate_attempts(*, seed, source, source_hash, episode, targets, revi
     student prefix as an original source-rollout capture. Both lineages survive.
     """
     from .psd_repair import FailureSite, HintProposal, build_psd_attempt_record
-    from .psd_repair_verifier import verify_causal_episode
+    from .psd_repair_verifier import (
+        prepare_causal_episode_static,
+        verify_source_rollout_failure,
+        verify_causal_episode,
+    )
     if review["episode_sha256"] != _sha(episode) or review["private_reference_sha256"] != _sha(gold):
         raise ValueError("PSD slate changed after full-task review")
     if review["decision"]["status"] != "pass":
@@ -515,6 +519,21 @@ def assemble_slate_attempts(*, seed, source, source_hash, episode, targets, revi
     if not expected:
         return [], []
     candidates, records = [], []
+    cached_source_result = verify_source_rollout_failure(
+        source,
+        gold=gold,
+        source_task_review=source_task_review,
+        source_audit=source_audit,
+    )
+    cached_episode_static = prepare_causal_episode_static(
+        episode,
+        source_trace=source,
+        gold=gold,
+        source_trace_sha256=source_hash,
+        source_task_review=source_task_review,
+        source_audit=source_audit,
+        source_result=cached_source_result,
+    )
     episode_hash = _sha(episode)
     for target in targets:
         position = target["position"]
@@ -551,7 +570,9 @@ def assemble_slate_attempts(*, seed, source, source_hash, episode, targets, revi
             hint_sha256=target["hint_audit"]["hint_sha256"],
             teacher_prompt_sha256=_sha(target["teacher_prompt_ids"]),
             teacher_completion_sha256=_sha(target["completion_ids"]), source_access_policy=source_policy,
-            source_task_review=source_task_review, source_audit=source_audit)
+            source_task_review=source_task_review, source_audit=source_audit,
+            cached_source_result=cached_source_result,
+            cached_episode_static=cached_episode_static)
         record = build_psd_attempt_record(candidate_id=candidate_id, failure_site=site,
             hint=HintProposal(**target["hint_record"]), model_roles=roles, verification=verified,
             local_verification=local, student_prompt_ids=target["student_prompt_ids"],

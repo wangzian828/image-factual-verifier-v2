@@ -10,7 +10,7 @@ from pathlib import Path
 import time
 import uuid
 
-from .io import load_json, write_json, write_jsonl, sha256_file
+from .io import load_json, load_jsonl, write_json, write_jsonl, sha256_file
 from .psd_repair import _sha
 from .psd_repair_storage import cached_continuation, load_bound, save_bound
 from .psd_slate import (capture_target, decision_map, propose_slate, review_slate,
@@ -85,6 +85,14 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
             write_json(historical, load_json(marker))
         state["status"] = "repairing"
         state.pop("output_files", None)
+    # A task-level wall-clock cutoff is not an admission rule.  Reopen a
+    # persisted time/strict-audit stop while its six complete-rerun budget is
+    # still available.  Attempt/proposal caps remain hard and are never reset.
+    if (state["status"] in {"time_budget_exhausted", "paused_strict_audit_failed"}
+            and len(state["rounds"]) < args.repair_attempts):
+        state["status"] = "repairing"
+        state.pop("pending_proposal", None)
+        state.pop("output_files", None)
     if state["status"] != "repairing":
         audit_slate_search(root)
         return load_json(root / "manifest.json")
@@ -100,7 +108,8 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
         "context_request_id", "runtime_store_path")})
     started = time.monotonic()
     elapsed_before = state["elapsed_seconds"]
-    records, candidates = [], []
+    records = load_jsonl(root / "repair_attempts.jsonl") if (root / "repair_attempts.jsonl").exists() else []
+    candidates = load_jsonl(root / "repair_candidates.jsonl") if (root / "repair_candidates.jsonl").exists() else []
     source_hash = sha256_file(args.trace)
     token_url = str(profile["base_url"]).rstrip("/").removesuffix("/v1") + "/tokenize"
     key = adapter.policy_llm.api_key
@@ -113,10 +122,6 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
             return response.json()["tokens"]
         capture = partial(capture_target, tokenize=tokenize, model=args.policy_model)
         while len(state["rounds"]) < args.repair_attempts:
-            elapsed = elapsed_before + time.monotonic() - started
-            if elapsed >= args.search_seconds:
-                state["status"] = "time_budget_exhausted"
-                break
             number = len(state["rounds"])
             previous, passing, failed, observed = {}, [], initial, trace
             if state["rounds"]:
@@ -126,10 +131,32 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                 passing = last["review"]["decision"]["passing_positions"]
                 failed = last["review"]["decision"]["failed_position"]
                 if failed < 0:
-                    raise ValueError("PSD failed review has no actionable localization")
+                    # A strict assembly rejection can follow a semantic pass,
+                    # whose review has no failed position.  Reuse the latest
+                    # public failing position as the grounded anchor; never
+                    # expose the private strict-audit reason to the proposer.
+                    for prior in reversed(state["rounds"][:-1]):
+                        candidate_failed = prior["review"]["decision"].get("failed_position", -1)
+                        if candidate_failed >= 0:
+                            failed = candidate_failed
+                            break
+                    if failed < 0:
+                        failed = initial
             images, _ = review_images({"source": trace, **({"repaired": observed} if number else {})}, image_path=args.image)
-            feedback = (checker_feedback(last["review"], observed, repaired=True, hints=previous)
-                        if state["rounds"] else source_feedback)
+            if state["rounds"]:
+                feedback_review = last["review"]
+                # A strict assembly failure can follow a semantic pass.  The
+                # private strict reason must stay private, so ground the next
+                # proposer on the latest public failing review instead.
+                if feedback_review["decision"].get("status") != "fail":
+                    for prior in reversed(state["rounds"][:-1]):
+                        if prior["review"]["decision"].get("status") == "fail":
+                            feedback_review = prior["review"]
+                            break
+                feedback = checker_feedback(feedback_review, observed,
+                                            repaired=True, hints=previous)
+            else:
+                feedback = source_feedback
             public = {"source_steps": trace_steps(trace), "observed_steps": trace_steps(observed),
                 "decision_map": decision_map(observed), "checker_feedback": feedback}
             hints, provenance = await propose_with_budget(state=state,round_index=number,
@@ -190,13 +217,24 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                             prompt_ids=target["teacher_prompt_ids"])
                         validate_media(media, target["student_prompt_ids"])
                         target["psd_media"] = media
-                candidates, records = assemble_slate_attempts(seed=candidate, source=trace,
+                new_candidates, new_records = assemble_slate_attempts(seed=candidate, source=trace,
                     source_hash=source_hash, episode=episode, targets=continuation.local_targets,
                     review=review, gold=gold, source_task_review=source_task_review, source_audit=source_audit,
                     source_policy=source_policy, roles=roles)
-                state["status"] = ("passed_without_intervention" if not continuation.local_targets else
-                    "converged" if records and all(r["accepted"] for r in records) else "paused_strict_audit_failed")
-                break
+                candidates.extend(new_candidates)
+                records.extend(new_records)
+                if not continuation.local_targets:
+                    state["status"] = "passed_without_intervention"
+                    break
+                if new_records and all(r["accepted"] for r in new_records):
+                    state["status"] = "converged"
+                    break
+                # Keep the strict gate.  Continue with the next grounded
+                # proposal/re-run while the six-rerun budget remains.
+                state["status"] = "repairing"
+                state.pop("pending_proposal", None)
+                save_bound(marker, identity=identity, payload=state)
+                continue
             if review["decision"]["status"] == "unresolved":
                 state["status"] = "paused_unresolved_task_review"
                 break
