@@ -17,21 +17,21 @@ import time
 ROOT = Path("/volume/ybo/wza")
 RUN = ROOT / "runs/psd-production400x8-20260917-v6"
 ROUND = ROOT / "runs/psd-production-round1-20260917-v1"
-CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-flash36-high-v1"
-DEPLOY = ROOT / "training-artifacts/psd-flash36-incremental-20260917-v57"
+CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260918-flash37-recovery-v4"
+DEPLOY = ROOT / "training-artifacts/psd-flash37-recovery-20260918-v61"
 CODE = DEPLOY / "code"
 PREVIOUS_CODE = ROOT / "training-artifacts/psd-flash-high-20260917-v55/code"
 # Keep the historical search name and resume identity. The explicit route below
 # changes only uncached provider calls, whose provenance records the real model.
 SEARCH_NAME = "search-gemini37-flash-high"
 RESUME_MODEL = "gemini-3.7-flash"
-REPAIR_MODEL = "gemini-3.6-flash"
-PREVIOUS_CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260917-flash-high-v1"
+REPAIR_MODEL = "gemini-3.7-flash"
+PREVIOUS_CONTROL = ROOT / "runs/psd-formal-prepare-controller-20260918-tail-recovery-v3"
 ROUTE = DEPLOY / "external-model-route.json"
 PREFETCH = RUN / "source-review-prefetch-v2-auto-retry"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
 PRIVATE_ENV = ROOT / "private/runtime.env"
-INTERRUPTION_RECEIPT = DEPLOY / "controlled-interruptions-v2.json"
+INTERRUPTION_RECEIPT = DEPLOY / "controlled-interruptions.json"
 EXTERNAL_ENV_KEYS = {
     "GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_WIRE_API",
     "GEMINI_MODEL", "GEMINI_VISION_MODEL", "SERPER_API_KEY",
@@ -85,7 +85,7 @@ def external_environment() -> tuple[dict[str, str], dict[str, bool]]:
     }
     if not all(checks.values()):
         raise RuntimeError("PSD external credential preflight is incomplete")
-    parsed["GEMINI_MAX_INFLIGHT_REQUESTS"] = "16"
+    parsed["GEMINI_MAX_INFLIGHT_REQUESTS"] = "8"
     if ROUTE.exists():
         parsed["IFV_PSD_EXTERNAL_ROUTE"] = str(ROUTE)
         parsed["IFV_PSD_EXTERNAL_ROUTE_SHA256"] = hashlib.sha256(ROUTE.read_bytes()).hexdigest()
@@ -238,7 +238,7 @@ def launch() -> None:
     receipt = owner.spawn(command, env, CONTROL / "controller.log")
     save(CONTROL / "process.json", receipt)
     save(CONTROL / "state.json", {"phase": "launched", "external_checks": checks,
-        "gemini_max_inflight_requests": 16, "repair_model": REPAIR_MODEL,
+        "gemini_max_inflight_requests": 8, "repair_model": REPAIR_MODEL,
         "thinking_level": "high", "time": time.time()})
     print(json.dumps({"pid": receipt["pid"], "mode": "lightweight_resume"}))
 

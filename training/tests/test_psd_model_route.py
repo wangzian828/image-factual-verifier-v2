@@ -31,6 +31,19 @@ def activate(monkeypatch, tmp_path):
     return root, path
 
 
+def activate_direct(monkeypatch, tmp_path):
+    root = tmp_path / 'search'
+    root.mkdir(exist_ok=True)
+    path = tmp_path / 'route.json'
+    path.write_text(json.dumps({'schema_version': 'ifv-psd-external-model-route-v2',
+        'mode': 'direct_model', 'request_model': 'gemini-3.7-flash',
+        'model': 'gemini-3.7-flash', 'search_root': str(root.resolve()),
+        'thinking_level': 'high', 'preserve_completed_responses': True}))
+    monkeypatch.setenv('IFV_PSD_EXTERNAL_ROUTE', str(path))
+    monkeypatch.setenv('IFV_PSD_EXTERNAL_ROUTE_SHA256', hashlib.sha256(path.read_bytes()).hexdigest())
+    return root, path
+
+
 def request(client, cache, packet=None, model='gemini-3.7-flash'):
     return asyncio.run(_request(client, packet or {}, prompt='prompt', schema={},
                                model=model, cache_dir=cache))
@@ -60,6 +73,18 @@ def test_route_does_not_change_other_jobs_or_uncached_probes(monkeypatch, tmp_pa
     request(client, root / 'case', model='gemini-3.1-pro-preview')
     assert [c['model'] for c in client.calls] == [
         'gemini-3.7-flash', 'gemini-3.7-flash', 'gemini-3.1-pro-preview']
+
+
+def test_direct_route_uses_gemini37_and_preserves_completed_cache(monkeypatch, tmp_path):
+    root, _ = activate_direct(monkeypatch, tmp_path)
+    client = Client()
+    cache = root / 'case'
+    first = request(client, cache)
+    second = request(client, cache, {'new': True})
+    assert first[1]['request_binding']['model'] == 'gemini-3.7-flash'
+    assert second[1]['request_binding']['model'] == 'gemini-3.7-flash'
+    assert second[1]['model_route']['mode'] == 'direct_model'
+    assert [c['model'] for c in client.calls] == ['gemini-3.7-flash', 'gemini-3.7-flash']
 
 
 def test_route_tamper_fails_before_request(monkeypatch, tmp_path):

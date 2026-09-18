@@ -16,17 +16,25 @@ def uncached_model(model, cache_dir):
     if digest != os.environ.get('IFV_PSD_EXTERNAL_ROUTE_SHA256'):
         raise ValueError('PSD external model route changed after launch')
     route = json.loads(raw)
-    if (route.get('schema_version') != 'ifv-psd-external-model-route-v1'
-            or route.get('preserve_completed_responses') is not True
-            or route.get('from_model') != 'gemini-3.7-flash'
-            or route.get('to_model') != 'gemini-3.6-flash'
-            or route.get('thinking_level') != 'high'
-            or not Path(str(route.get('search_root', ''))).is_absolute()):
+    common = (route.get('preserve_completed_responses') is True
+              and route.get('thinking_level') == 'high'
+              and Path(str(route.get('search_root', ''))).is_absolute())
+    legacy = (route.get('schema_version') == 'ifv-psd-external-model-route-v1'
+              and route.get('from_model') == 'gemini-3.7-flash'
+              and route.get('to_model') == 'gemini-3.6-flash')
+    direct = (route.get('schema_version') == 'ifv-psd-external-model-route-v2'
+              and route.get('mode') == 'direct_model'
+              and route.get('request_model') == 'gemini-3.7-flash'
+              and route.get('model') == 'gemini-3.7-flash')
+    if not common or not (legacy or direct):
         raise ValueError('Invalid explicit PSD external model route')
-    if model != route['from_model'] or cache_dir is None:
+    request_model = route.get('from_model') if legacy else route.get('request_model')
+    if model != request_model or cache_dir is None:
         return model, None
     root = Path(route['search_root']).resolve()
     if not Path(cache_dir).resolve().is_relative_to(root):
         return model, None
-    return route['to_model'], {'path': str(Path(path).resolve()), 'sha256': digest,
-                              'from_model': model, 'to_model': route['to_model']}
+    actual_model = route['to_model'] if legacy else route['model']
+    return actual_model, {'path': str(Path(path).resolve()), 'sha256': digest,
+                          'from_model': model, 'to_model': actual_model,
+                          **({'mode': 'direct_model'} if direct else {})}

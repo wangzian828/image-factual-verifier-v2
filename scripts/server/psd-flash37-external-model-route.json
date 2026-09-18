@@ -1,0 +1,10 @@
+{
+  "schema_version": "ifv-psd-external-model-route-v2",
+  "mode": "direct_model",
+  "request_model": "gemini-3.7-flash",
+  "model": "gemini-3.7-flash",
+  "search_root": "/volume/ybo/wza/runs/psd-production-round1-20260917-v1/search-gemini37-flash-high",
+  "thinking_level": "high",
+  "preserve_completed_responses": true,
+  "authorization": "user_requested_gemini37_incremental_switch"
+}
