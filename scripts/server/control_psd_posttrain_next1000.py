@@ -140,6 +140,10 @@ def main() -> None:
     os.umask(0o077)
     state_path = DEPLOY / "posttrain-state.json"
     while True:
+        if not TRAIN_STATE.is_file():
+            atomic_json(state_path, {"phase": "waiting_smallbank_training"})
+            time.sleep(5)
+            continue
         state = load(TRAIN_STATE)
         if state.get("phase") == "failed_requires_fix":
             raise RuntimeError("small-bank PSD chain failed")
