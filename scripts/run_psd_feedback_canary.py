@@ -29,6 +29,54 @@ from ifv_training.psd_collection import build_task_repair_selection_parallel
 from scripts.run_psd_repair_driver import _parser, _run
 
 
+TERMINAL_SEARCH_STATUSES = {
+    "converged",
+    "passed_without_intervention",
+    "attempt_budget_exhausted",
+    "proposal_budget_exhausted",
+    "infrastructure_budget_exhausted",
+}
+
+
+def _resume_case_plan(repair_sources, previous_progress):
+    """Carry terminal cases by their small manifest and schedule only the tail.
+
+    A completed case was fully audited in the invocation that persisted it in
+    ``progress.json``.  Outer resume passes therefore compare its bound
+    manifest instead of recursively reopening the much larger episode tree.
+    Missing, paused, or unknown-status cases remain scheduled.
+    """
+    rows = list(repair_sources)
+    indexes = {}
+    for index, candidate in enumerate(rows):
+        case_id = candidate["case_id"]
+        if case_id in indexes:
+            raise ValueError(f"duplicate selected repair case: {case_id}")
+        indexes[case_id] = index
+    carried = {}
+    previous_cases = previous_progress.get("cases") or []
+    if not isinstance(previous_cases, list):
+        raise ValueError("previous PSD progress cases must be a list")
+    for record in previous_cases:
+        case_id = str(record.get("case_id") or "")
+        if case_id not in indexes or case_id in carried:
+            continue
+        result = record.get("result") or {}
+        if result.get("status") not in TERMINAL_SEARCH_STATUSES:
+            continue
+        directory = Path(str(record.get("directory") or ""))
+        manifest_path = directory / "manifest.json"
+        if not manifest_path.is_file() or load_json(manifest_path) != result:
+            raise ValueError(f"terminal PSD manifest changed for {case_id}")
+        carried[case_id] = {**record, "input_index": indexes[case_id]}
+    pending = [
+        (index, candidate)
+        for index, candidate in enumerate(rows)
+        if candidate["case_id"] not in carried
+    ]
+    return [carried[case_id] for case_id in sorted(carried, key=indexes.get)], pending
+
+
 def _iter_jsonl(path):
     with Path(path).open(encoding="utf-8") as source:
         for line_number, line in enumerate(source, 1):
@@ -138,10 +186,7 @@ async def run(args):
         manifest_path = directory / "manifest.json"
         if manifest_path.exists():
             manifest = load_json(manifest_path)
-            if manifest.get("status") in {
-                    "converged", "passed_without_intervention",
-                    "attempt_budget_exhausted", "proposal_budget_exhausted",
-                    "infrastructure_budget_exhausted"}:
+            if manifest.get("status") in TERMINAL_SEARCH_STATUSES:
                 from ifv_training.psd_slate_search import audit_slate_search
                 audit = await asyncio.to_thread(audit_slate_search, directory)
                 if not audit["passed"]:
@@ -190,13 +235,27 @@ async def run(args):
         summary["task_source_selection"] = {k: v for k, v in selection.items() if k != "tasks"}
     else:
         repair_sources = _iter_jsonl(candidates_path)
+    carried_cases, pending_cases = _resume_case_plan(repair_sources, previous_progress)
+    summary["cases"] = carried_cases
+    summary["resume_scope"] = {
+        "selected": len(carried_cases) + len(pending_cases),
+        "terminal_manifests_carried": len(carried_cases),
+        "scheduled": len(pending_cases),
+    }
     search_started = time.monotonic()
     def save_case_error(candidate, diagnostic):
         key = hashlib.sha256(candidate["candidate_id"].encode()).hexdigest()[:16]
         _atomic_json(output / "case-errors" / (key + ".json"),
             {"case_id": candidate["case_id"], "time": time.time(), **diagnostic})
-    async for index, candidate, outcome, error in completed_cases(repair_sources,
-            repair_case, concurrency=args.case_concurrency, on_error=save_case_error):
+    async def repair_planned(planned):
+        return await repair_case(planned[1])
+
+    def save_planned_error(planned, diagnostic):
+        save_case_error(planned[1], diagnostic)
+
+    async for _, planned, outcome, error in completed_cases(pending_cases,
+            repair_planned, concurrency=args.case_concurrency, on_error=save_planned_error):
+        index, candidate = planned
         completed_after_seconds = time.monotonic() - search_started
         summary["search_wall_seconds"] = previous_wall_seconds + completed_after_seconds
         summary["search_invocations"] = [*previous_invocations, {
@@ -212,13 +271,24 @@ async def run(args):
             continue
         summary["cases"].append({**outcome, "input_index": index,
                                  "completed_after_seconds": completed_after_seconds})
-        directory = Path(outcome["directory"])
-        for row in load_jsonl(directory / "repair_candidates.jsonl"):
-            merged_candidates[row["candidate_id"]] = row
-        attempts.extend(load_jsonl(directory / "repair_attempts.jsonl"))
         _atomic_json(output / "progress.json", summary)
     # The original 45-row CPU probe must still be reading exactly the same bytes.
     load_bound(marker, identity={**identity, "inputs": {name: sha256_file(Path(name)) for name in identity["inputs"]}})
+    # Read compact accepted-candidate/attempt ledgers once at the stage boundary;
+    # repeated outer resumes must not reopen every terminal episode tree.
+    summary["cases"].sort(key=lambda row: row["input_index"])
+    for case_record in summary["cases"]:
+        directory_value = case_record.get("directory")
+        if not directory_value:
+            continue
+        directory = Path(directory_value)
+        candidates_file = directory / "repair_candidates.jsonl"
+        attempts_file = directory / "repair_attempts.jsonl"
+        if candidates_file.is_file():
+            for row in load_jsonl(candidates_file):
+                merged_candidates[row["candidate_id"]] = row
+        if attempts_file.is_file():
+            attempts.extend(load_jsonl(attempts_file))
     # Completion order is useful progress, not a nondeterministic dataset order.
     attempts.sort(key=lambda row: (row["case_id"], row["attempt_id"]))
     invocation_wall_seconds = time.monotonic() - search_started

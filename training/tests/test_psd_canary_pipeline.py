@@ -7,7 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.continue_psd_canary import completed_stage
 from scripts.prepare_psd_training_canary import project_frozen_training
-from scripts.run_psd_feedback_canary import _build_parser
+from scripts.run_psd_feedback_canary import _build_parser, _resume_case_plan
 from src.orchestrator.source_access import benchmark_source_access_policy
 from ifv_training.io import load_jsonl
 from ifv_training.psd_repair_runtime import QwenContinuationAdapter
@@ -22,6 +22,38 @@ def test_feedback_canary_exposes_bounded_search_only_throughput_probe():
     assert args.attempts == args.proposal_rounds == 1
     assert args.case_concurrency == 3
     assert args.search_only is True
+
+
+def test_resume_case_plan_schedules_only_missing_and_paused_cases(tmp_path):
+    candidates = [
+        {"case_id": "done", "candidate_id": "d"},
+        {"case_id": "paused", "candidate_id": "p"},
+        {"case_id": "missing", "candidate_id": "m"},
+    ]
+    done = tmp_path / "done"
+    done.mkdir()
+    manifest = {"status": "converged", "accepted_count": 1}
+    (done / "manifest.json").write_text(json.dumps(manifest))
+    previous = {"cases": [
+        {"case_id": "done", "directory": str(done), "result": manifest,
+         "input_index": 99},
+        {"case_id": "paused", "result": {"status": "paused_case_exception"},
+         "input_index": 1},
+    ]}
+    carried, pending = _resume_case_plan(candidates, previous)
+    assert [(row["case_id"], row["input_index"]) for row in carried] == [("done", 0)]
+    assert [(index, row["case_id"]) for index, row in pending] == [
+        (1, "paused"), (2, "missing")]
+
+
+def test_resume_case_plan_rejects_changed_terminal_manifest(tmp_path):
+    directory = tmp_path / "done"
+    directory.mkdir()
+    (directory / "manifest.json").write_text(json.dumps({"status": "converged"}))
+    previous = {"cases": [{"case_id": "done", "directory": str(directory),
+                            "result": {"status": "converged", "accepted_count": 1}}]}
+    with pytest.raises(ValueError, match="manifest changed"):
+        _resume_case_plan([{"case_id": "done", "candidate_id": "d"}], previous)
 
 
 def test_completed_proposer_response_cached_before_json_validation(tmp_path):
