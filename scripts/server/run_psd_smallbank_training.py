@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 
@@ -21,6 +22,27 @@ SERVICE = ROOT / "inference/psd-sft3084-20260916"
 MODEL = ROOT / "exports/h20-sft-merged4872-3epoch-step3084-20260915/model"
 SNAPSHOT = ROOT / "training-artifacts/psd-contract-audit-20260916-v10/snapshot"
 EXPERIMENT = "psd-smallbank4095-dp4-5epoch-20260920-v1"
+
+
+def wait_for_idle_serving(timeout_seconds: int = 600) -> list[dict]:
+    """Wait through the expected cold-start window after the resume gate."""
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "serving health unavailable"
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:19025/health", timeout=10) as response:
+                replicas = json.loads(response.read())["replicas"]
+            if len(replicas) != 4:
+                last_error = f"expected four serving replicas, got {len(replicas)}"
+            elif all(row["inflight"] == 0 for row in replicas):
+                return replicas
+            else:
+                last_error = "owned inference has active requests"
+        except (OSError, urllib.error.HTTPError, urllib.error.URLError, KeyError,
+                TypeError, ValueError) as error:
+            last_error = f"{type(error).__name__}: {error}"
+        time.sleep(5)
+    raise RuntimeError(f"owned serving did not become idle: {last_error}")
 
 
 def owner_module():
@@ -48,6 +70,7 @@ def execute(ready_path: Path, gate_path: Path, output: Path) -> None:
     if gate.get("passed") is not True or gate.get("adapter_bitwise_equal") is not True:
         raise ValueError("native DP4 resume gate has not passed")
     datums = Path(ready["datums"]).resolve()
+    replicas = wait_for_idle_serving()
     output.mkdir(parents=True, exist_ok=False)
     atomic_json(output / "binding.json", {"ready": str(ready_path),
         "ready_identity": artifact_identity(ready_path), "datums": str(datums),
@@ -61,10 +84,6 @@ def execute(ready_path: Path, gate_path: Path, output: Path) -> None:
     stopped = []
     try:
         os.kill(guard["pid"], signal.SIGSTOP)
-        with urllib.request.urlopen("http://127.0.0.1:19025/health", timeout=10) as response:
-            replicas = json.loads(response.read())["replicas"]
-        if not all(row["inflight"] == 0 for row in replicas):
-            raise RuntimeError("owned inference has active requests")
         for _ in range(90):
             busy = 0.0
             for index in range(4):

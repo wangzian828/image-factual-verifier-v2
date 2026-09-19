@@ -12,13 +12,13 @@ import urllib.request
 
 
 ROOT = Path("/volume/ybo/wza")
-DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v90"
+DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91"
 CODE = DEPLOY / "code"
 TRAIN_DEPLOY = DEPLOY
 TRAIN_STATE = TRAIN_DEPLOY / "training-chain-state.json"
 RUN = ROOT / "runs/psd-production1000x4-20260920-v2"
 SELECTION = RUN / "selection"
-FORMAL = ROOT / "runs/psd-stopped-tail-finalization-20260919-v1/formal-training-smallbank4095-v1"
+FORMAL = ROOT / "runs/psd-stopped-tail-finalization-20260919-v1/formal-training-smallbank4095-v2"
 
 
 def atomic_json(path: Path, value) -> None:
