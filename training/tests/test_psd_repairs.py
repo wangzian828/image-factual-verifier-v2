@@ -122,8 +122,8 @@ def _attempt(
     return row
 
 
-def _preservation_candidate() -> dict:
-    return {
+def _preservation_candidate(**overrides) -> dict:
+    row = {
         "candidate_id": "preserve-1",
         "class": "base_pass_preserve",
         "case_id": "case-pass",
@@ -162,6 +162,44 @@ def _preservation_candidate() -> dict:
             },
         ],
     }
+    row.update(overrides)
+    return row
+
+
+def test_assembler_keeps_one_preservation_rollout_per_case(tmp_path: Path) -> None:
+    candidates = tmp_path / "repair_candidates.jsonl"
+    attempts = tmp_path / "repair_attempts.jsonl"
+    preservation = tmp_path / "preservation_candidates.jsonl"
+    _write_jsonl(candidates, [_repair_candidate()])
+    _write_jsonl(attempts, [_attempt("accepted", hint="Inspect the evidence.", hint_level=1)])
+    second = _preservation_candidate(candidate_id="preserve-2", episode_id="episode-pass-2")
+    _write_jsonl(preservation, [_preservation_candidate(), second])
+
+    output = tmp_path / "assembled"
+    manifest = assemble_psd_repair_package(
+        repair_candidates_path=candidates,
+        repair_attempts_path=attempts,
+        preservation_candidates_path=preservation,
+        output_dir=output,
+    )
+
+    assert manifest["counts"]["preservation_candidates"] == 2
+    assert manifest["counts"]["preservation_rows"] == 1
+    assert manifest["counts"]["preservation_unique_cases"] == 1
+    assert manifest["preservation_selection"] == (
+        "first_verified_row_per_case_in_frozen_source_order"
+    )
+    rows = [json.loads(line) for line in
+        (output / "preservation.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [row["episode_id"] for row in rows] == ["episode-pass"]
+    rejections = [json.loads(line) for line in
+        (output / "preservation_rejections.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rejections == [{
+        "row_index": 1,
+        "candidate_id": "preserve-2",
+        "case_id": "case-pass",
+        "reason": "superseded_by_first_verified_case_preservation",
+    }]
 
 
 def test_assembler_selects_weakest_then_shortest_verified_hint(

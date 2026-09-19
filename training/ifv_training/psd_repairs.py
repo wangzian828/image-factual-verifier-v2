@@ -646,6 +646,12 @@ def assemble_psd_repair_package(
     preservation_row_count = 0
     preservation_rejection_count = 0
     seen_preservation_ids: set[str] = set()
+    # Upstream preservation starts from one sampled successful base trace per
+    # task (with multiple rows only for genuine multi-turn tasks). IFV collects
+    # several rollout slots per one-turn case; admitting every successful slot
+    # silently multiplies preservation mass and frozen-teacher work. Keep the
+    # first verified row in frozen source order, independent of text or score.
+    selected_preservation_cases: set[str] = set()
     preservation_output = output_dir / "preservation.jsonl"
     preservation_rejections_output = output_dir / "preservation_rejections.jsonl"
     with (preservation_output.open("w", encoding="utf-8") as preservation_handle,
@@ -653,12 +659,17 @@ def assemble_psd_repair_package(
         for row_index, candidate in enumerate(iter_jsonl(preservation_candidates_path)):
             preservation_candidate_count += 1
             candidate_id = _text(candidate.get("candidate_id"))
+            case_id = _text(candidate.get("case_id"))
             rejection = None
             if not candidate_id:
                 rejection = {"row_index": row_index, "reason": "candidate_id_missing"}
             elif candidate_id in seen_preservation_ids:
                 rejection = {"row_index": row_index, "candidate_id": candidate_id,
                     "reason": "duplicate_candidate_id"}
+            elif case_id in selected_preservation_cases:
+                rejection = {"row_index": row_index, "candidate_id": candidate_id,
+                    "case_id": case_id,
+                    "reason": "superseded_by_first_verified_case_preservation"}
             else:
                 seen_preservation_ids.add(candidate_id)
                 try:
@@ -678,6 +689,7 @@ def assemble_psd_repair_package(
                         media_dir=output_dir / "media")
                     preservation_handle.write(canonical_json(row) + "\n")
                     preservation_row_count += 1
+                    selected_preservation_cases.add(case_id)
                 except ValueError as exc:
                     rejection = {"row_index": row_index, "candidate_id": candidate_id,
                         "case_id": _text(candidate.get("case_id")),
@@ -712,7 +724,9 @@ def assemble_psd_repair_package(
             "preservation_candidates": preservation_candidate_count,
             "preservation_rows": preservation_row_count,
             "preservation_rejections": preservation_rejection_count,
+            "preservation_unique_cases": len(selected_preservation_cases),
         },
+        "preservation_selection": "first_verified_row_per_case_in_frozen_source_order",
         "selected_hint_levels": {
             str(level): count for level, count in sorted(selected_levels.items())
         },

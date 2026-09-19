@@ -10,6 +10,12 @@ are resumed from their small bound manifest without another Gemini or Qwen
 call. Distinct repair positions inside the one passing trajectory remain
 distinct PSD targets, matching upstream slate semantics.
 
+Preservation uses one verified rollout per one-turn IFV case, chosen as the
+first passing row in frozen source order. Multiple successful rollout slots for
+the same case must not multiply preservation mass. Every genuine policy
+decision inside that selected rollout remains a target, matching upstream's
+per-step rule without selecting by output length or score.
+
 ## Repair-stage storage and compute envelope (2026-09-19)
 
 PSD repair should spend its budget on the Gemini proposal/review calls and the
