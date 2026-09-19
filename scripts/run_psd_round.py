@@ -234,7 +234,8 @@ def attest(args):
             "rollout_gate_sha256": gate_sha256,
             "target_count": target_count,
             "datum_count": datum_gate["datums"]["rows"],
-            "datum_identity": datum_gate["datums"]["identity"],
+            "datum_identity": datum_gate["datums"].get("identity") or {
+                "legacy_sha256": datum_gate["datums"].get("sha256")},
             "initialization": initialization,
         },
     )

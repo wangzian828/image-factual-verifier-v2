@@ -58,10 +58,10 @@ def test_wrong_base_model_fails(tmp_path):
         verify_initialization(**args)
 
 
-def test_changed_checkpoint_bytes_fail(tmp_path):
+def test_missing_checkpoint_artifact_fails_without_scanning_weight_bytes(tmp_path):
     args, weight = fixture(tmp_path)
-    weight.write_bytes(b"other weights")
-    with pytest.raises(ValueError, match="model bytes changed"):
+    weight.unlink()
+    with pytest.raises(ValueError, match="model artifact is missing"):
         verify_initialization(**args)
 
 
@@ -87,8 +87,8 @@ def test_rebound_targets_from_different_policy_fail(tmp_path):
         verify_initialization(**args)
 
 
-def test_adapter_cannot_hide_a_changed_dense_base(tmp_path):
+def test_adapter_cannot_hide_a_missing_dense_base(tmp_path):
     args, _ = fixture(tmp_path, adapter=True)
-    (tmp_path / "base/model.safetensors").write_bytes(b"silently replaced base")
-    with pytest.raises(ValueError, match="base model bytes changed"):
+    (tmp_path / "base/model.safetensors").unlink()
+    with pytest.raises(ValueError, match="base model artifact is missing"):
         verify_initialization(**args)
