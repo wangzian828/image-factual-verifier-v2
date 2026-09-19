@@ -28,5 +28,6 @@ def test_prepare_command_resumes_search_directly_with_attestation(tmp_path, monk
     command = MODULE.prepare_command()
     assert command[2] == str(code / "scripts/run_psd_feedback_canary.py")
     assert "run_psd_round.py" not in " ".join(command)
+    assert "--defer-topk" not in command
     assert "--resume-input-receipt" in command
     assert "--resume-selection-index" in command

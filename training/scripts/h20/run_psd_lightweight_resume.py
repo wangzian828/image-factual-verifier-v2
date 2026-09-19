@@ -175,7 +175,6 @@ def prepare_command() -> list[str]:
         "--case-concurrency", "40",
         "--task-source-selection", "longest_failed", "--repair-mode", "slate",
         "--judge-model", RESUME_MODEL, "--teacher-device", "cuda:0",
-        "--defer-topk",
         "--resume-input-receipt", str(receipt),
         "--resume-input-receipt-sha256", receipt_sha256,
         "--resume-selection-index", str(index)]
