@@ -397,6 +397,31 @@ def _validated_model_roles(value: Any) -> dict[str, Any]:
     }
 
 
+def summarize_round_model_roles(values: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Bind one training policy while retaining non-training constructor provenance."""
+    records = [_validated_model_roles(value) for value in values]
+    if not records:
+        return None
+    policies = {
+        canonical_json({"frozen_self_teacher": row["frozen_self_teacher"],
+            "trainable_student": row["trainable_student"]})
+        for row in records
+    }
+    if len(policies) != 1:
+        raise ValueError("PSD rows do not share one frozen teacher/student policy")
+    constructors = {canonical_json(row["hint_constructor"]): row["hint_constructor"] for row in records}
+    if len(constructors) == 1:
+        constructor = dict(next(iter(constructors.values())))
+    else:
+        constructor = {"provider": "multiple", "model": "multiple-non-training-constructors",
+            "supplies_training_distribution": False,
+            "variants": [constructors[key] for key in sorted(constructors)]}
+    first = records[0]
+    return {"hint_constructor": constructor,
+        "frozen_self_teacher": first["frozen_self_teacher"],
+        "trainable_student": first["trainable_student"]}
+
+
 def _teacher_identity(target: Mapping[str, Any]) -> dict[str, str]:
     roles = _validated_model_roles(target.get("model_roles"))
     teacher = _mapping(roles["frozen_self_teacher"])
@@ -660,7 +685,7 @@ def build_psd_target_package(
     rejection_count = 0
     pending_topk = 0
     target_ids: set[str] = set()
-    role_records: dict[str, Mapping[str, Any]] = {}
+    role_records: list[Mapping[str, Any]] = []
     repair_tiers: Counter[str] = Counter()
     repair_output = output_dir / "repair_targets.jsonl"
     preservation_output = output_dir / "preservation_targets.jsonl"
@@ -686,10 +711,7 @@ def build_psd_target_package(
             if target_id in target_ids:
                 raise ValueError("PSD target IDs must be unique")
             target_ids.add(target_id)
-            role_records[canonical_json(target["model_roles"])] = target["model_roles"]
-            if len(role_records) > 1:
-                raise ValueError(
-                    "all PSD repairs in one package must use the same round-start policy")
+            role_records.append(target["model_roles"])
             rendered = canonical_json(target) + "\n"
             repair_handle.write(rendered)
             targets_handle.write(rendered)
@@ -697,7 +719,11 @@ def build_psd_target_package(
             pending_topk += target["target_status"] == "pending_topk"
             repair_tiers[target["repair_tier"]] += 1
 
-        round_model_roles = next(iter(role_records.values())) if role_records else None
+        try:
+            round_model_roles = summarize_round_model_roles(role_records)
+        except ValueError as error:
+            raise ValueError(
+                "all PSD repairs in one package must use the same round-start policy") from error
         if preservation_path is not None:
             for index, row in enumerate(iter_jsonl(preservation_path)):
                 try:

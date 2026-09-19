@@ -23,7 +23,8 @@ from .io import (
     write_json,
     write_jsonl,
 )
-from .psd import TRAINABLE_HINT_LEVELS, audit_hint, validate_topk_by_position
+from .psd import (TRAINABLE_HINT_LEVELS, audit_hint, summarize_round_model_roles,
+                  validate_topk_by_position)
 
 
 PSD_REPAIR_SCHEMA_VERSION = "ifv-psd-repair-v1"
@@ -621,17 +622,12 @@ def assemble_psd_repair_package(
                 }
             )
 
-    role_records = {
-        canonical_json(row["model_roles"]): row["model_roles"]
-        for row in repairs
-    }
-    if len(role_records) > 1:
+    try:
+        round_model_roles = summarize_round_model_roles(
+            [row["model_roles"] for row in repairs])
+    except ValueError as error:
         raise ValueError(
-            "selected repairs do not share one round-start policy"
-        )
-    round_model_roles = (
-        next(iter(role_records.values())) if role_records else None
-    )
+            "selected repairs do not share one round-start policy") from error
     repair_source_runs = {
         _text(row.get("source_run_id")) for row in repairs
     } - {""}

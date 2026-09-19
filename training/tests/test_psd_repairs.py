@@ -4,7 +4,9 @@ import hashlib
 import json
 from pathlib import Path
 
-from ifv_training.psd import build_psd_target_package
+import pytest
+
+from ifv_training.psd import build_psd_target_package, summarize_round_model_roles
 from ifv_training.psd_repairs import assemble_psd_repair_package
 
 
@@ -227,6 +229,19 @@ def test_assembler_selects_weakest_then_shortest_verified_hint(
     assert target_manifest["counts"]["repair_targets"] == 1
     assert target_manifest["counts"]["preservation_targets"] == 2
     assert target_manifest["counts"]["rejections"] == 0
+
+
+def test_round_roles_allow_mixed_non_training_constructors_only() -> None:
+    first = _attempt("a", hint="Inspect the route.", hint_level=1)["model_roles"]
+    second = json.loads(json.dumps(first))
+    second["hint_constructor"]["model"] = "another-constructor"
+    summary = summarize_round_model_roles([first, second])
+    assert summary["hint_constructor"]["provider"] == "multiple"
+    assert len(summary["hint_constructor"]["variants"]) == 2
+    assert summary["frozen_self_teacher"] == first["frozen_self_teacher"]
+    second["trainable_student"]["initial_checkpoint"] = "other-checkpoint"
+    with pytest.raises(ValueError, match="teacher/student"):
+        summarize_round_model_roles([first, second])
 
 
 def test_assembler_rejects_identity_verifier_and_hint_leaks(
