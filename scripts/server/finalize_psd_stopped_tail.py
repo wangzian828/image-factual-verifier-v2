@@ -74,17 +74,28 @@ def collect_terminal(search: Path):
 
 def finalize(*, search: Path, preservation: Path, control: Path):
     search, preservation, control = search.resolve(), preservation.resolve(), control.resolve()
-    control.mkdir(parents=True, exist_ok=False)
-    candidates, attempts, selection = collect_terminal(search)
     merge = search / "merged-stopped-tail-v1"
-    merge.mkdir(parents=True, exist_ok=False)
     candidates_path = merge / "repair_candidates.jsonl.gz"
     attempts_path = merge / "repair_attempts.jsonl.gz"
-    write_jsonl(candidates_path, candidates)
-    write_jsonl(attempts_path, attempts)
-    selection["inputs"] = {str(path): sha256_file(path) for path in (
-        candidates_path, attempts_path, preservation)}
-    write_json(control / "selection.json", selection)
+    selection_path = control / "selection.json"
+    if selection_path.exists():
+        selection = load_json(selection_path)
+        if selection.get("schema_version") != "ifv-psd-stopped-tail-selection-v1":
+            raise ValueError("unknown stopped-tail selection checkpoint")
+        expected = selection.get("inputs") or {}
+        current = {str(path): sha256_file(path) for path in (
+            candidates_path, attempts_path, preservation)}
+        if current != expected:
+            raise ValueError("stopped-tail merged inputs changed")
+    else:
+        control.mkdir(parents=True, exist_ok=False)
+        candidates, attempts, selection = collect_terminal(search)
+        merge.mkdir(parents=True, exist_ok=False)
+        write_jsonl(candidates_path, candidates)
+        write_jsonl(attempts_path, attempts)
+        selection["inputs"] = {str(path): sha256_file(path) for path in (
+            candidates_path, attempts_path, preservation)}
+        write_json(selection_path, selection)
     result = materialize_bank(output_dir=search, repair_candidates=candidates_path,
         repair_attempts=attempts_path, preservation_candidates=preservation,
         score_missing_topk=False)
