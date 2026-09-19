@@ -44,6 +44,15 @@ def test_feedback_rejects_unobserved_or_nonfailure_content(mutation):
     with pytest.raises(ValueError): checker_feedback(data, trace())
 
 
+def test_invalid_public_citations_can_be_withheld_without_copying_them():
+    data = review()
+    data["decision"]["evidence"][0]["quote"] = "SECRET_REFERENCE_NOT_OBSERVED"
+    feedback = checker_feedback(data, trace(), withhold_invalid_citations=True)
+    assert feedback["cited_observations"] == []
+    assert feedback["invalid_citations_withheld"] == 1
+    assert "SECRET_REFERENCE_NOT_OBSERVED" not in json.dumps(feedback)
+
+
 def test_repair_feedback_can_quote_the_actual_previous_hint():
     data = review()
     data["decision"]["evidence"] = [{"trace": "repaired", "position": 0,

@@ -185,9 +185,38 @@ def current_status() -> str:
     return ""
 
 
+def search_progress_signature():
+    path = ROUND / SEARCH_NAME / "progress.json"
+    if not path.exists():
+        return None
+    progress = load(path)
+    return {
+        "status": progress.get("status"),
+        "accepted": progress.get("accepted"),
+        "continuations": progress.get("continuations"),
+        "cases": sorted((row.get("case_id"), row.get("result", {}).get("status"),
+            row.get("result", {}).get("complete_reruns"),
+            row.get("result", {}).get("proposal_count"))
+            for row in progress.get("cases", [])),
+    }
+
+
+def retry_delay_seconds(consecutive_no_progress: int) -> int:
+    if type(consecutive_no_progress) is not int or consecutive_no_progress < 0:
+        raise ValueError("consecutive no-progress count must be nonnegative")
+    # A productive pass should hand off immediately. Repeated provider outages
+    # back off, but never impose the old unconditional 15-minute idle period.
+    return 5 if consecutive_no_progress == 0 else min(300, 15 * 2 ** min(
+        consecutive_no_progress - 1, 5))
+
+
 def worker() -> None:
     retryable = {"", "postprocess_running", "paused_search_requires_resume"}
-    for attempt in range(1, 33):
+    attempt = 0
+    consecutive_no_progress = 0
+    while True:
+        attempt += 1
+        before = search_progress_signature()
         save(CONTROL / "state.json", {"phase": "formal_prepare", "attempt": attempt,
             "status_before": current_status(), "time": time.time()})
         with (CONTROL / f"prepare-attempt-{attempt}.log").open("xb") as log:
@@ -204,8 +233,14 @@ def worker() -> None:
             return
         if status not in retryable:
             raise RuntimeError(f"formal PSD prepare stopped in non-retryable status {status!r}")
-        time.sleep(min(900, 60 * attempt))
-    raise RuntimeError("formal PSD prepare exhausted controller retry budget")
+        after = search_progress_signature()
+        consecutive_no_progress = (consecutive_no_progress + 1 if before == after else 0)
+        delay = retry_delay_seconds(consecutive_no_progress)
+        save(CONTROL / "state.json", {"phase": "formal_prepare_result", "attempt": attempt,
+            "returncode": process.returncode, "status": status,
+            "consecutive_no_progress": consecutive_no_progress,
+            "retry_after_seconds": delay, "time": time.time()})
+        time.sleep(delay)
 
 
 def launch() -> None:

@@ -21,7 +21,8 @@ CRITERIA = (
 )
 
 
-def checker_feedback(review, trace, *, repaired=False, hints=None, source_failure=None):
+def checker_feedback(review, trace, *, repaired=False, hints=None, source_failure=None,
+                     withhold_invalid_citations=False):
     """Copy only independently validated public quotes, including hint audits."""
     from .psd_gemini_judge import trace_steps, _quote_in_step
     from .psd_slate import decision_map
@@ -43,6 +44,7 @@ def checker_feedback(review, trace, *, repaired=False, hints=None, source_failur
             if int(position) in positions:
                 steps[positions[int(position)]]["injected_procedural_hint"] = hint
     citations = []
+    withheld = 0
     for row in decision.get("evidence", []):
         index, quote = row.get("step_index"), row.get("quote")
         if (row.get("trace") != ("repaired" if repaired else "source")
@@ -50,10 +52,14 @@ def checker_feedback(review, trace, *, repaired=False, hints=None, source_failur
                 or not isinstance(quote, str) or not quote.strip()
                 or not _quote_in_step(quote, steps[index], decode_json_strings=(
                     review.get("evidence_encoding") == "ifv-psd-literal-json-strings-v1"))):
+            if withhold_invalid_citations:
+                withheld += 1
+                continue
             raise ValueError("checker feedback must quote an actual public observation")
         citations.append({"step_index": index, "quote": quote})
     return {"policy": POLICY, "status": "fail", "criteria": CRITERIA,
             "cited_observations": citations,
+            "invalid_citations_withheld": withheld,
             "semantic_reviewer_status": decision.get("status", "not_available"),
             "independent_task_check_failed": independently_failed,
             "reference_explanation_withheld": True}

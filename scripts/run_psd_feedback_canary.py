@@ -130,6 +130,23 @@ async def run(args):
         key = hashlib.sha256(candidate["candidate_id"].encode()).hexdigest()[:16]
         inputs, directory = output / "case-inputs" / key, output / "repairs" / key
         case = candidate["case_id"]
+        # Completed slate searches are immutable child packages.  Re-audit the
+        # package itself, but do not rebuild the orchestrator and recursively
+        # verify the (much larger) source trace on every outer resume pass.
+        # The audit is synchronous filesystem work, so keep it off the event
+        # loop used by unfinished provider/policy calls.
+        manifest_path = directory / "manifest.json"
+        if manifest_path.exists():
+            manifest = load_json(manifest_path)
+            if manifest.get("status") in {
+                    "converged", "passed_without_intervention",
+                    "attempt_budget_exhausted", "proposal_budget_exhausted",
+                    "infrastructure_budget_exhausted"}:
+                from ifv_training.psd_slate_search import audit_slate_search
+                audit = await asyncio.to_thread(audit_slate_search, directory)
+                if not audit["passed"]:
+                    raise ValueError("terminal PSD slate package failed its bound audit")
+                return {"case_id": case, "directory": str(directory), "result": manifest}
         trace = run_dir / candidate["source"]["source_trace_path"]
         for name, data in (("candidate.json", candidate), ("gold.json", gold[case]),
                            ("public.json", {"case_id": case, "source_steps": trace_steps(load_json(trace))})):

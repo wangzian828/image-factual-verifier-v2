@@ -320,7 +320,12 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     from ifv_training.psd_source_review import source_review_reference
     source_task_review = source_review_reference(seed.get("source", {}))
     source_audit = audit if audit.get("source_trace_canonical_sha256") else None
-    source_verification = verify_source_rollout_failure(trace, gold=gold,
+    # This strict recursive/private-field audit is CPU-heavy for full Agent
+    # traces.  Running it inline serialized the nominally concurrent case pool
+    # before any task reached provider I/O.  It remains the identical gate;
+    # only its execution moves to the bounded asyncio worker pool.
+    source_verification = await asyncio.to_thread(
+        verify_source_rollout_failure, trace, gold=gold,
         source_task_review=source_task_review, source_audit=source_audit)
     if source_verification["passed"] is not True:
         raise RuntimeError(

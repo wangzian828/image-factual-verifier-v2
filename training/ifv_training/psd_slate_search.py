@@ -14,7 +14,8 @@ from .io import load_json, load_jsonl, write_json, write_jsonl, sha256_file
 from .psd_repair import _sha
 from .psd_repair_storage import cached_continuation, load_bound, save_bound
 from .psd_slate import (capture_target, decision_map, propose_slate, review_slate,
-                        assemble_slate_attempts, SlateProposalRejected)
+                        assemble_slate_attempts, SlateProposalRejected,
+                        SlateReviewRejected)
 from .psd_slate_feedback import (POLICY, checker_feedback, diagnostic_position,
                                 load_slate_state)
 
@@ -97,7 +98,8 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
         audit_slate_search(root)
         return load_json(root / "manifest.json")
     initial_state, _ = adapter._initial_runtime_state(base_trace=trace, failure_site=site)
-    source_feedback = checker_feedback(source_task_review, trace, source_failure=source_failure)
+    source_feedback = checker_feedback(source_task_review, trace,
+        source_failure=source_failure, withhold_invalid_citations=True)
     initial = (diagnostic_position(source_feedback, trace) if source_task_review else
                24 if site.stage == "unified_judgment" else initial_state.action_count)
     state["active_feedback_policy"] = POLICY
@@ -124,8 +126,9 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
         while len(state["rounds"]) < args.repair_attempts:
             number = len(state["rounds"])
             previous, passing, failed, observed = {}, [], initial, trace
-            if state["rounds"]:
-                last = state["rounds"][-1]
+            reviewed_rounds = [row for row in state["rounds"] if "review" in row]
+            if reviewed_rounds:
+                last = reviewed_rounds[-1]
                 observed = load_json(Path(last["episode_path"]))
                 previous = {int(k): v for k, v in last["hints"].items()}
                 passing = last["review"]["decision"]["passing_positions"]
@@ -135,7 +138,7 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                     # whose review has no failed position.  Reuse the latest
                     # public failing position as the grounded anchor; never
                     # expose the private strict-audit reason to the proposer.
-                    for prior in reversed(state["rounds"][:-1]):
+                    for prior in reversed(reviewed_rounds[:-1]):
                         candidate_failed = prior["review"]["decision"].get("failed_position", -1)
                         if candidate_failed >= 0:
                             failed = candidate_failed
@@ -143,18 +146,27 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                     if failed < 0:
                         failed = initial
             images, _ = review_images({"source": trace, **({"repaired": observed} if number else {})}, image_path=args.image)
-            if state["rounds"]:
+            if reviewed_rounds:
                 feedback_review = last["review"]
                 # A strict assembly failure can follow a semantic pass.  The
                 # private strict reason must stay private, so ground the next
                 # proposer on the latest public failing review instead.
                 if feedback_review["decision"].get("status") != "fail":
-                    for prior in reversed(state["rounds"][:-1]):
+                    for prior in reversed(reviewed_rounds[:-1]):
                         if prior["review"]["decision"].get("status") == "fail":
                             feedback_review = prior["review"]
                             break
-                feedback = checker_feedback(feedback_review, observed,
-                                            repaired=True, hints=previous)
+                if feedback_review["decision"].get("status") == "fail":
+                    feedback = checker_feedback(feedback_review, observed,
+                        repaired=True, hints=previous, withhold_invalid_citations=True)
+                else:
+                    # A semantic pass followed by a deterministic strict
+                    # rejection has no public failing explanation.  Fall back
+                    # to the already verified source-level public feedback;
+                    # never expose the private strict reason or loop on the
+                    # same unusable review cache.
+                    feedback = source_feedback
+                    previous, passing, failed, observed = {}, [], initial, trace
             else:
                 feedback = source_feedback
             public = {"source_steps": trace_steps(trace), "observed_steps": trace_steps(observed),
@@ -188,14 +200,47 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                     identity={"inputs": _sha(config), "hints": {str(k): h.text for k, h in hints.items()}},
                     generate=generate_attempt)
                 return continuation_from_payload(payload)
-            continuation = await cached_continuation(directory / "continuation.json",
-                identity={"inputs": _sha(config), "hints": {str(k): h.text for k, h in hints.items()}}, generate=generate)
+            try:
+                continuation = await cached_continuation(directory / "continuation.json",
+                    identity={"inputs": _sha(config), "hints": {str(k): h.text for k, h in hints.items()}},
+                    generate=generate)
+            except Exception as error:
+                from .psd_infrastructure_retry import InfrastructureRetriesExhausted
+                if not isinstance(error, InfrastructureRetriesExhausted):
+                    raise
+                # This slot consumed its separately persisted infrastructure
+                # budget.  It is a terminal non-training outcome, not a reason
+                # for the outer controller to redispatch the same exhausted
+                # ledger forever or to reset that budget.
+                state["status"] = "infrastructure_budget_exhausted"
+                state.pop("pending_proposal", None)
+                save_bound(marker, identity=identity, payload=state)
+                break
             episode = continuation.teacher_episode_trace
             episode_path = directory / "episode.json"
             write_json(episode_path, episode)
-            review = await review_slate(judge, source=trace, episode=episode, gold=gold,
-                image_path=args.image, model=args.judge_model, cache_dir=root / "judge-cache",
-                targets=continuation.local_targets)
+            try:
+                review = await review_slate(judge, source=trace, episode=episode, gold=gold,
+                    image_path=args.image, model=args.judge_model, cache_dir=root / "judge-cache",
+                    targets=continuation.local_targets)
+            except SlateReviewRejected as error:
+                # The policy completed a full rerun, so it consumes one of the
+                # six reruns even when the cached reviewer response cannot be
+                # admitted.  Preserve provider caches and episode bytes, clear
+                # only the proposal cursor, and continue from the latest
+                # previously verified public feedback.
+                round_state = {"hints": {str(k): h.text for k, h in hints.items()},
+                    "review_rejection": {"status": "rejected_contract", "reason": error.reason},
+                    "proposal": provenance, "episode_path": str(episode_path),
+                    "feedback_policy": POLICY, "checker_feedback_sha256": _sha(feedback),
+                    "plain_retry": not hints,
+                    "files": {str(p): sha256_file(p) for p in (
+                        episode_path, directory / "continuation.json")}}
+                state["rounds"].append(round_state)
+                state["elapsed_seconds"] = elapsed_before + time.monotonic() - started
+                state.pop("pending_proposal", None)
+                save_bound(marker, identity=identity, payload=state)
+                continue
             write_json(directory / "review.json", review)
             round_state = {"hints": {str(k): h.text for k, h in hints.items()}, "review": review,
                 "proposal": provenance, "episode_path": str(episode_path),

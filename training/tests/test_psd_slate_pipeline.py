@@ -7,7 +7,7 @@ import pytest
 
 from ifv_training.psd_repair import _sha, build_hint_proposal, verify_repair
 from ifv_training.psd_slate import (validate_slate_review, assemble_slate_attempts,
-    validate_prefix_lineage, propose_slate, review_slate)
+    validate_prefix_lineage, propose_slate, review_slate, SlateReviewRejected)
 from ifv_training.psd_repairs import _validate_attempt
 from test_psd_repairs import _repair_candidate, _attempt
 
@@ -89,7 +89,7 @@ def test_slate_review_does_not_correct_a_semantically_conflicting_decision(monke
         return invalid, {"request_binding": {"model": "judge"}}
     monkeypatch.setattr(judge, "_request", request)
     monkeypatch.setattr(judge, "review_images", lambda *a, **kw: ([], {}))
-    with pytest.raises(ValueError, match="cover the full task"):
+    with pytest.raises(SlateReviewRejected, match="invalid_semantic_review"):
         asyncio.run(review_slate(None, source=source, episode=episode, gold={},
             image_path=tmp_path/'unused.png', model='judge', cache_dir=tmp_path, targets=[target]))
     assert calls == [1]
@@ -221,7 +221,9 @@ def test_psd_child_sampling_is_explicit_and_does_not_change_native_workflow(monk
 
 @pytest.mark.parametrize('infrastructure_fault', [False, True])
 @pytest.mark.parametrize('plain_retry', [False, True])
-def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, tmp_path, infrastructure_fault, plain_retry):
+@pytest.mark.parametrize('review_rejected', [False, True])
+def test_slate_search_resume_does_not_repeat_completed_full_reruns(
+        monkeypatch, tmp_path, infrastructure_fault, plain_retry, review_rejected):
     import httpx
     import src.integrations.gemini as gemini
     import src.orchestrator.runtime_events as runtime
@@ -249,7 +251,8 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
         "metadata": {"policy_input": {}, "policy_action": {}}} for _ in range(22)]}}
     source_path = tmp_path / "source.json"
     source_path.write_text("{}")
-    args = SimpleNamespace(max_suffix_actions=None, run_student_diagnostic=False, repair_attempts=6,
+    args = SimpleNamespace(max_suffix_actions=None, run_student_diagnostic=False,
+        repair_attempts=1 if review_rejected else 6,
         output_dir=tmp_path, trace=source_path, search_seconds=100000, policy_model="frozen",
         hint_constructor_model="judge", judge_model="judge", image=tmp_path / "image",
         round_start_checkpoint="frozen")
@@ -273,6 +276,8 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
         return {"hints": [{"position": t["position"], "hint": t["hint"]}
                           for t in make_targets()[:n]]}, {}
     async def review(*a, **kw):
+        if review_rejected:
+            raise SlateReviewRejected('invalid_semantic_review')
         n = kw["episode"]["rerun"]
         return {"decision": {"status": "pass" if n == 2 else "fail", "passing_positions": [0, 1] if n == 2 else [0],
             "failed_position": -1 if n == 2 else 1}}
@@ -289,6 +294,18 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(monkeypatch, 
     options = dict(args=args, adapter=Adapter(), site=SimpleNamespace(stage="unified_react"),
         candidate={"case_id": "train"}, trace=trace, gold={}, private_context={}, source_task_review={},
         source_audit=None, source_policy=None, roles=None, profile={"base_url": "http://127.0.0.1:1/v1"}, config={})
+    if review_rejected:
+        result = asyncio.run(search.run_slate_search(**options))
+        assert result['status'] == 'attempt_budget_exhausted'
+        assert result['complete_reruns'] == 1
+        assert len(calls) == 1 and not assemblies
+        state = search.load_slate_state(tmp_path / 'slate-state.json',
+            identity={"version": "slate-search-v3-observed-positions",
+                      "inputs": _sha({}), "proposal_budget": 12})
+        assert state['rounds'][0]['review_rejection'] == {
+            'status': 'rejected_contract', 'reason': 'invalid_semantic_review'}
+        assert asyncio.run(search.run_slate_search(**options)) == result
+        return
     with pytest.raises(RuntimeError, match="materialization crash"):
         asyncio.run(search.run_slate_search(**options))
     assert len(calls) == 2

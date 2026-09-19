@@ -336,6 +336,14 @@ EVIDENCE_CORRECTION_SCHEMA = {"type": "object", "properties": {
 EVIDENCE_CORRECTION_VERSION = "ifv-psd-slate-evidence-correction-v1"
 
 
+class SlateReviewRejected(ValueError):
+    """A completed full-episode review failed its deterministic contract."""
+
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
+
+
 def decision_map(trace):
     result, action = {}, 0
     for index, step in enumerate(trace["state"]["all_steps"]):
@@ -468,12 +476,18 @@ async def review_slate(client, *, source, episode, gold, image_path, model, cach
         # Preserve the semantic decision and the completed primary response.
         # A separately bound request may only repair literal citations and
         # native position/step bindings.  It cannot turn fail into pass.
-        correction_packet = _slate_evidence_correction_packet(packet, value)
+        try:
+            correction_packet = _slate_evidence_correction_packet(packet, value)
+        except ValueError as error:
+            raise SlateReviewRejected("invalid_semantic_review") from error
         correction, correction_provenance = await _request(client, correction_packet,
             prompt=EVIDENCE_CORRECTION_PROMPT, schema=EVIDENCE_CORRECTION_SCHEMA,
             model=model, cache_dir=cache_dir)
         invalid_decision = value
-        value = _apply_slate_evidence_correction(invalid_decision, correction, packet)
+        try:
+            value = _apply_slate_evidence_correction(invalid_decision, correction, packet)
+        except ValueError as error:
+            raise SlateReviewRejected("invalid_evidence_correction") from error
         evidence_correction = {"version": EVIDENCE_CORRECTION_VERSION,
             "invalid_decision_sha256": _sha(invalid_decision), "response": correction,
             "provenance": correction_provenance,
