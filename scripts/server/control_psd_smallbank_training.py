@@ -10,11 +10,11 @@ import time
 
 
 ROOT = Path("/volume/ybo/wza")
-DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v89"
+DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v90"
 CODE = DEPLOY / "code"
-TAKEOVER = DEPLOY / "state.json"
+TAKEOVER = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v89/state.json"
 FINAL = ROOT / "runs/psd-stopped-tail-finalization-20260919-v1"
-GATE_NAME = "dp4-resume-gate-smallbank4095-v1"
+GATE_NAME = "dp4-resume-gate-smallbank4095-v90"
 TRAIN_OUT = FINAL / "formal-training-smallbank4095-v1"
 
 
