@@ -132,6 +132,9 @@ def main() -> None:
     from src.eval import run_cases
 
     install_stat_image_verifier(private_args.runtime_stat_identities)
+    # Immutable server deployments do not contain a Git worktree.  Keep the
+    # source identity in the deployment receipt and never invoke Git there.
+    run_cases._git_commit = lambda: ""
 
     sys.argv = [sys.argv[0], *remaining]
     args = run_cases._parse_args()
