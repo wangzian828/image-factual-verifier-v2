@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import gzip
+import io
 import json
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
@@ -25,7 +27,8 @@ def load_json(path: Path) -> dict[str, Any]:
 def iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     if not path.is_file():
         return
-    with path.open(encoding="utf-8") as handle:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
@@ -50,10 +53,14 @@ def write_json(path: Path, value: Mapping[str, Any]) -> None:
 def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
     rendered = [canonical_json(row) for row in rows]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "\n".join(rendered) + ("\n" if rendered else ""),
-        encoding="utf-8",
-    )
+    content = "\n".join(rendered) + ("\n" if rendered else "")
+    if path.suffix == ".gz":
+        with path.open("wb") as raw:
+            with gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=1, mtime=0) as compressed:
+                with io.TextIOWrapper(compressed, encoding="utf-8") as handle:
+                    handle.write(content)
+    else:
+        path.write_text(content, encoding="utf-8")
 
 
 def sha256_file(path: Path) -> str:

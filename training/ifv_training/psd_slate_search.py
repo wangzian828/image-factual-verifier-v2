@@ -20,6 +20,14 @@ from .psd_slate_feedback import (POLICY, checker_feedback, diagnostic_position,
                                 load_slate_state)
 
 
+def _case_ledger(root: Path, stem: str) -> Path:
+    """Keep historical plain ledgers readable; new ledgers are gzip-only."""
+    plain, compressed = root / f"{stem}.jsonl", root / f"{stem}.jsonl.gz"
+    if plain.exists() and compressed.exists():
+        raise ValueError(f"duplicate PSD case ledger formats: {stem}")
+    return plain if plain.exists() else compressed
+
+
 async def propose_with_budget(*, state, round_index, budget, persist, judge, kwargs):
     """Reserve accepted proposals before generation; only invalid hints advance.
 
@@ -110,8 +118,10 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
         "context_request_id", "runtime_store_path")})
     started = time.monotonic()
     elapsed_before = state["elapsed_seconds"]
-    records = load_jsonl(root / "repair_attempts.jsonl") if (root / "repair_attempts.jsonl").exists() else []
-    candidates = load_jsonl(root / "repair_candidates.jsonl") if (root / "repair_candidates.jsonl").exists() else []
+    attempts_path = _case_ledger(root, "repair_attempts")
+    candidates_path = _case_ledger(root, "repair_candidates")
+    records = load_jsonl(attempts_path) if attempts_path.exists() else []
+    candidates = load_jsonl(candidates_path) if candidates_path.exists() else []
     source_hash = sha256_file(args.trace)
     token_url = str(profile["base_url"]).rstrip("/").removesuffix("/v1") + "/tokenize"
     key = adapter.policy_llm.api_key
@@ -297,8 +307,8 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
             save_bound(marker, identity=identity, payload=state)
         else:
             state["status"] = "attempt_budget_exhausted"
-    write_jsonl(root / "repair_candidates.jsonl", candidates)
-    write_jsonl(root / "repair_attempts.jsonl", records)
+    write_jsonl(candidates_path, candidates)
+    write_jsonl(attempts_path, records)
     state["elapsed_seconds"] = elapsed_before + time.monotonic() - started
     result = {"schema_version": "ifv-psd-slate-search-v1", "status": state["status"],
         "complete_reruns": len(state["rounds"]), "candidate_count": len(records),
@@ -309,8 +319,8 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
     write_json(root / "manifest.json", result)
     # The bound state is the terminal commit marker. Write every output first:
     # a crash must not leave a completed state pointing at a missing manifest.
-    state["output_files"] = {str(root / name): sha256_file(root / name)
-        for name in ("repair_candidates.jsonl", "repair_attempts.jsonl", "manifest.json")}
+    state["output_files"] = {str(path): sha256_file(path)
+        for path in (candidates_path, attempts_path, root / "manifest.json")}
     save_bound(marker, identity=identity, payload=state)
     return result
 

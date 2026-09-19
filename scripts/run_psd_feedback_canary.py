@@ -38,6 +38,13 @@ TERMINAL_SEARCH_STATUSES = {
 }
 
 
+def _case_ledger(directory: Path, stem: str) -> Path:
+    plain, compressed = directory / f"{stem}.jsonl", directory / f"{stem}.jsonl.gz"
+    if plain.exists() and compressed.exists():
+        raise ValueError(f"duplicate PSD case ledger formats: {directory}/{stem}")
+    return plain if plain.exists() else compressed
+
+
 def _validate_fast_resume_receipt(path, expected_sha256):
     path = Path(path).resolve()
     if sha256_file(path) != expected_sha256:
@@ -398,8 +405,8 @@ async def run(args):
         if not directory_value:
             continue
         directory = Path(directory_value)
-        candidates_file = directory / "repair_candidates.jsonl"
-        attempts_file = directory / "repair_attempts.jsonl"
+        candidates_file = _case_ledger(directory, "repair_candidates")
+        attempts_file = _case_ledger(directory, "repair_attempts")
         if candidates_file.is_file():
             for row in load_jsonl(candidates_file):
                 merged_candidates[row["candidate_id"]] = row
@@ -430,10 +437,11 @@ async def run(args):
         summary["status"] = "search_complete_unmaterialized_throughput_probe"
     elif summary["accepted"]:
         merge = output / "merged"
-        write_jsonl(merge / "repair_candidates.jsonl", [merged_candidates[k] for k in sorted(merged_candidates)])
-        write_jsonl(merge / "repair_attempts.jsonl", attempts)
+        write_jsonl(merge / "repair_candidates.jsonl.gz", [merged_candidates[k] for k in sorted(merged_candidates)])
+        write_jsonl(merge / "repair_attempts.jsonl.gz", attempts)
         materialized = materialize_bank(output_dir=output,
-            repair_candidates=merge / "repair_candidates.jsonl", repair_attempts=merge / "repair_attempts.jsonl",
+            repair_candidates=merge / "repair_candidates.jsonl.gz",
+            repair_attempts=merge / "repair_attempts.jsonl.gz",
             preservation_candidates=preservation_path, serving_profile=serving, checkpoint_manifest=checkpoint,
             score_missing_topk=getattr(args, "score_missing_topk", False),
             teacher_device=getattr(args, "teacher_device", "cpu"))
