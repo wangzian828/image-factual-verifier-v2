@@ -239,7 +239,12 @@ def load_media(media: Mapping[str, Any], ids: Sequence[int]) -> dict[str, Any]:
         tensors = torch.load(media["path"], map_location="cpu", weights_only=True)
     else:
         processor = _load_processor(str(media["processor_id"]))
-        if processor.image_processor.to_dict() != media.get("processor_config"):
+        # The binding is persisted through JSON. Tuples become lists and
+        # IntEnum values become integers, so compare the canonical serialized
+        # meaning rather than Python container/value implementation types.
+        if canonical_json(processor.image_processor.to_dict()) != canonical_json(
+            media.get("processor_config")
+        ):
             raise ValueError("PSD image processor config changed")
         blobs = [Path(path).read_bytes() for path in media["image_paths"]]
         tensors = _encode_images(blobs, processor)

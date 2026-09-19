@@ -1,5 +1,7 @@
 import base64
+from enum import IntEnum
 import io
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -70,6 +72,25 @@ def test_repeated_images_survive_datum_and_hash_validation(tmp_path, monkeypatch
         handle.write(b"changed")
     with pytest.raises(ValueError, match="hash mismatch"):
         load_media(media, ids)
+
+
+def test_processor_config_survives_json_type_normalization(tmp_path, monkeypatch):
+    class Resampling(IntEnum):
+        BICUBIC = 3
+
+    class JsonNormalizedProcessor(ImageProcessor):
+        def to_dict(self):
+            return {"merge_size": 2, "image_mean": (0.5, 0.5, 0.5),
+                    "resample": Resampling.BICUBIC}
+
+    ids = [1, 248056, 2, 248056, 3]
+    processor = JsonNormalizedProcessor()
+    media = bind_media(request(), processor=SimpleNamespace(image_processor=processor),
+                       output_dir=tmp_path, prompt_ids=ids, processor_id="test")
+    frozen = json.loads(json.dumps(media))
+    monkeypatch.setattr("ifv_training.psd_media._load_processor",
+                        lambda _: SimpleNamespace(image_processor=processor))
+    assert load_media(frozen, ids)["pixel_values"].shape == (8, 12)
 
 
 def test_rejects_reordered_grid_sizes():
