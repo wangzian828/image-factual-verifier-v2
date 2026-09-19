@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import gzip
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -30,7 +32,7 @@ TARGET_MANIFEST = DEDUP / "targets/manifest.json"
 SNAPSHOT = ROOT / "training-artifacts/psd-contract-audit-20260916-v10/snapshot"
 ROLLOUT_GATE = ROUND / "rollout-gate.json"
 OUT = FINAL / "teacher-topk-preservation-dedup-v74"
-DEPLOY = ROOT / "training-artifacts/psd-preserve-dedup-20260920-v74"
+DEPLOY = ROOT / "training-artifacts/psd-preserve-dedup-20260920-v75"
 CODE = DEPLOY / "code"
 
 
@@ -192,8 +194,35 @@ def materialize(owner, cache: Path) -> None:
     atomic_json(OUT / "result.json", {"status": "ready_for_training", "topk": 20,
         "targets": owner.load(TARGET_MANIFEST)["counts"]["targets"], "ready": ready["ready"],
         "new_agent_or_provider_calls": False})
-    atomic_json(OUT / "state.json", {"phase": "ready_for_training", "ready": ready["ready"],
+    atomic_json(OUT / "state.json", {"phase": "materialized_pending_compaction", "ready": ready["ready"],
         "formal_training": False})
+
+
+def compact_successful_intermediates(owner, cache: Path) -> None:
+    """Keep one compressed teacher ledger and remove reproducible work files."""
+
+    archive = cache.with_suffix(cache.suffix + ".gz")
+    temporary = archive.with_suffix(archive.suffix + ".tmp")
+    if archive.exists() or temporary.exists():
+        raise FileExistsError("Teacher cache archive already exists")
+    with cache.open("rb") as source, temporary.open("wb") as raw:
+        with gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=1, mtime=0) as target:
+            shutil.copyfileobj(source, target, length=1024 * 1024)
+        raw.flush()
+        os.fsync(raw.fileno())
+    os.replace(temporary, archive)
+    archive_sha = owner.sha(archive)
+    cache.unlink()
+    for path in [OUT / "target-shards", *(OUT / f"gpu-{index}" for index in range(4)),
+                 OUT / "resolved-targets", OUT / ".resolved-targets-stage"]:
+        if path.exists():
+            shutil.rmtree(path)
+    atomic_json(OUT / "compaction.json", {
+        "schema_version": "ifv-psd-topk-compaction-v1",
+        "teacher_cache_gzip": str(archive),
+        "teacher_cache_gzip_sha256": archive_sha,
+        "removed": ["target-shards", "gpu-0..3", "resolved-targets"],
+        "retained": ["datums", "topk-cache/teacher_topk_cache.jsonl.gz"]})
 
 
 def execute() -> None:
@@ -274,6 +303,10 @@ def execute() -> None:
         owner.verify_export()
     cache = merge_cache(owner)
     materialize(owner, cache)
+    compact_successful_intermediates(owner, cache)
+    ready = owner.load(OUT / "result.json")["ready"]
+    atomic_json(OUT / "state.json", {"phase": "ready_for_training", "ready": ready,
+        "formal_training": False, "compacted": True})
 
 
 def launch() -> None:
