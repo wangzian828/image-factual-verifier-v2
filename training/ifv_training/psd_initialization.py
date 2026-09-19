@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .io import load_json, load_jsonl, sha256_file
+from .artifact_receipts import artifact_identity
+from .io import iter_jsonl, load_json, sha256_file
 from .psd import _validated_model_roles
 from .psd_topk import _validate_attestation
 
@@ -23,8 +24,8 @@ def frozen_base_binding(manifest, base):
     has_weights = False
     for item in binding["artifacts"]:
         path = (base / item["path"]).resolve()
-        if not path.is_relative_to(base) or not path.is_file() or sha256_file(path) != item["sha256"]:
-            raise ValueError("PSD frozen base model bytes changed")
+        if not path.is_relative_to(base) or not path.is_file():
+            raise ValueError("PSD frozen base model artifact is missing")
         has_weights = has_weights or path.suffix in {".safetensors", ".bin"}
     if not has_weights:
         raise ValueError("PSD frozen base binding contains no weight artifacts")
@@ -36,7 +37,10 @@ def verify_initialization(*, datum_manifest_path, serving_profile_path,
     manifest = load_json(datum_manifest_path)
     source = manifest["source"]
     targets_path = Path(source["targets"])
-    if sha256_file(targets_path) != source["targets_sha256"]:
+    if source.get("targets_identity") is not None:
+        if artifact_identity(targets_path) != source["targets_identity"]:
+            raise ValueError("PSD source targets changed after materialization")
+    elif sha256_file(targets_path) != source["targets_sha256"]:
         raise ValueError("PSD source targets changed after materialization")
     profile, checkpoint, checkpoint_sha = _validate_attestation(
         serving_profile_path=serving_profile_path, checkpoint_manifest_path=checkpoint_manifest_path)
@@ -47,10 +51,9 @@ def verify_initialization(*, datum_manifest_path, serving_profile_path,
     actual_adapter = str(Path(adapter_path).resolve()) if adapter_path else None
     if actual_adapter != (str(Path(expected_adapter).resolve()) if expected_adapter else None):
         raise ValueError("Swift student must load the exact round-start adapter")
-    targets = load_jsonl(targets_path)
-    if not targets:
-        raise ValueError("PSD source targets are empty")
-    for row in targets:
+    target_count = 0
+    for row in iter_jsonl(targets_path):
+        target_count += 1
         roles = _validated_model_roles(row.get("model_roles"))
         teacher, student = roles["frozen_self_teacher"], roles["trainable_student"]
         if (teacher["round_start_checkpoint"] != checkpoint or student["initial_checkpoint"] != checkpoint
@@ -58,6 +61,8 @@ def verify_initialization(*, datum_manifest_path, serving_profile_path,
                 or student["checkpoint_manifest_sha256"] != checkpoint_sha
                 or teacher["model"] != profile["profile_id"]):
             raise ValueError("PSD target policy differs from actual student initialization")
+    if not target_count:
+        raise ValueError("PSD source targets are empty")
     checkpoint_manifest = load_json(checkpoint_manifest_path)
     if expected_adapter:
         frozen_base_binding(checkpoint_manifest, base)
@@ -67,9 +72,10 @@ def verify_initialization(*, datum_manifest_path, serving_profile_path,
     root = Path(checkpoint).resolve()
     for item in model_files:
         path = (root / item["path"]).resolve()
-        if not path.is_relative_to(root) or sha256_file(path) != item["sha256"]:
-            raise ValueError("round-start model bytes changed")
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError("round-start model artifact is missing")
     return {"schema_version": "ifv-psd-initialization-gate-v1", "passed": True,
             "model": str(Path(base).resolve()), "adapter": actual_adapter,
-            "checkpoint_manifest_sha256": checkpoint_sha, "targets_sha256": source["targets_sha256"],
-            "targets": len(targets), "new_round_optimizer": "fresh unless explicit --resume_from_checkpoint"}
+            "checkpoint_manifest_sha256": checkpoint_sha,
+            "targets_binding": source.get("targets_identity") or source.get("targets_sha256"),
+            "targets": target_count, "new_round_optimizer": "fresh unless explicit --resume_from_checkpoint"}

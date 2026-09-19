@@ -16,7 +16,7 @@ from .io import canonical_json, load_json
 SCHEMA = "ifv-immutable-artifact-stat-receipt-v1"
 
 
-def _identity(path: Path) -> dict[str, Any]:
+def artifact_identity(path: Path) -> dict[str, Any]:
     path = path.expanduser().resolve()
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"artifact must be a regular non-symlink file: {path}")
@@ -33,7 +33,7 @@ def _identity(path: Path) -> dict[str, Any]:
 
 def freeze_artifact(path: Path, receipt: Path) -> dict[str, Any]:
     """Atomically record ``path`` without reading its payload."""
-    identity = _identity(path)
+    identity = artifact_identity(path)
     if receipt.exists():
         saved = load_json(receipt)
         if saved.get("schema_version") != SCHEMA or saved.get("identity") != identity:
@@ -65,6 +65,6 @@ def verify_artifact(receipt: Path) -> dict[str, Any]:
     if saved.get("schema_version") != SCHEMA:
         raise ValueError(f"unknown artifact receipt schema: {receipt}")
     identity = saved.get("identity")
-    if not isinstance(identity, dict) or _identity(Path(identity.get("path", ""))) != identity:
+    if not isinstance(identity, dict) or artifact_identity(Path(identity.get("path", ""))) != identity:
         raise ValueError(f"immutable artifact identity changed: {receipt}")
     return saved

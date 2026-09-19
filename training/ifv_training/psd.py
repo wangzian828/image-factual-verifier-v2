@@ -17,6 +17,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .io import (canonical_json, iter_jsonl, load_jsonl, require_new_or_empty,
                  sha256_file, write_json, write_jsonl)
+from .artifact_receipts import artifact_identity
 from .psd_modality import require_text_only_psd
 from .psd_media import media_digest
 from .psd_capture_semantics import RAW_POLICY_LOGPROBS
@@ -985,9 +986,9 @@ def materialize_psd_topk_cache(
         "topk": topk,
         "source": {
             "targets": str(targets_path),
-            "targets_sha256": sha256_file(targets_path),
+            "targets_identity": artifact_identity(targets_path),
             "cache": str(cache_path),
-            "cache_sha256": sha256_file(cache_path),
+            "cache_identity": artifact_identity(cache_path),
         },
         "counts": {
             "input_targets": len(target_rows),

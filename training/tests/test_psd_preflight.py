@@ -82,7 +82,7 @@ def test_psd_training_input_preflight_detects_post_manifest_mutation(
     )
 
     assert result["passed"] is False
-    assert "manifest_datums_sha256_mismatch" in result["errors"]
+    assert "manifest_datums_identity_mismatch" in result["errors"]
 
 
 def test_changed_source_targets_fail_even_when_datums_are_unchanged(tmp_path):

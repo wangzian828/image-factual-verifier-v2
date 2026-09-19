@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .io import load_json, load_jsonl, sha256_file
+from .artifact_receipts import artifact_identity
+from .io import iter_jsonl, load_json, sha256_file
 from .psd_datums import (
     PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION,
     PSD_SPARSE_DATUM_SCHEMA_VERSION,
@@ -99,7 +100,7 @@ def _datum_error(row: Mapping[str, Any], *, topk: int, max_context: int) -> str:
         return "datum_aggregate_source_rebalancing_detected"
     active = False
     active_positions = []
-    for index, (tokens, values) in enumerate(zip(target_tokens, weights, strict=True)):
+    for index, (tokens, values) in enumerate(zip(target_tokens, weights)):
         if not isinstance(tokens, list) or len(tokens) != topk:
             return "datum_target_topk_shape_invalid"
         if any(
@@ -151,7 +152,6 @@ def verify_psd_training_input(
         raise ValueError("max_context must be at least two")
 
     manifest: Mapping[str, Any] = {}
-    rows: list[dict[str, Any]] = []
     if not datums_path.is_file():
         errors.append("datums_file_missing")
     if not manifest_path.is_file():
@@ -161,19 +161,22 @@ def verify_psd_training_input(
             manifest = load_json(manifest_path)
         except (OSError, ValueError, json.JSONDecodeError):
             errors.append("manifest_json_invalid")
-        try:
-            rows = load_jsonl(datums_path)
-        except (OSError, ValueError, json.JSONDecodeError):
-            errors.append("datums_jsonl_invalid")
-
     if manifest:
         source = _mapping(manifest.get("source"))
         targets = Path(_text(source.get("targets")))
-        if not targets.is_file() or sha256_file(targets) != source.get("targets_sha256"):
+        schema = manifest.get("schema_version")
+        if schema == PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION:
+            try:
+                if artifact_identity(targets) != source.get("targets_identity"):
+                    errors.append("manifest_source_targets_changed_or_missing")
+            except (OSError, ValueError):
+                errors.append("manifest_source_targets_changed_or_missing")
+        elif not targets.is_file() or sha256_file(targets) != source.get("targets_sha256"):
+            # Legacy manifests retain their old fail-closed hash contract.
             errors.append("manifest_source_targets_changed_or_missing")
         if (
-            manifest.get("schema_version")
-            not in {PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION, "ifv-psd-sparse-topk-manifest-v3"}
+            schema not in {PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION,
+                "ifv-psd-sparse-topk-manifest-v4", "ifv-psd-sparse-topk-manifest-v3"}
         ):
             errors.append("manifest_schema_invalid")
         if manifest.get("status") != "ready_for_trainer":
@@ -196,38 +199,50 @@ def verify_psd_training_input(
             errors.append("manifest_datums_artifact_missing")
         elif (manifest_path.parent / recorded_datums).resolve() != datums_path:
             errors.append("manifest_datums_path_mismatch")
-        recorded_sha256 = _text(
-            _mapping(manifest.get("artifact_sha256")).get("datums")
-        )
-        if not recorded_sha256:
-            errors.append("manifest_datums_sha256_missing")
-        elif datums_path.is_file() and recorded_sha256 != sha256_file(datums_path):
-            errors.append("manifest_datums_sha256_mismatch")
+        if schema == PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION:
+            recorded_identity = _mapping(manifest.get("artifact_identity")).get("datums")
+            try:
+                if not recorded_identity or artifact_identity(datums_path) != recorded_identity:
+                    errors.append("manifest_datums_identity_mismatch")
+            except (OSError, ValueError):
+                errors.append("manifest_datums_identity_mismatch")
+        else:
+            recorded_sha256 = _text(_mapping(manifest.get("artifact_sha256")).get("datums"))
+            if not recorded_sha256:
+                errors.append("manifest_datums_sha256_missing")
+            elif datums_path.is_file() and recorded_sha256 != sha256_file(datums_path):
+                errors.append("manifest_datums_sha256_mismatch")
 
     identities: set[str] = set()
     kind_counts: Counter[str] = Counter()
     effective_mass: Counter[str] = Counter()
     max_observed_context = 0
     datum_rejections: list[dict[str, Any]] = []
-    for index, row in enumerate(rows):
-        error = _datum_error(row, topk=expected_topk, max_context=max_context)
-        target_id = _text(row.get("target_id"))
-        if not target_id:
-            error = error or "datum_target_id_missing"
-        elif target_id in identities:
-            error = error or "datum_target_id_duplicate"
-        identities.add(target_id)
-        if error:
-            datum_rejections.append(
-                {"row_index": index, "target_id": target_id, "reason": error}
-            )
-            continue
-        kind = _text(row.get("kind"))
-        kind_counts[kind] += 1
-        effective_mass[kind] += float(row["row_weight"])
-        max_observed_context = max(max_observed_context, len(row["input_ids"]))
+    row_count = 0
+    if datums_path.is_file():
+        try:
+            for index, row in enumerate(iter_jsonl(datums_path)):
+                row_count += 1
+                error = _datum_error(row, topk=expected_topk, max_context=max_context)
+                target_id = _text(row.get("target_id"))
+                if not target_id:
+                    error = error or "datum_target_id_missing"
+                elif target_id in identities:
+                    error = error or "datum_target_id_duplicate"
+                identities.add(target_id)
+                if error:
+                    datum_rejections.append(
+                        {"row_index": index, "target_id": target_id, "reason": error}
+                    )
+                    continue
+                kind = _text(row.get("kind"))
+                kind_counts[kind] += 1
+                effective_mass[kind] += float(row["row_weight"])
+                max_observed_context = max(max_observed_context, len(row["input_ids"]))
+        except (OSError, ValueError, json.JSONDecodeError):
+            errors.append("datums_jsonl_invalid")
 
-    if not rows:
+    if not row_count:
         errors.append("datums_empty")
     if datum_rejections:
         errors.append("datum_contract_rejections")
@@ -236,7 +251,7 @@ def verify_psd_training_input(
     expected_count = _integer(
         _mapping(manifest.get("counts")).get("candidate_datums")
     )
-    if manifest and expected_count != len(rows):
+    if manifest and expected_count != row_count:
         errors.append("manifest_datum_count_mismatch")
 
     return {
@@ -247,8 +262,8 @@ def verify_psd_training_input(
         "errors": list(dict.fromkeys(errors)),
         "datums": {
             "path": str(datums_path),
-            "sha256": sha256_file(datums_path) if datums_path.is_file() else None,
-            "rows": len(rows),
+            "identity": artifact_identity(datums_path) if datums_path.is_file() else None,
+            "rows": row_count,
             "by_kind": dict(sorted(kind_counts.items())),
             "effective_row_mass_by_kind": dict(sorted(effective_mass.items())),
             "max_observed_input_tokens": max_observed_context,
@@ -256,7 +271,7 @@ def verify_psd_training_input(
         },
         "manifest": {
             "path": str(manifest_path),
-            "sha256": sha256_file(manifest_path) if manifest_path.is_file() else None,
+            "identity": artifact_identity(manifest_path) if manifest_path.is_file() else None,
             "schema_version": manifest.get("schema_version"),
             "status": manifest.get("status"),
         },

@@ -7,11 +7,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
 
+from .artifact_receipts import artifact_identity
 from .io import (
     canonical_json,
     iter_jsonl,
     require_new_or_empty,
-    sha256_file,
     write_json,
 )
 from .psd import validate_topk_by_position
@@ -20,7 +20,7 @@ from .psd_modality import require_text_only_psd
 
 PSD_SPARSE_DATUM_SCHEMA_VERSION = "ifv-psd-sparse-topk-datum-v3"
 PSD_COMPACT_DATUM_SCHEMA_VERSION = "ifv-psd-sparse-topk-datum-v4"
-PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION = "ifv-psd-sparse-topk-manifest-v4"
+PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION = "ifv-psd-sparse-topk-manifest-v5"
 PSD_WEIGHTING_POLICY = "per_target"
 
 
@@ -309,7 +309,7 @@ def build_sparse_topk_package(
         "schema_version": PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION,
         "source": {
             "targets": str(targets_path),
-            "targets_sha256": sha256_file(targets_path),
+            "targets_identity": artifact_identity(targets_path),
         },
         "topk": topk,
         "max_sequence_length": max_sequence_length,
@@ -334,9 +334,9 @@ def build_sparse_topk_package(
             "input_context_buckets": _context_buckets(input_lengths),
         },
         "artifacts": artifacts,
-        "artifact_sha256": {
-            "candidate_datums": sha256_file(output_dir / "candidate_datums.jsonl"),
-            "datums": sha256_file(output_dir / "datums.jsonl") if ready else None,
+        "artifact_identity": {
+            "candidate_datums": artifact_identity(output_dir / "candidate_datums.jsonl"),
+            "datums": artifact_identity(output_dir / "datums.jsonl") if ready else None,
         },
         "status": (
             "ready_for_trainer"

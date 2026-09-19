@@ -26,6 +26,7 @@ from .io import (
     write_json,
     write_jsonl,
 )
+from .artifact_receipts import artifact_identity
 from .psd import (
     PSD_TARGET_SCHEMA_VERSION,
     PSD_TOPK_CACHE_SCHEMA_VERSION,
@@ -443,16 +444,20 @@ def collect_psd_topk_cache(
         prior = load_json(manifest_path)
         prior_inputs = prior.get("inputs")
         prior_inputs = prior_inputs if isinstance(prior_inputs, Mapping) else {}
-        expected_bindings = {
-            "targets_sha256": sha256_file(targets_path),
-            "serving_profile_sha256": sha256_file(serving_profile_path),
-            "checkpoint_manifest_sha256": checkpoint_sha256,
-        }
-        for field, expected_value in expected_bindings.items():
-            if _text(prior_inputs.get(field)).casefold() != expected_value.casefold():
-                raise ValueError(
-                    f"existing collection manifest has mismatched {field}"
-                )
+        if prior_inputs.get("targets_identity") is not None:
+            if prior_inputs["targets_identity"] != artifact_identity(targets_path):
+                raise ValueError("existing collection manifest has mismatched targets_identity")
+        else:
+            expected_bindings = {
+                "targets_sha256": sha256_file(targets_path),
+                "serving_profile_sha256": sha256_file(serving_profile_path),
+                "checkpoint_manifest_sha256": checkpoint_sha256,
+            }
+            for field, expected_value in expected_bindings.items():
+                if _text(prior_inputs.get(field)).casefold() != expected_value.casefold():
+                    raise ValueError(
+                        f"existing collection manifest has mismatched {field}"
+                    )
     existing = _validate_existing_cache(
         cache_path=cache_path,
         targets_by_id=targets_by_id,
@@ -546,7 +551,7 @@ def collect_psd_topk_cache(
         },
         "inputs": {
             "targets": str(targets_path.resolve()),
-            "targets_sha256": sha256_file(targets_path),
+            "targets_identity": artifact_identity(targets_path),
             "serving_profile": str(serving_profile_path.resolve()),
             "serving_profile_sha256": sha256_file(serving_profile_path),
             "checkpoint_manifest": str(checkpoint_manifest_path.resolve()),

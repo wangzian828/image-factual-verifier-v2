@@ -19,6 +19,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "training")]
 from ifv_training.io import load_json, load_jsonl, sha256_file, write_json
+from ifv_training.artifact_receipts import artifact_identity
 from ifv_training.psd_materialization import completed_package
 from ifv_training.psd_candidates import (
     build_psd_candidate_package,
@@ -84,8 +85,11 @@ def _reuse_completed_source_reviews(source_reviews, results):
 def load_ready(path):
     saved = load_json(path)
     ready = load_bound(path, identity=saved["identity"])
-    for name, digest in saved["identity"]["files"].items():
-        if sha256_file(Path(name)) != digest:
+    for name, binding in saved["identity"]["files"].items():
+        if isinstance(binding, dict):
+            if artifact_identity(Path(name)) != binding:
+                raise ValueError("PSD ready-stage input changed")
+        elif sha256_file(Path(name)) != binding:
             raise ValueError("PSD ready-stage input changed")
     gate = verify_psd_training_input(datums_path=Path(ready["datums"]),
         manifest_path=Path(ready["datum_manifest"]), expected_topk=20, max_context=131072)
@@ -162,14 +166,14 @@ def attest(args):
 
     datum_record = load_json(datum_manifest)
     targets = Path(datum_record["source"]["targets"]).resolve()
-    target_rows = load_jsonl(targets)
+    from ifv_training.io import iter_jsonl
     gate_sha256 = sha256_file(gate_path)
     round_index = gate.get("round_index")
     run_id = str(gate_run.get("run_id") or "")
-    if not target_rows:
-        raise ValueError("completed PSD bank has no source targets")
     lineage_errors = []
-    for index, row in enumerate(target_rows):
+    target_count = 0
+    for index, row in enumerate(iter_jsonl(targets)):
+        target_count += 1
         source = row.get("source") if isinstance(row.get("source"), dict) else {}
         if source.get("psd_rollout_gate_sha256") != gate_sha256:
             lineage_errors.append(f"target[{index}].rollout_gate")
@@ -179,6 +183,8 @@ def attest(args):
             lineage_errors.append(f"target[{index}].run_id")
         if row.get("target_status") != "complete":
             lineage_errors.append(f"target[{index}].status")
+    if not target_count:
+        raise ValueError("completed PSD bank has no source targets")
     if lineage_errors:
         raise ValueError(
             "PSD target lineage differs from rollout gate: "
@@ -214,7 +220,7 @@ def attest(args):
     identity_paths = (gate_path, datums, datum_manifest, targets, serving, checkpoint)
     ready_identity = {
         "files": {
-            str(path.resolve()): sha256_file(path) for path in identity_paths
+            str(path.resolve()): artifact_identity(path) for path in identity_paths
         }
     }
     save_bound(ready_path, identity=ready_identity, payload=ready)
@@ -226,9 +232,9 @@ def attest(args):
             "round_index": round_index,
             "source_run_id": run_id,
             "rollout_gate_sha256": gate_sha256,
-            "target_count": len(target_rows),
+            "target_count": target_count,
             "datum_count": datum_gate["datums"]["rows"],
-            "datum_sha256": datum_gate["datums"]["sha256"],
+            "datum_identity": datum_gate["datums"]["identity"],
             "initialization": initialization,
         },
     )
