@@ -6,14 +6,63 @@ from pathlib import Path
 import gzip
 import hashlib
 import json
+import os
+import tempfile
 
-from .io import load_json
+from .io import canonical_json, load_json
 from .psd_gemini_judge import _atomic_json
 from .psd_repair import _sha
 
 
+DIRECT_GZIP_BYTES = 1024 * 1024
+
+
+def _write_gzip_atomic(path: Path, raw: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as target:
+            with gzip.GzipFile(fileobj=target, mode="wb", compresslevel=1, mtime=0) as stream:
+                stream.write(raw)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def save_bound(path: Path, *, identity, payload):
-    _atomic_json(path, {"identity": identity, "payload": payload, "payload_sha256": _sha(payload)})
+    document = {"identity": identity, "payload": payload, "payload_sha256": _sha(payload)}
+    raw = canonical_json(document).encode("utf-8")
+    if len(raw) < DIRECT_GZIP_BYTES:
+        _atomic_json(path, document)
+        return
+    digest = hashlib.sha256(raw).hexdigest()
+    archive = path.with_name(f"{path.stem}-{digest[:16]}.json.gz")
+    if archive.exists():
+        with gzip.open(archive, "rb") as stream:
+            current = stream.read(len(raw) + 1)
+        if current != raw:
+            raise ValueError("Compressed PSD cache archive collision")
+    else:
+        _write_gzip_atomic(archive, raw)
+    _atomic_json(path, {"schema_version": "ifv-psd-bound-gzip-v1",
+        "identity": identity, "payload_sha256": document["payload_sha256"],
+        "archive": archive.name, "uncompressed_bytes": len(raw),
+        "uncompressed_sha256": digest})
+
+
+def bound_artifact_paths(path: Path) -> list[Path]:
+    """Return the tiny binding plus its sole payload archive, when present."""
+    paths = [path]
+    saved = load_json(path)
+    if saved.get("schema_version") == "ifv-psd-bound-gzip-v1":
+        name = saved.get("archive", "")
+        if not name or Path(name).name != name:
+            raise ValueError("Invalid compressed PSD cache reference")
+        paths.append(path.parent / name)
+    return paths
 
 
 def load_bound(path: Path, *, identity):

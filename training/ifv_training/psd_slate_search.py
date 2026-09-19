@@ -12,7 +12,7 @@ import uuid
 
 from .io import load_json, load_jsonl, write_json, write_jsonl, sha256_file
 from .psd_repair import _sha
-from .psd_repair_storage import cached_continuation, load_bound, save_bound
+from .psd_repair_storage import bound_artifact_paths, load_bound, save_bound
 from .psd_slate import (capture_target, decision_map, propose_slate, review_slate,
                         assemble_slate_attempts, SlateProposalRejected,
                         SlateReviewRejected)
@@ -129,7 +129,12 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
             reviewed_rounds = [row for row in state["rounds"] if "review" in row]
             if reviewed_rounds:
                 last = reviewed_rounds[-1]
-                observed = load_json(Path(last["episode_path"]))
+                if "result_path" in last:
+                    observed = load_bound(Path(last["result_path"]),
+                        identity=last["result_identity"])["teacher_episode_trace"]
+                else:
+                    # Compatibility with already committed historical rounds.
+                    observed = load_json(Path(last["episode_path"]))
                 previous = {int(k): v for k, v in last["hints"].items()}
                 passing = last["review"]["decision"]["passing_positions"]
                 failed = last["review"]["decision"]["failed_position"]
@@ -181,6 +186,8 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                 break
             directory = root / "slate-rounds" / f"{number:02d}"
             directory.mkdir(parents=True, exist_ok=True)
+            retry_inputs = {"inputs": _sha(config),
+                "hints": {str(k): h.text for k, h in hints.items()}}
             async def generate():
                 import copy
                 from .psd_infrastructure_retry import retry_episode, guard_policy_backend
@@ -197,13 +204,14 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                         base_trace=trace, hints_by_action=hints, capture_local_target=capture)
                     return continuation_payload(result)
                 payload = await retry_episode(root=directory / "infrastructure-attempts",
-                    identity={"inputs": _sha(config), "hints": {str(k): h.text for k, h in hints.items()}},
+                    identity=retry_inputs,
                     generate=generate_attempt)
                 return continuation_from_payload(payload)
+            result_path = directory / "infrastructure-attempts" / "result.json"
             try:
-                continuation = await cached_continuation(directory / "continuation.json",
-                    identity={"inputs": _sha(config), "hints": {str(k): h.text for k, h in hints.items()}},
-                    generate=generate)
+                # retry_episode is the one authoritative continuation cache.
+                # Do not write the same 80+ MB payload again as continuation.json.
+                continuation = await generate()
             except Exception as error:
                 from .psd_infrastructure_retry import InfrastructureRetriesExhausted
                 if not isinstance(error, InfrastructureRetriesExhausted):
@@ -216,9 +224,10 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                 state.pop("pending_proposal", None)
                 save_bound(marker, identity=identity, payload=state)
                 break
+            # Persist the retry layer's complete binding (including its fixed
+            # version and budget), rather than reconstructing it on resume.
+            result_identity = load_json(result_path)["identity"]
             episode = continuation.teacher_episode_trace
-            episode_path = directory / "episode.json"
-            write_json(episode_path, episode)
             try:
                 review = await review_slate(judge, source=trace, episode=episode, gold=gold,
                     image_path=args.image, model=args.judge_model, cache_dir=root / "judge-cache",
@@ -231,11 +240,11 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                 # previously verified public feedback.
                 round_state = {"hints": {str(k): h.text for k, h in hints.items()},
                     "review_rejection": {"status": "rejected_contract", "reason": error.reason},
-                    "proposal": provenance, "episode_path": str(episode_path),
+                    "proposal": provenance, "result_path": str(result_path),
+                    "result_identity": result_identity,
                     "feedback_policy": POLICY, "checker_feedback_sha256": _sha(feedback),
                     "plain_retry": not hints,
-                    "files": {str(p): sha256_file(p) for p in (
-                        episode_path, directory / "continuation.json")}}
+                    "files": {str(p): sha256_file(p) for p in bound_artifact_paths(result_path)}}
                 state["rounds"].append(round_state)
                 state["elapsed_seconds"] = elapsed_before + time.monotonic() - started
                 state.pop("pending_proposal", None)
@@ -243,11 +252,12 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                 continue
             write_json(directory / "review.json", review)
             round_state = {"hints": {str(k): h.text for k, h in hints.items()}, "review": review,
-                "proposal": provenance, "episode_path": str(episode_path),
+                "proposal": provenance, "result_path": str(result_path),
+                "result_identity": result_identity,
                 "feedback_policy": POLICY, "checker_feedback_sha256": _sha(feedback),
                 "plain_retry": not hints,
                 "files": {str(p): sha256_file(p) for p in (
-                    episode_path, directory / "review.json", directory / "continuation.json")}}
+                    [directory / "review.json"] + bound_artifact_paths(result_path))}}
             state["rounds"].append(round_state)
             state["elapsed_seconds"] = elapsed_before + time.monotonic() - started
             # Generation and judge are already independently cached. Advance the

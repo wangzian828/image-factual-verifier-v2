@@ -1,5 +1,22 @@
 # PSD checker-feedback correction (2026-09-17)
 
+## Repair-stage storage and compute envelope (2026-09-19)
+
+PSD repair should spend its budget on the Gemini proposal/review calls and the
+Qwen full-agent reruns.  Each repair round therefore has one authoritative
+continuation result: large bound results are written directly as a small
+SHA-bound descriptor plus one gzip payload.  Do not duplicate that payload as
+`continuation.json` or `episode.json`, and do not run a later compaction scan to
+recover space that could have been avoided at write time.  Keep only compact
+review/budget/state ledgers and final admitted targets in addition to the
+original immutable source/runtime evidence.
+
+Resume must use the committed result binding and process only unfinished work.
+It may perform bounded validation of the exact artifacts it consumes, but must
+not repeatedly hash/read completed trajectories, rebuild completed rounds, or
+sleep for a fixed interval after a no-progress pass.  Historical artifacts stay
+read-compatible; this rule does not authorize deleting existing evidence.
+
 ## Latest user scope: 100-case paired evaluation, not full-test inference
 
 After the existing 400 × 8 PSD round and its five training epochs, run a small

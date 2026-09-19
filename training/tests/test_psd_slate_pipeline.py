@@ -319,6 +319,8 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(
     assert result["complete_reruns"] == 2
     assert result["status"] == ("passed_without_intervention" if plain_retry else "converged")
     assert result["accepted_count"] == (0 if plain_retry else 2)
+    assert not list(tmp_path.glob('slate-rounds/*/continuation.json'))
+    assert not list(tmp_path.glob('slate-rounds/*/episode.json*'))
     assert all(c["hint"] is None and c["failure_site"].step_index == 0 for c in calls)
     assert search.audit_slate_search(tmp_path)["passed"]
     assert asyncio.run(search.run_slate_search(**options)) == result

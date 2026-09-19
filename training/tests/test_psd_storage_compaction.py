@@ -24,6 +24,18 @@ def test_cache_preserves_original_bytes_and_bound_payload(tmp_path):
         load_bound(p, identity={'case': 3})
 
 
+def test_large_bound_payload_is_written_compressed_without_raw_duplicate(tmp_path):
+    p = tmp_path / 'result.json'
+    payload = {'episode': 'repeated trace payload ' * 100_000}
+    save_bound(p, identity={'case': 9}, payload=payload)
+    descriptor = json.loads(p.read_text())
+    assert descriptor['schema_version'] == 'ifv-psd-bound-gzip-v1'
+    archive = tmp_path / descriptor['archive']
+    assert archive.is_file() and archive.stat().st_size < descriptor['uncompressed_bytes']
+    assert load_bound(p, identity={'case': 9}) == payload
+    assert not list(tmp_path.glob('result-original-*.json'))
+
+
 @pytest.mark.parametrize('field,value', [('archive','../outside.json.gz'),
     ('uncompressed_bytes',1), ('uncompressed_sha256','bad'), ('payload_sha256','bad')])
 def test_packed_cache_tamper_fails_closed(tmp_path, field, value):
