@@ -10,7 +10,7 @@ import time
 
 
 ROOT = Path("/volume/ybo/wza")
-DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v88"
+DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v89"
 CODE = DEPLOY / "code"
 TAKEOVER = DEPLOY / "state.json"
 FINAL = ROOT / "runs/psd-stopped-tail-finalization-20260919-v1"

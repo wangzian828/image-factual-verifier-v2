@@ -4,9 +4,19 @@ import json
 from pathlib import Path
 
 from ifv_training.psd_datums import (
+    _trainer_json_media,
     build_sparse_topk_datum,
     build_sparse_topk_package,
 )
+
+
+def test_legacy_media_declares_later_compact_image_paths_field() -> None:
+    media = {"schema_version": "ifv-psd-media-v1", "path": "/frozen/media.pt"}
+
+    normalized = _trainer_json_media(media)
+
+    assert normalized["image_paths"] == ["/frozen/media.pt"]
+    assert media == {"schema_version": "ifv-psd-media-v1", "path": "/frozen/media.pt"}
 
 
 def _target(

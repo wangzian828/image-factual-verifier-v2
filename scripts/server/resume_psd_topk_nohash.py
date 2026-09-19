@@ -29,7 +29,7 @@ TARGETS = DEDUP / "targets/targets.jsonl"
 TARGET_MANIFEST = DEDUP / "targets/manifest.json"
 SNAPSHOT = ROOT / "training-artifacts/psd-contract-audit-20260916-v10/snapshot"
 ROLLOUT_GATE = ROUND / "rollout-gate.json"
-DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v88"
+DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v89"
 CODE = DEPLOY / "code"
 
 
@@ -202,40 +202,37 @@ def materialize(owner, cache: Path) -> str:
     from scripts.run_psd_round import attest, load_ready
     from types import SimpleNamespace
 
-    # v86 completed both large stat-bound products; only its serving snapshot
-    # was stale. Reuse those exact retained files and emit a fresh attestation
-    # instead of rewriting another multi-gigabyte package.
+    # v86 retained an exact attested resolved bank. Reuse it, but rebuild the
+    # trainer JSON once with a stable mixed-media struct schema.
     previous_resolved = OUT / "resolved-targets-stat-v86"
-    previous_datums = OUT / "datums-stat-v86"
     reuse_previous = all(path.is_file() for path in (
         previous_resolved / "targets.jsonl", previous_resolved / "manifest.json",
-        previous_datums / "datums.jsonl", previous_datums / "manifest.json"))
-    resolved = previous_resolved if reuse_previous else OUT / "resolved-targets-stat-v88"
-    datums = previous_datums if reuse_previous else OUT / "datums-stat-v88"
+        OUT / "datums-stat-v86/datums.jsonl", OUT / "datums-stat-v86/manifest.json"))
+    resolved = previous_resolved if reuse_previous else OUT / "resolved-targets-stat-v89"
+    datums = OUT / "datums-stat-v89"
     if reuse_previous:
         previous = load_ready(OUT / "attested-stat-v86/ready.json")
-        if (Path(previous["datums"]).resolve() != (datums / "datums.jsonl").resolve()
-                or Path(previous["datum_manifest"]).resolve() != (datums / "manifest.json").resolve()):
-            raise RuntimeError("retained v86 datum binding changed")
+        if Path(previous["initialization"]["targets_binding"]["path"]).resolve() != (resolved / "targets.jsonl").resolve():
+            raise RuntimeError("retained v86 target binding changed")
     else:
         result = completed_package(output_dir=resolved, input_files=[TARGETS, cache],
             build=lambda destination: materialize_psd_topk_cache(targets_path=TARGETS,
                 cache_path=cache, output_dir=destination, topk=20))
         if result["status"] != "ready_for_training":
             raise RuntimeError("teacher cache materialization failed")
-        result = completed_package(output_dir=datums, input_files=[resolved / "targets.jsonl"],
-            build=lambda destination: build_sparse_topk_package(targets_path=resolved / "targets.jsonl",
-                output_dir=destination, topk=20, max_sequence_length=131072, require_both_kinds=True))
-        if result["status"] != "ready_for_trainer":
-            raise RuntimeError("PSD datum materialization failed")
+    result = completed_package(output_dir=datums, input_files=[resolved / "targets.jsonl"],
+        build=lambda destination: build_sparse_topk_package(targets_path=resolved / "targets.jsonl",
+            output_dir=destination, topk=20, max_sequence_length=131072, require_both_kinds=True))
+    if result["status"] != "ready_for_trainer":
+        raise RuntimeError("PSD datum materialization failed")
     gate = verify_psd_training_input(datums_path=datums / "datums.jsonl",
         manifest_path=datums / "manifest.json", expected_topk=20, max_context=131072)
     if not gate["passed"]:
         raise RuntimeError("PSD datum preflight failed")
-    ready = attest(SimpleNamespace(output=OUT / "attested-stat-v88", rollout_gate=ROLLOUT_GATE,
+    ready = attest(SimpleNamespace(output=OUT / "attested-stat-v89", rollout_gate=ROLLOUT_GATE,
         datums=datums / "datums.jsonl", datum_manifest=datums / "manifest.json",
         snapshot=current_snapshot(owner)))
-    atomic_json(OUT / "result-stat-v88.json", {"status": "ready_for_training", "topk": 20,
+    atomic_json(OUT / "result-stat-v89.json", {"status": "ready_for_training", "topk": 20,
         "targets": owner.load(TARGET_MANIFEST)["counts"]["targets"], "ready": ready["ready"],
         "large_payload_hashing": False, "new_agent_or_provider_calls": False})
     # The attestation binds the resolved targets by stat identity, so that file
@@ -257,7 +254,7 @@ def execute(parent_pid: int) -> None:
         atomic_json(DEPLOY / "state.json", {"phase": "teacher_complete_serving_restored"})
         cache = merge_gzip(owner)
         ready = materialize(owner, cache)
-        atomic_json(OUT / "state-stat-v88.json", {"phase": "ready_for_training", "ready": ready,
+        atomic_json(OUT / "state-stat-v89.json", {"phase": "ready_for_training", "ready": ready,
             "formal_training": False, "large_payload_hashing": False})
         atomic_json(DEPLOY / "state.json", {"phase": "ready_for_training", "ready": ready})
     except Exception as error:

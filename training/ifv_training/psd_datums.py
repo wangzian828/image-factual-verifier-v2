@@ -24,6 +24,22 @@ PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION = "ifv-psd-sparse-topk-manifest-v5"
 PSD_WEIGHTING_POLICY = "per_target"
 
 
+def _trainer_json_media(media: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep mixed legacy/compact media rows compatible with Arrow JSON.
+
+    Hugging Face infers nested struct fields from the first JSON block. Legacy
+    tensor bindings precede compact image bindings in a mixed PSD bank, so the
+    later-only ``image_paths`` field otherwise makes dataset loading fail. The
+    legacy loader ignores this compatibility field and still consumes the
+    exact frozen tensor artifact from ``path``.
+    """
+    result = dict(media)
+    if (result.get("schema_version") == "ifv-psd-media-v1"
+            and "image_paths" not in result):
+        result["image_paths"] = [str(result["path"])]
+    return result
+
+
 def compact_datum(datum):
     """Store only supervised positions; long prompt zero matrices stay off disk."""
     result = {key: value for key, value in datum.items() if key not in {"weights", "target_tokens"}}
@@ -178,7 +194,8 @@ def build_sparse_topk_datum(
         "topk": topk,
         "teacher_logprob_semantics": RAW_POLICY_LOGPROBS,
         "input_ids": input_ids,
-        **({"psd_media": dict(target["psd_media"])} if target.get("psd_media") else {}),
+        **({"psd_media": _trainer_json_media(target["psd_media"])}
+           if target.get("psd_media") else {}),
         "target_tokens": target_tokens,
         "weights": weights,
         "loss_positions": loss_positions,
