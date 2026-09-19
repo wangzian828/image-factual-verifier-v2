@@ -29,7 +29,7 @@ TARGETS = DEDUP / "targets/targets.jsonl"
 TARGET_MANIFEST = DEDUP / "targets/manifest.json"
 SNAPSHOT = ROOT / "training-artifacts/psd-contract-audit-20260916-v10/snapshot"
 ROLLOUT_GATE = ROUND / "rollout-gate.json"
-DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v86"
+DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v87"
 CODE = DEPLOY / "code"
 
 
@@ -178,6 +178,21 @@ def merge_gzip(owner) -> Path:
     return destination
 
 
+def current_snapshot(owner) -> Path:
+    """Bind the unchanged checkpoint metadata to the live four-replica gateway."""
+    snapshot = DEPLOY / "snapshot-current"
+    profile_path = snapshot / "serving-profile.json"
+    checkpoint_path = snapshot / "checkpoint-manifest.json"
+    if profile_path.is_file() and checkpoint_path.is_file():
+        return snapshot
+    snapshot.mkdir(parents=True, exist_ok=False)
+    shutil.copy2(SNAPSHOT / "checkpoint-manifest.json", checkpoint_path)
+    profile = owner.load(SNAPSHOT / "serving-profile.json")
+    profile["base_url"] = "http://127.0.0.1:19025/v1"
+    atomic_json(profile_path, profile)
+    return snapshot
+
+
 def materialize(owner, cache: Path) -> str:
     sys.path[:0] = [str(CODE), str(CODE / "training")]
     from ifv_training.psd import materialize_psd_topk_cache
@@ -187,13 +202,21 @@ def materialize(owner, cache: Path) -> str:
     from scripts.run_psd_round import attest
     from types import SimpleNamespace
 
-    resolved = OUT / "resolved-targets-stat-v86"
+    # v86 completed both large stat-bound products; only its serving snapshot
+    # was stale. Reuse those exact retained files and emit a fresh attestation
+    # instead of rewriting another multi-gigabyte package.
+    previous_resolved = OUT / "resolved-targets-stat-v86"
+    previous_datums = OUT / "datums-stat-v86"
+    reuse_previous = all(path.is_file() for path in (
+        previous_resolved / "targets.jsonl", previous_resolved / "manifest.json",
+        previous_datums / "datums.jsonl", previous_datums / "manifest.json"))
+    resolved = previous_resolved if reuse_previous else OUT / "resolved-targets-stat-v87"
     result = completed_package(output_dir=resolved, input_files=[TARGETS, cache],
         build=lambda destination: materialize_psd_topk_cache(targets_path=TARGETS,
             cache_path=cache, output_dir=destination, topk=20))
     if result["status"] != "ready_for_training":
         raise RuntimeError("teacher cache materialization failed")
-    datums = OUT / "datums-stat-v86"
+    datums = previous_datums if reuse_previous else OUT / "datums-stat-v87"
     result = completed_package(output_dir=datums, input_files=[resolved / "targets.jsonl"],
         build=lambda destination: build_sparse_topk_package(targets_path=resolved / "targets.jsonl",
             output_dir=destination, topk=20, max_sequence_length=131072, require_both_kinds=True))
@@ -203,16 +226,17 @@ def materialize(owner, cache: Path) -> str:
         manifest_path=datums / "manifest.json", expected_topk=20, max_context=131072)
     if not gate["passed"]:
         raise RuntimeError("PSD datum preflight failed")
-    ready = attest(SimpleNamespace(output=OUT / "attested-stat-v86", rollout_gate=ROLLOUT_GATE,
-        datums=datums / "datums.jsonl", datum_manifest=datums / "manifest.json", snapshot=SNAPSHOT))
-    atomic_json(OUT / "result-stat-v86.json", {"status": "ready_for_training", "topk": 20,
+    ready = attest(SimpleNamespace(output=OUT / "attested-stat-v87", rollout_gate=ROLLOUT_GATE,
+        datums=datums / "datums.jsonl", datum_manifest=datums / "manifest.json",
+        snapshot=current_snapshot(owner)))
+    atomic_json(OUT / "result-stat-v87.json", {"status": "ready_for_training", "topk": 20,
         "targets": owner.load(TARGET_MANIFEST)["counts"]["targets"], "ready": ready["ready"],
         "large_payload_hashing": False, "new_agent_or_provider_calls": False})
     # The attestation binds the resolved targets by stat identity, so that file
     # must remain beside the ready package.  Only redundant scoring shards are
     # removable after the canonical gzip cache is durable.
     for path in [OUT / "target-shards", *(OUT / f"gpu-{index}" for index in range(4)),
-                 OUT / ".resolved-targets-stat-v86-stage"]:
+                 OUT / ".resolved-targets-stat-v87-stage"]:
         if path.exists():
             shutil.rmtree(path)
     return ready["ready"]
@@ -228,7 +252,7 @@ def execute(parent_pid: int) -> None:
         atomic_json(DEPLOY / "state.json", {"phase": "teacher_complete_serving_restored"})
         cache = merge_gzip(owner)
         ready = materialize(owner, cache)
-        atomic_json(OUT / "state-stat-v86.json", {"phase": "ready_for_training", "ready": ready,
+        atomic_json(OUT / "state-stat-v87.json", {"phase": "ready_for_training", "ready": ready,
             "formal_training": False, "large_payload_hashing": False})
         atomic_json(DEPLOY / "state.json", {"phase": "ready_for_training", "ready": ready})
     except Exception as error:
