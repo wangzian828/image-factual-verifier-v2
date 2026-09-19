@@ -30,7 +30,7 @@ class ImageProcessor:
                 "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 2]])}
 
 
-def test_repeated_images_survive_datum_and_hash_validation(tmp_path):
+def test_repeated_images_survive_datum_and_hash_validation(tmp_path, monkeypatch):
     ids = [1, 248056, 2, 248056, 3]
     media = bind_media(request(), processor=SimpleNamespace(image_processor=ImageProcessor()),
                        output_dir=tmp_path, prompt_ids=ids, processor_id="test")
@@ -43,8 +43,12 @@ def test_repeated_images_survive_datum_and_hash_validation(tmp_path):
         "teacher_topk_by_position": [[[10, 1.0]], [[11, 1.0]]], "psd_media": media,
     }, topk=1)
     assert datum["loss_positions"] == [4, 5]
+    assert media["image_paths"][0] == media["image_paths"][1]
+    assert list(tmp_path.glob("*.image")) == [tmp_path / (media["image_sha256"][0] + ".image")]
+    monkeypatch.setattr("ifv_training.psd_media._load_processor",
+                        lambda _: SimpleNamespace(image_processor=ImageProcessor()))
     assert load_media(datum["psd_media"], datum["input_ids"])["pixel_values"].shape == (8, 12)
-    with open(media["path"], "ab") as handle:
+    with open(media["image_paths"][0], "ab") as handle:
         handle.write(b"changed")
     with pytest.raises(ValueError, match="hash mismatch"):
         load_media(media, ids)

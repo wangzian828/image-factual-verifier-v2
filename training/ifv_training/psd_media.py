@@ -4,12 +4,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .io import canonical_json, sha256_file
 
-SCHEMA = "ifv-psd-media-v1"
+SCHEMA = "ifv-psd-media-v2"
+LEGACY_SCHEMA = "ifv-psd-media-v1"
 IMAGE_TOKEN = 248056
 
 
@@ -30,6 +32,43 @@ def media_from_archive(step, *, processor_path: str, output_dir: Path, prompt_id
     request = reconstruct_archived_request(step["runtime_store_path"], step["context_request_id"])
     return bind_media(request.get("input_payload", request), processor=processor,
                       output_dir=output_dir, prompt_ids=prompt_ids, processor_id=str(path))
+
+
+@lru_cache(maxsize=4)
+def _load_processor(path: str):
+    """Load the exact image processor bound by the media record."""
+    from transformers import AutoProcessor
+    import json
+
+    resolved = Path(path)
+    if (resolved / "adapter_config.json").is_file():
+        resolved = Path(json.loads(
+            (resolved / "adapter_config.json").read_text(encoding="utf-8")
+        )["base_model_name_or_path"])
+    processor = AutoProcessor.from_pretrained(str(resolved), local_files_only=True)
+    if not hasattr(processor, "image_processor"):
+        raise ValueError(f"PSD processor has no image_processor: {resolved}")
+    return processor
+
+
+def _decode_images(blobs: Sequence[bytes]):
+    from PIL import Image
+
+    images = []
+    for blob in blobs:
+        with Image.open(io.BytesIO(blob)) as image:
+            images.append(image.convert("RGB"))
+    return images
+
+
+def _encode_images(blobs: Sequence[bytes], processor: Any) -> dict[str, Any]:
+    encoded = processor.image_processor(
+        images=_decode_images(blobs), return_tensors="pt"
+    )
+    return {
+        name: encoded[name].detach().cpu().contiguous()
+        for name in ("pixel_values", "image_grid_thw")
+    }
 
 
 def image_bytes(request: Any) -> list[bytes]:
@@ -101,40 +140,39 @@ def bind_media(
     request: Mapping[str, Any], *, processor: Any, output_dir: Path,
     prompt_ids: Sequence[int], processor_id: str,
 ) -> dict[str, Any]:
-    import torch
-    from PIL import Image
-
     blobs = image_bytes(request)
     if not blobs:
         if IMAGE_TOKEN in prompt_ids:
             raise ValueError("visual prompt has no archived images")
         return {}
-    images = []
-    for blob in blobs:
-        with Image.open(io.BytesIO(blob)) as image:
-            images.append(image.convert("RGB"))
-    encoded = processor.image_processor(images=images, return_tensors="pt")
-    tensors = {name: encoded[name].detach().cpu().contiguous()
-               for name in ("pixel_values", "image_grid_thw")}
+    tensors = _encode_images(blobs, processor)
     merge_size = int(processor.image_processor.merge_size)
     validate_image_runs(prompt_ids, tensors["image_grid_thw"].tolist(), merge_size)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    image_paths = []
+    image_sha256 = []
+    for blob in blobs:
+        digest = hashlib.sha256(blob).hexdigest()
+        path = output_dir / f"{digest}.image"
+        if not path.exists():
+            temporary = path.with_suffix(".tmp")
+            temporary.write_bytes(blob)
+            temporary.replace(path)
+        elif sha256_file(path) != digest:
+            raise ValueError("PSD compact image artifact hash mismatch")
+        image_paths.append(str(path.resolve()))
+        image_sha256.append(digest)
     provenance = {
         "schema_version": SCHEMA,
         "processor_id": processor_id,
         "processor_config": processor.image_processor.to_dict(),
-        "image_sha256": [hashlib.sha256(blob).hexdigest() for blob in blobs],
+        "image_sha256": image_sha256,
+        "image_paths": image_paths,
         "image_grid_thw": tensors["image_grid_thw"].tolist(),
         "pixel_values_sha256": hashlib.sha256(tensors["pixel_values"].float().numpy().tobytes()).hexdigest(),
         "merge_size": merge_size,
     }
-    identity = hashlib.sha256(canonical_json(provenance).encode()).hexdigest()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{identity}.pt"
-    if not path.exists():
-        temporary = path.with_suffix(".tmp")
-        torch.save(tensors, temporary)
-        temporary.replace(path)
-    return {**provenance, "path": str(path.resolve()), "sha256": sha256_file(path)}
+    return provenance
 
 
 def validate_image_runs(ids: Sequence[int], grids: Sequence[Sequence[int]], merge: int):
@@ -154,15 +192,31 @@ def validate_image_runs(ids: Sequence[int], grids: Sequence[Sequence[int]], merg
 
 
 def validate_media(media: Mapping[str, Any], ids: Sequence[int]) -> None:
+    if media.get("schema_version") == LEGACY_SCHEMA:
+        path = Path(media["path"])
+        if not path.is_absolute() or not path.is_file():
+            raise ValueError("PSD media tensor artifact missing")
+        if sha256_file(path) != media.get("sha256"):
+            raise ValueError("PSD media tensor hash mismatch")
+        grids = media["image_grid_thw"]
+        if len(grids) != len(media["image_sha256"]):
+            raise ValueError("PSD media image count mismatch")
+        validate_image_runs(ids, grids, int(media["merge_size"]))
+        return
     if media.get("schema_version") != SCHEMA:
         raise ValueError("invalid PSD media schema")
-    path = Path(media["path"])
-    if not path.is_absolute() or not path.is_file():
-        raise ValueError("PSD media tensor artifact missing")
-    if sha256_file(path) != media.get("sha256"):
-        raise ValueError("PSD media tensor hash mismatch")
+    paths = media.get("image_paths")
+    digests = media.get("image_sha256")
+    if not isinstance(paths, list) or not isinstance(digests, list) or len(paths) != len(digests):
+        raise ValueError("PSD compact image bindings are invalid")
+    for raw_path, digest in zip(paths, digests):
+        path = Path(raw_path)
+        if not path.is_absolute() or not path.is_file():
+            raise ValueError("PSD compact image artifact missing")
+        if sha256_file(path) != digest:
+            raise ValueError("PSD compact image artifact hash mismatch")
     grids = media["image_grid_thw"]
-    if len(grids) != len(media["image_sha256"]):
+    if len(grids) != len(digests):
         raise ValueError("PSD media image count mismatch")
     validate_image_runs(ids, grids, int(media["merge_size"]))
 
@@ -171,7 +225,14 @@ def load_media(media: Mapping[str, Any], ids: Sequence[int]) -> dict[str, Any]:
     import torch
 
     validate_media(media, ids)
-    tensors = torch.load(media["path"], map_location="cpu", weights_only=True)
+    if media.get("schema_version") == LEGACY_SCHEMA:
+        tensors = torch.load(media["path"], map_location="cpu", weights_only=True)
+    else:
+        processor = _load_processor(str(media["processor_id"]))
+        if processor.image_processor.to_dict() != media.get("processor_config"):
+            raise ValueError("PSD image processor config changed")
+        blobs = [Path(path).read_bytes() for path in media["image_paths"]]
+        tensors = _encode_images(blobs, processor)
     if set(tensors) != {"pixel_values", "image_grid_thw"}:
         raise ValueError("unexpected PSD media tensor fields")
     if tensors["image_grid_thw"].tolist() != media["image_grid_thw"]:
