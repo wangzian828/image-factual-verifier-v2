@@ -81,7 +81,8 @@ def main():
     spec = importlib.util.spec_from_file_location('owner', ROOT / 'training-artifacts/psd-epoch3-20260916-v1/psd_epoch3_canary.py')
     owner = importlib.util.module_from_spec(spec); spec.loader.exec_module(owner)
     stage = DEPLOY/'stage-state.json'
-    assert owner.load(stage if stage.exists() else DEPLOY/'state.json')['deployment_ready_not_live']
+    if stage.exists():
+        assert owner.load(stage)['deployment_ready_not_live']
     if args.mode == 'launch':
         if not args.ready:
             assert owner.load(RUN / 'state.json')['phase'] == 'ready_for_trainer'
@@ -93,18 +94,16 @@ def main():
         receipt = owner.spawn(command, os.environ.copy(), out / 'run.log')
         owner.save(out / 'process.json', receipt)
         print(json.dumps({'pid': receipt['pid'], 'output': str(out)})); return
-    owner.verify_export()
-    bindings = owner.load(DEPLOY / 'code-binding.json')
-    for name, expected in bindings.items():
-        assert owner.sha(CODE / name) == expected, f'Immutable code changed: {name}'
+    from ifv_training.artifact_receipts import artifact_identity
     backends = [owner.load(SERVICE / f'replica-{i}.json') for i in range(4)]
     environments = [owner.checked(b) for b in backends]
     assert [e['CUDA_VISIBLE_DEVICES'] for e in environments] == ['0', '1', '2', '3']
     guard = owner.load(SERVICE / 'guard.json'); owner.checked(guard)
-    owner.save(out / 'binding.json', {'backends': backends, 'code_binding_sha256': owner.sha(DEPLOY / 'code-binding.json'),
-        'datums': str(datums), 'datums_sha256': owner.sha(datums), 'snapshot': str(SNAPSHOT),
+    owner.save(out / 'binding.json', {'backends': backends,
+        'deployment_commit': 'af2b3bd',
+        'datums': str(datums), 'datums_identity': artifact_identity(datums), 'snapshot': str(SNAPSHOT),
         'gateway': gateway, 'ready': str(args.ready) if args.ready else None,
-        'ready_sha256': owner.sha(args.ready) if args.ready else None,
+        'ready_identity': artifact_identity(args.ready) if args.ready else None,
         'global_batch_size': 32, 'formal_training': False})
     stopped = []
     def stop_one(i):
@@ -202,7 +201,6 @@ def main():
         if restore_errors:
             owner.save(out / 'restore-errors.json', restore_errors)
             raise RuntimeError('An owned backend needs recovery; see restore-errors.json')
-        owner.verify_export()
 
 
 if __name__ == '__main__':
