@@ -30,7 +30,7 @@ TARGET_MANIFEST = DEDUP / "targets/manifest.json"
 SNAPSHOT = ROOT / "training-artifacts/psd-contract-audit-20260916-v10/snapshot"
 ROLLOUT_GATE = ROUND / "rollout-gate.json"
 OUT = FINAL / "teacher-topk-preservation-dedup-v74"
-DEPLOY = ROOT / "training-artifacts/psd-preserve-dedup-20260920-v73"
+DEPLOY = ROOT / "training-artifacts/psd-preserve-dedup-20260920-v74"
 CODE = DEPLOY / "code"
 
 

@@ -15,7 +15,7 @@ import sys
 
 
 ROOT = Path("/volume/ybo/wza")
-DEPLOY = ROOT / "training-artifacts/psd-preserve-dedup-20260920-v73"
+DEPLOY = ROOT / "training-artifacts/psd-preserve-dedup-20260920-v74"
 CODE = DEPLOY / "code"
 ROUND = ROOT / "runs/psd-production-round1-20260917-v1"
 SEARCH = ROUND / "search-gemini37-flash-high"
