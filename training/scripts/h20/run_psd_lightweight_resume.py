@@ -158,19 +158,27 @@ def reconcile_controlled_interruptions() -> dict:
 
 
 def prepare_command() -> list[str]:
-    binding = load(RUN / "binding.json")
-    return [sys.executable, "-u", str(CODE / "scripts/run_psd_round.py"), "prepare",
-        "--run-dir", str(RUN / "episodes"), "--benchmark", binding["benchmark"],
-        "--train-cases", binding["train_cases"], "--private-gold", binding["private_gold"],
-        "--source-access-policy", binding["source_access_policy"], "--snapshot", binding["snapshot"],
-        "--output", str(ROUND), "--round-index", "1", "--attempts", "6",
-        "--case-concurrency", "40", "--source-review-concurrency", "4",
-        "--postprocess-workers", "16", "--candidate-workers", "16",
-        "--reuse-completed-source-reviews",
-        "--source-review-prefetch", str(PREFETCH), "--expected-rollouts-per-case", "8",
+    receipt = DEPLOY / "fast-resume-inputs.json"
+    index = DEPLOY / "selected-candidates-offset-index.json"
+    if not receipt.is_file() or not index.is_file():
+        raise RuntimeError("fast-resume attestation is missing")
+    receipt_sha256 = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    # All source review, postprocess, rollout-gate and candidate stages were
+    # already completed and bound before repair search began. Resume the search
+    # directly so an outer retry never reparses or rehashes the 400x8 source
+    # collection and multi-GB candidate packages.
+    return [sys.executable, "-u", str(CODE / "scripts/run_psd_feedback_canary.py"),
+        "--source", str(ROUND / "source-bank"),
+        "--snapshot", str(RUN / "snapshot"),
+        "--output", str(ROUND / SEARCH_NAME),
+        "--attempts", "6", "--proposal-rounds", "12",
+        "--case-concurrency", "40",
         "--task-source-selection", "longest_failed", "--repair-mode", "slate",
-        "--search-name", SEARCH_NAME,
-        "--judge-model", RESUME_MODEL, "--teacher-device", "cuda:0", "--defer-topk"]
+        "--judge-model", RESUME_MODEL, "--teacher-device", "cuda:0",
+        "--defer-topk",
+        "--resume-input-receipt", str(receipt),
+        "--resume-input-receipt-sha256", receipt_sha256,
+        "--resume-selection-index", str(index)]
 
 
 def current_status() -> str:

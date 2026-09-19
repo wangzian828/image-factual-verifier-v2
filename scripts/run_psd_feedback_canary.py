@@ -38,6 +38,41 @@ TERMINAL_SEARCH_STATUSES = {
 }
 
 
+def _validate_fast_resume_receipt(path, expected_sha256):
+    path = Path(path).resolve()
+    if sha256_file(path) != expected_sha256:
+        raise ValueError("PSD fast-resume receipt digest changed")
+    receipt = load_json(path)
+    if receipt.get("schema_version") != "ifv-psd-fast-resume-inputs-v1":
+        raise ValueError("unknown PSD fast-resume receipt schema")
+    files = receipt.get("files")
+    if not isinstance(files, dict) or not files:
+        raise ValueError("PSD fast-resume receipt has no files")
+    for name, saved in files.items():
+        target = Path(name)
+        current = target.stat()
+        observed = {
+            "size": current.st_size,
+            "mtime_ns": current.st_mtime_ns,
+            "inode": current.st_ino,
+            "device": current.st_dev,
+        }
+        if observed != {key: saved.get(key) for key in observed}:
+            raise ValueError("PSD fast-resume input metadata changed: " + name)
+        digest = saved.get("sha256")
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError("PSD fast-resume input digest is invalid: " + name)
+    return receipt
+
+
+def _receipt_digest(receipt, path):
+    name = str(Path(path).resolve())
+    try:
+        return receipt["files"][name]["sha256"]
+    except KeyError as error:
+        raise ValueError("PSD fast-resume receipt is missing: " + name) from error
+
+
 def _resume_case_plan(repair_sources, previous_progress):
     """Carry terminal cases by their small manifest and schedule only the tail.
 
@@ -77,6 +112,58 @@ def _resume_case_plan(repair_sources, previous_progress):
     return [carried[case_id] for case_id in sorted(carried, key=indexes.get)], pending
 
 
+def _resume_indexed_case_plan(selected_path, index_path, previous_progress):
+    """Seek directly to unfinished selected rows without scanning the JSONL."""
+    selected_path, index_path = Path(selected_path), Path(index_path)
+    index = load_json(index_path)
+    if (index.get("schema_version") != "ifv-psd-selected-offset-index-v1"
+            or Path(index.get("selected_path", "")).resolve() != selected_path.resolve()):
+        raise ValueError("PSD selected-row offset index binding changed")
+    entries = index.get("entries")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("PSD selected-row offset index is empty")
+    case_indexes = {}
+    for input_index, entry in enumerate(entries):
+        case_id = str(entry.get("case_id") or "")
+        if (not case_id or case_id in case_indexes
+                or entry.get("input_index") != input_index
+                or type(entry.get("offset")) is not int or entry["offset"] < 0
+                or type(entry.get("length")) is not int or entry["length"] <= 0):
+            raise ValueError("PSD selected-row offset index is invalid")
+        case_indexes[case_id] = input_index
+    carried = {}
+    previous_cases = previous_progress.get("cases") or []
+    if not isinstance(previous_cases, list):
+        raise ValueError("previous PSD progress cases must be a list")
+    for record in previous_cases:
+        case_id = str(record.get("case_id") or "")
+        if case_id not in case_indexes or case_id in carried:
+            continue
+        result = record.get("result") or {}
+        if result.get("status") not in TERMINAL_SEARCH_STATUSES:
+            continue
+        directory = Path(str(record.get("directory") or ""))
+        manifest_path = directory / "manifest.json"
+        if not manifest_path.is_file() or load_json(manifest_path) != result:
+            raise ValueError(f"terminal PSD manifest changed for {case_id}")
+        carried[case_id] = {**record, "input_index": case_indexes[case_id]}
+    pending = []
+    with selected_path.open("rb") as source:
+        for entry in entries:
+            case_id = entry["case_id"]
+            if case_id in carried:
+                continue
+            source.seek(entry["offset"])
+            raw = source.read(entry["length"])
+            if hashlib.sha256(raw).hexdigest() != entry.get("sha256"):
+                raise ValueError("PSD selected row changed for " + case_id)
+            candidate = json.loads(raw)
+            if candidate.get("case_id") != case_id:
+                raise ValueError("PSD selected-row index case mismatch")
+            pending.append((entry["input_index"], candidate))
+    return [carried[case_id] for case_id in sorted(carried, key=case_indexes.get)], pending
+
+
 def _iter_jsonl(path):
     with Path(path).open(encoding="utf-8") as source:
         for line_number, line in enumerate(source, 1):
@@ -109,7 +196,19 @@ async def run(args):
     search_only = getattr(args, "search_only", False)
     if type(proposal_rounds) is not int or not args.attempts <= proposal_rounds <= 64:
         raise ValueError("proposal rounds must be between attempt budget and 64")
-    identity = {"inputs": {str(p.resolve()): sha256_file(p) for p in input_paths},
+    receipt_path = getattr(args, "resume_input_receipt", None)
+    receipt_sha256 = getattr(args, "resume_input_receipt_sha256", None)
+    selection_index = getattr(args, "resume_selection_index", None)
+    fast_receipt = None
+    if any(value is not None for value in (receipt_path, receipt_sha256, selection_index)):
+        if not all(value is not None for value in (receipt_path, receipt_sha256, selection_index)):
+            raise ValueError("fast resume requires receipt, digest and selection index")
+        fast_receipt = _validate_fast_resume_receipt(receipt_path, receipt_sha256)
+        _receipt_digest(fast_receipt, selection_index)
+    input_digests = ({str(p.resolve()): _receipt_digest(fast_receipt, p) for p in input_paths}
+                     if fast_receipt else
+                     {str(p.resolve()): sha256_file(p) for p in input_paths})
+    identity = {"inputs": input_digests,
         "attempt_budget": args.attempts, "judge_model": args.judge_model,
         "selection": "all fixed original failed training cases, independent of repair outcomes"}
     task_source_selection = getattr(args, "task_source_selection", "all")
@@ -222,10 +321,16 @@ async def run(args):
     repair_sources = None
     if task_source_selection == "longest_failed":
         selection_root = output / "task-source-selection"
-        completed_package(output_dir=selection_root, input_files=[candidates_path],
-            build=lambda destination: build_task_repair_selection_parallel(
-                candidates_path=candidates_path, run_dir=run_dir,
-                output_dir=destination, workers=min(args.case_concurrency, 16)))
+        if fast_receipt:
+            for path in (candidates_path, selection_root / "selection.json",
+                         selection_root / "selected_candidates.jsonl",
+                         output / ".task-source-selection-stage/state.json"):
+                _receipt_digest(fast_receipt, path)
+        else:
+            completed_package(output_dir=selection_root, input_files=[candidates_path],
+                build=lambda destination: build_task_repair_selection_parallel(
+                    candidates_path=candidates_path, run_dir=run_dir,
+                    output_dir=destination, workers=min(args.case_concurrency, 16)))
         selection = load_json(selection_root / "selection.json")
         repair_sources = _iter_jsonl(selection_root / "selected_candidates.jsonl")
         selection_path = output / "task-source-selection.json"
@@ -235,7 +340,11 @@ async def run(args):
         summary["task_source_selection"] = {k: v for k, v in selection.items() if k != "tasks"}
     else:
         repair_sources = _iter_jsonl(candidates_path)
-    carried_cases, pending_cases = _resume_case_plan(repair_sources, previous_progress)
+    if fast_receipt:
+        carried_cases, pending_cases = _resume_indexed_case_plan(
+            selection_root / "selected_candidates.jsonl", selection_index, previous_progress)
+    else:
+        carried_cases, pending_cases = _resume_case_plan(repair_sources, previous_progress)
     summary["cases"] = carried_cases
     summary["resume_scope"] = {
         "selected": len(carried_cases) + len(pending_cases),
@@ -273,7 +382,14 @@ async def run(args):
                                  "completed_after_seconds": completed_after_seconds})
         _atomic_json(output / "progress.json", summary)
     # The original 45-row CPU probe must still be reading exactly the same bytes.
-    load_bound(marker, identity={**identity, "inputs": {name: sha256_file(Path(name)) for name in identity["inputs"]}})
+    if fast_receipt:
+        # Recheck metadata after the invocation; the one-time attestation holds
+        # the full content hashes and the final materialization gate rehashes.
+        _validate_fast_resume_receipt(receipt_path, receipt_sha256)
+        load_bound(marker, identity=identity)
+    else:
+        load_bound(marker, identity={**identity, "inputs": {
+            name: sha256_file(Path(name)) for name in identity["inputs"]}})
     # Read compact accepted-candidate/attempt ledgers once at the stage boundary;
     # repeated outer resumes must not reopen every terminal episode tree.
     summary["cases"].sort(key=lambda row: row["input_index"])
@@ -347,6 +463,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--task-source-selection", choices=("all", "longest_failed"), default="longest_failed",
         help="Use longest_failed for the published per-task grouped repair search")
     parser.add_argument("--repair-mode", choices=("slate", "feedback"), default="slate")
+    parser.add_argument("--resume-input-receipt", type=Path)
+    parser.add_argument("--resume-input-receipt-sha256")
+    parser.add_argument("--resume-selection-index", type=Path)
     return parser
 
 

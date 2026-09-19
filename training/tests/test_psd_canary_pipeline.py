@@ -7,7 +7,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.continue_psd_canary import completed_stage
 from scripts.prepare_psd_training_canary import project_frozen_training
-from scripts.run_psd_feedback_canary import _build_parser, _resume_case_plan
+from scripts.run_psd_feedback_canary import (
+    _build_parser,
+    _resume_case_plan,
+    _resume_indexed_case_plan,
+    _validate_fast_resume_receipt,
+)
 from src.orchestrator.source_access import benchmark_source_access_policy
 from ifv_training.io import load_jsonl
 from ifv_training.psd_repair_runtime import QwenContinuationAdapter
@@ -54,6 +59,54 @@ def test_resume_case_plan_rejects_changed_terminal_manifest(tmp_path):
                             "result": {"status": "converged", "accepted_count": 1}}]}
     with pytest.raises(ValueError, match="manifest changed"):
         _resume_case_plan([{"case_id": "done", "candidate_id": "d"}], previous)
+
+
+def test_indexed_resume_reads_only_pending_rows(tmp_path):
+    selected = tmp_path / "selected.jsonl"
+    rows = [
+        {"case_id": "done", "candidate_id": "d", "padding": "x" * 100},
+        {"case_id": "pending", "candidate_id": "p", "padding": "y" * 100},
+    ]
+    entries, offset = [], 0
+    with selected.open("wb") as stream:
+        for input_index, row in enumerate(rows):
+            raw = (json.dumps(row) + "\n").encode()
+            stream.write(raw)
+            entries.append({"case_id": row["case_id"], "input_index": input_index,
+                "offset": offset, "length": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest()})
+            offset += len(raw)
+    index = tmp_path / "index.json"
+    index.write_text(json.dumps({"schema_version": "ifv-psd-selected-offset-index-v1",
+        "selected_path": str(selected.resolve()), "entries": entries}))
+    directory = tmp_path / "done"
+    directory.mkdir()
+    manifest = {"status": "converged"}
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    carried, pending = _resume_indexed_case_plan(selected, index, {"cases": [{
+        "case_id": "done", "directory": str(directory), "result": manifest}]})
+    assert [row["case_id"] for row in carried] == ["done"]
+    assert [(i, row["case_id"]) for i, row in pending] == [(1, "pending")]
+
+
+def test_fast_resume_receipt_rejects_metadata_change(tmp_path):
+    target = tmp_path / "large.jsonl"
+    target.write_bytes(b"original")
+    stat = target.stat()
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps({
+        "schema_version": "ifv-psd-fast-resume-inputs-v1",
+        "files": {str(target.resolve()): {
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+            "inode": stat.st_ino, "device": stat.st_dev,
+        }},
+    }))
+    digest = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    assert _validate_fast_resume_receipt(receipt, digest)["files"]
+    target.write_bytes(b"changed-size")
+    with pytest.raises(ValueError, match="metadata changed"):
+        _validate_fast_resume_receipt(receipt, digest)
 
 
 def test_completed_proposer_response_cached_before_json_validation(tmp_path):
