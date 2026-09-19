@@ -58,7 +58,20 @@ def test_stage_binds_inputs_and_all_media_not_just_manifest(tmp_path):
     source.write_text("different input")
     with pytest.raises(ValueError, match="binding changed"):
         completed_package(output_dir=output, input_files=[source], build=build)
+
+
+def test_stage_binds_all_output_media_without_payload_hashing(tmp_path):
+    source = tmp_path / "source"
     source.write_text("input")
+    output = tmp_path / "package"
+
+    def build(directory):
+        directory.mkdir()
+        (directory / "manifest.json").write_text("{}")
+        (directory / "pixels.pt").write_bytes(b"pixels")
+        return {"status": "ready"}
+
+    completed_package(output_dir=output, input_files=[source], build=build)
     (output / "pixels.pt").unlink()
     with pytest.raises(ValueError, match="files changed"):
         completed_package(output_dir=output, input_files=[source], build=build)

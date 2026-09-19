@@ -9,7 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 import uuid
 
-from .io import sha256_file
+from .artifact_receipts import freeze_artifact, verify_artifact
+from .io import load_json, sha256_file
 from .psd_repair_storage import load_bound, save_bound
 from .psd_repair_search import search_lock
 
@@ -20,18 +21,60 @@ def completed_package(*, output_dir, input_files, build, parameters=None):
         raise ValueError("PSD package directory cannot be a symlink")
     output_dir = output_dir.resolve()
     control = output_dir.parent / ("." + output_dir.name + "-stage")
-    identity = {"schema_version": "ifv-psd-materialization-stage-v1",
-        "output": str(output_dir), "parameters": parameters or {},
-        "inputs": {str(Path(path).resolve()): sha256_file(Path(path)) for path in input_files}}
     with search_lock(control):
         marker = control / "state.json"
+        # Keep historical packages readable.  New packages never hash payloads;
+        # they use O(1) stat-bound immutable receipts.
+        marker_header = load_json(marker) if marker.exists() else {}
+        marker_identity = marker_header.get("identity", {})
+        if marker_identity.get("schema_version") == "ifv-psd-materialization-stage-v2":
+            identity = marker_identity
+            if identity.get("output") != str(output_dir) or identity.get("parameters") != (parameters or {}):
+                raise ValueError("PSD package stage identity changed")
+            expected_inputs = {str(Path(path).resolve()) for path in input_files}
+            if set(identity.get("inputs", {})) != expected_inputs:
+                raise ValueError("PSD package stage inputs changed")
+            for record in identity["inputs"].values():
+                receipt = Path(record["receipt"])
+                try:
+                    verified = verify_artifact(receipt)
+                except ValueError as error:
+                    raise ValueError("PSD package input binding changed") from error
+                if verified != record["artifact"]:
+                    raise ValueError("PSD package input receipt changed")
+        elif marker.exists():
+            identity = {"schema_version": "ifv-psd-materialization-stage-v1",
+                "output": str(output_dir), "parameters": parameters or {},
+                "inputs": {str(Path(path).resolve()): sha256_file(Path(path)) for path in input_files}}
+        else:
+            inputs = {}
+            for index, path in enumerate(input_files):
+                resolved = Path(path).resolve()
+                receipt = control / "input-receipts" / f"{index:08d}.json"
+                inputs[str(resolved)] = {"receipt": str(receipt),
+                    "artifact": freeze_artifact(resolved, receipt)}
+            identity = {"schema_version": "ifv-psd-materialization-stage-v2",
+                "output": str(output_dir), "parameters": parameters or {}, "inputs": inputs}
         if marker.exists():
             saved = load_bound(marker, identity=identity)
             if saved["status"] == "complete":
-                current = {str(path.relative_to(output_dir)): sha256_file(path)
-                           for path in output_dir.rglob("*") if path.is_file()}
-                if current != saved["files"]:
-                    raise ValueError("completed PSD package files changed")
+                if identity["schema_version"].endswith("v2"):
+                    current_names = {str(path.relative_to(output_dir))
+                        for path in output_dir.rglob("*") if path.is_file()}
+                    if current_names != set(saved["files"]):
+                        raise ValueError("completed PSD package files changed")
+                    for record in saved["files"].values():
+                        try:
+                            verified = verify_artifact(Path(record["receipt"]))
+                        except ValueError as error:
+                            raise ValueError("completed PSD package files changed") from error
+                        if verified != record["artifact"]:
+                            raise ValueError("completed PSD package file changed")
+                else:
+                    current = {str(path.relative_to(output_dir)): sha256_file(path)
+                               for path in output_dir.rglob("*") if path.is_file()}
+                    if current != saved["files"]:
+                        raise ValueError("completed PSD package files changed")
                 return saved["result"]
         else:
             if output_dir.exists() and any(output_dir.iterdir()):
@@ -47,10 +90,28 @@ def completed_package(*, output_dir, input_files, build, parameters=None):
                 raise ValueError("invalid PSD stage recovery paths")
             output_dir.rename(destination)
         result = build(output_dir)
-        if identity["inputs"] != {path: sha256_file(Path(path)) for path in identity["inputs"]}:
-            raise ValueError("PSD package inputs changed while building")
-        files = {str(path.relative_to(output_dir)): sha256_file(path)
-                 for path in output_dir.rglob("*") if path.is_file()}
+        if identity["schema_version"].endswith("v2"):
+            for record in identity["inputs"].values():
+                try:
+                    verified = verify_artifact(Path(record["receipt"]))
+                except ValueError as error:
+                    raise ValueError("PSD package input changed while building") from error
+                if verified != record["artifact"]:
+                    raise ValueError("PSD package input changed while building")
+            files = {}
+            output_paths = sorted(path for path in output_dir.rglob("*") if path.is_file())
+            for index, path in enumerate(output_paths):
+                if not path.is_file():
+                    continue
+                relative = str(path.relative_to(output_dir))
+                receipt = control / "output-receipts" / f"{index:08d}.json"
+                files[relative] = {"receipt": str(receipt),
+                    "artifact": freeze_artifact(path, receipt)}
+        else:
+            if identity["inputs"] != {path: sha256_file(Path(path)) for path in identity["inputs"]}:
+                raise ValueError("PSD package inputs changed while building")
+            files = {str(path.relative_to(output_dir)): sha256_file(path)
+                     for path in output_dir.rglob("*") if path.is_file()}
         if "manifest.json" not in files:
             raise ValueError("PSD builder did not emit a manifest")
         save_bound(marker, identity=identity, payload={"status": "complete", "result": result, "files": files})
