@@ -10,7 +10,8 @@ from typing import Any, Mapping, Sequence
 
 from .io import canonical_json, sha256_file
 
-SCHEMA = "ifv-psd-media-v2"
+SCHEMA = "ifv-psd-media-v3"
+COMPACT_PREPROCESSED_SCHEMA = "ifv-psd-media-v2"
 LEGACY_SCHEMA = "ifv-psd-media-v1"
 IMAGE_TOKEN = 248056
 
@@ -22,13 +23,12 @@ def media_digest(media: Mapping[str, Any]) -> str:
 def media_from_archive(step, *, processor_path: str, output_dir: Path, prompt_ids):
     from . import _repo_import  # noqa: F401
     from src.orchestrator.runtime_events import reconstruct_archived_request
-    from transformers import AutoProcessor
     import json
 
     path = Path(processor_path)
     if (path / "adapter_config.json").is_file():
         path = Path(json.loads((path / "adapter_config.json").read_text())["base_model_name_or_path"])
-    processor = AutoProcessor.from_pretrained(str(path), local_files_only=True)
+    processor = _load_processor(str(path))
     request = reconstruct_archived_request(step["runtime_store_path"], step["context_request_id"])
     return bind_media(request.get("input_payload", request), processor=processor,
                       output_dir=output_dir, prompt_ids=prompt_ids, processor_id=str(path))
@@ -145,9 +145,12 @@ def bind_media(
         if IMAGE_TOKEN in prompt_ids:
             raise ValueError("visual prompt has no archived images")
         return {}
-    tensors = _encode_images(blobs, processor)
     merge_size = int(processor.image_processor.merge_size)
-    validate_image_runs(prompt_ids, tensors["image_grid_thw"].tolist(), merge_size)
+    runs = _image_run_lengths(prompt_ids)
+    if len(runs) != len(blobs):
+        raise ValueError(
+            f"PSD image placeholder/image count mismatch: {len(runs)} != {len(blobs)}"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     image_paths = []
     image_sha256 = []
@@ -168,14 +171,21 @@ def bind_media(
         "processor_config": processor.image_processor.to_dict(),
         "image_sha256": image_sha256,
         "image_paths": image_paths,
-        "image_grid_thw": tensors["image_grid_thw"].tolist(),
-        "pixel_values_sha256": hashlib.sha256(tensors["pixel_values"].float().numpy().tobytes()).hexdigest(),
         "merge_size": merge_size,
     }
     return provenance
 
 
 def validate_image_runs(ids: Sequence[int], grids: Sequence[Sequence[int]], merge: int):
+    runs = _image_run_lengths(ids)
+    if merge <= 0 or any(len(grid) != 3 or any(int(x) <= 0 for x in grid) for grid in grids):
+        raise ValueError("invalid image grids")
+    expected = [int(t) * int(h) * int(w) // (merge * merge) for t, h, w in grids]
+    if runs != expected:
+        raise ValueError(f"PSD image placeholder/grid mismatch: {runs} != {expected}")
+
+
+def _image_run_lengths(ids: Sequence[int]) -> list[int]:
     runs = []
     count = 0
     for token in [*ids, -1]:
@@ -184,11 +194,7 @@ def validate_image_runs(ids: Sequence[int], grids: Sequence[Sequence[int]], merg
         elif count:
             runs.append(count)
             count = 0
-    if merge <= 0 or any(len(grid) != 3 or any(int(x) <= 0 for x in grid) for grid in grids):
-        raise ValueError("invalid image grids")
-    expected = [int(t) * int(h) * int(w) // (merge * merge) for t, h, w in grids]
-    if runs != expected:
-        raise ValueError(f"PSD image placeholder/grid mismatch: {runs} != {expected}")
+    return runs
 
 
 def validate_media(media: Mapping[str, Any], ids: Sequence[int]) -> None:
@@ -203,7 +209,7 @@ def validate_media(media: Mapping[str, Any], ids: Sequence[int]) -> None:
             raise ValueError("PSD media image count mismatch")
         validate_image_runs(ids, grids, int(media["merge_size"]))
         return
-    if media.get("schema_version") != SCHEMA:
+    if media.get("schema_version") not in {SCHEMA, COMPACT_PREPROCESSED_SCHEMA}:
         raise ValueError("invalid PSD media schema")
     paths = media.get("image_paths")
     digests = media.get("image_sha256")
@@ -215,17 +221,21 @@ def validate_media(media: Mapping[str, Any], ids: Sequence[int]) -> None:
             raise ValueError("PSD compact image artifact missing")
         if sha256_file(path) != digest:
             raise ValueError("PSD compact image artifact hash mismatch")
-    grids = media["image_grid_thw"]
-    if len(grids) != len(digests):
-        raise ValueError("PSD media image count mismatch")
-    validate_image_runs(ids, grids, int(media["merge_size"]))
+    if media.get("schema_version") == COMPACT_PREPROCESSED_SCHEMA:
+        grids = media["image_grid_thw"]
+        if len(grids) != len(digests):
+            raise ValueError("PSD media image count mismatch")
+        validate_image_runs(ids, grids, int(media["merge_size"]))
+    elif len(_image_run_lengths(ids)) != len(digests):
+        raise ValueError("PSD image placeholder/image count mismatch")
 
 
 def load_media(media: Mapping[str, Any], ids: Sequence[int]) -> dict[str, Any]:
     import torch
 
     validate_media(media, ids)
-    if media.get("schema_version") == LEGACY_SCHEMA:
+    schema = media.get("schema_version")
+    if schema == LEGACY_SCHEMA:
         tensors = torch.load(media["path"], map_location="cpu", weights_only=True)
     else:
         processor = _load_processor(str(media["processor_id"]))
@@ -235,11 +245,13 @@ def load_media(media: Mapping[str, Any], ids: Sequence[int]) -> dict[str, Any]:
         tensors = _encode_images(blobs, processor)
     if set(tensors) != {"pixel_values", "image_grid_thw"}:
         raise ValueError("unexpected PSD media tensor fields")
-    if tensors["image_grid_thw"].tolist() != media["image_grid_thw"]:
+    grids = tensors["image_grid_thw"].tolist()
+    validate_image_runs(ids, grids, int(media["merge_size"]))
+    if schema == COMPACT_PREPROCESSED_SCHEMA and grids != media["image_grid_thw"]:
         raise ValueError("PSD media tensor grid mismatch")
     if not torch.isfinite(tensors["pixel_values"]).all():
         raise ValueError("nonfinite PSD image pixels")
     pixels_sha = hashlib.sha256(tensors["pixel_values"].float().numpy().tobytes()).hexdigest()
-    if pixels_sha != media.get("pixel_values_sha256"):
+    if schema in {LEGACY_SCHEMA, COMPACT_PREPROCESSED_SCHEMA} and pixels_sha != media.get("pixel_values_sha256"):
         raise ValueError("PSD pixel content differs from processor output")
     return tensors

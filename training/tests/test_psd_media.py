@@ -30,6 +30,24 @@ class ImageProcessor:
                 "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 2]])}
 
 
+def test_compact_binding_defers_pixel_preprocessing(tmp_path):
+    class BindingOnlyProcessor(ImageProcessor):
+        def __call__(self, images, return_tensors):
+            raise AssertionError("binding must not preprocess pixels")
+
+    media = bind_media(
+        request(),
+        processor=SimpleNamespace(image_processor=BindingOnlyProcessor()),
+        output_dir=tmp_path,
+        prompt_ids=[248056, 0, 248056],
+        processor_id="test",
+    )
+    assert media["schema_version"] == "ifv-psd-media-v3"
+    assert "image_grid_thw" not in media
+    assert "pixel_values_sha256" not in media
+    assert not list(tmp_path.glob("*.pt"))
+
+
 def test_repeated_images_survive_datum_and_hash_validation(tmp_path, monkeypatch):
     ids = [1, 248056, 2, 248056, 3]
     media = bind_media(request(), processor=SimpleNamespace(image_processor=ImageProcessor()),
