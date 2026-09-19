@@ -29,7 +29,7 @@ TARGETS = DEDUP / "targets/targets.jsonl"
 TARGET_MANIFEST = DEDUP / "targets/manifest.json"
 SNAPSHOT = ROOT / "training-artifacts/psd-contract-audit-20260916-v10/snapshot"
 ROLLOUT_GATE = ROUND / "rollout-gate.json"
-DEPLOY = ROOT / "training-artifacts/psd-lightweight-topk-handoff-20260920-v78"
+DEPLOY = ROOT / "training-artifacts/psd-lightweight-topk-handoff-20260920-v79"
 CODE = DEPLOY / "code"
 
 
@@ -48,23 +48,29 @@ def atomic_json(path: Path, value) -> None:
     os.replace(temporary, path)
 
 
-def alive(pid: int) -> bool:
+def process_state(pid: int) -> str | None:
     try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
+        return Path(f"/proc/{pid}/stat").read_text().split()[2]
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def alive(pid: int) -> bool:
+    return process_state(pid) is not None
 
 
 def wait_for_shards(owner) -> None:
     processes = owner.load(OUT / "score-processes.json")["processes"]
-    while any(alive(int(row["pid"])) for row in processes):
-        counts = []
+    while True:
+        states = {str(row["pid"]): process_state(int(row["pid"])) for row in processes}
+        if not any(state not in (None, "Z") for state in states.values()):
+            break
+        sizes = []
         for index in range(4):
             path = OUT / f"gpu-{index}/teacher_topk_cache.jsonl"
-            counts.append(sum(1 for _ in path.open("rb")) if path.is_file() else 0)
+            sizes.append(path.stat().st_size if path.is_file() else 0)
         atomic_json(DEPLOY / "progress.json", {"phase": "waiting_teacher_shards",
-            "counts": counts, "total": sum(counts), "expected": owner.load(TARGET_MANIFEST)["counts"]["targets"]})
+            "process_states": states, "bytes": sizes, "large_payload_reads": 0})
         time.sleep(15)
     for index in range(4):
         manifest = owner.load(OUT / f"gpu-{index}/manifest.json")
@@ -140,13 +146,13 @@ def materialize(owner, cache: Path) -> str:
     from scripts.run_psd_round import attest
     from types import SimpleNamespace
 
-    resolved = OUT / "resolved-targets-stat-v78"
+    resolved = OUT / "resolved-targets-stat-v79"
     result = completed_package(output_dir=resolved, input_files=[TARGETS, cache],
         build=lambda destination: materialize_psd_topk_cache(targets_path=TARGETS,
             cache_path=cache, output_dir=destination, topk=20))
     if result["status"] != "ready_for_training":
         raise RuntimeError("teacher cache materialization failed")
-    datums = OUT / "datums-stat-v78"
+    datums = OUT / "datums-stat-v79"
     result = completed_package(output_dir=datums, input_files=[resolved / "targets.jsonl"],
         build=lambda destination: build_sparse_topk_package(targets_path=resolved / "targets.jsonl",
             output_dir=destination, topk=20, max_sequence_length=131072, require_both_kinds=True))
@@ -156,14 +162,14 @@ def materialize(owner, cache: Path) -> str:
         manifest_path=datums / "manifest.json", expected_topk=20, max_context=131072)
     if not gate["passed"]:
         raise RuntimeError("PSD datum preflight failed")
-    ready = attest(SimpleNamespace(output=OUT / "attested-stat-v78", rollout_gate=ROLLOUT_GATE,
+    ready = attest(SimpleNamespace(output=OUT / "attested-stat-v79", rollout_gate=ROLLOUT_GATE,
         datums=datums / "datums.jsonl", datum_manifest=datums / "manifest.json", snapshot=SNAPSHOT))
-    atomic_json(OUT / "result-stat-v78.json", {"status": "ready_for_training", "topk": 20,
+    atomic_json(OUT / "result-stat-v79.json", {"status": "ready_for_training", "topk": 20,
         "targets": owner.load(TARGET_MANIFEST)["counts"]["targets"], "ready": ready["ready"],
         "large_payload_hashing": False, "new_agent_or_provider_calls": False})
     # Reproducible scoring shards and the resolved copy are no longer needed.
     for path in [OUT / "target-shards", *(OUT / f"gpu-{index}" for index in range(4)),
-                 resolved, OUT / ".resolved-targets-stat-v78-stage"]:
+                 resolved, OUT / ".resolved-targets-stat-v79-stage"]:
         if path.exists():
             shutil.rmtree(path)
     return ready["ready"]
@@ -177,7 +183,7 @@ def execute(parent_pid: int) -> None:
         atomic_json(DEPLOY / "state.json", {"phase": "teacher_complete_serving_restored"})
         cache = merge_gzip(owner)
         ready = materialize(owner, cache)
-        atomic_json(OUT / "state-stat-v78.json", {"phase": "ready_for_training", "ready": ready,
+        atomic_json(OUT / "state-stat-v79.json", {"phase": "ready_for_training", "ready": ready,
             "formal_training": False, "large_payload_hashing": False})
         atomic_json(DEPLOY / "state.json", {"phase": "ready_for_training", "ready": ready})
     except Exception as error:
