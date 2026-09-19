@@ -1,5 +1,15 @@
 # PSD checker-feedback correction (2026-09-17)
 
+## Future-round success stopping rule (2026-09-20)
+
+The current frozen 400x8 package is consumed as-is. For subsequent repair
+rounds, different cases may run concurrently, but attempts for one case remain
+strictly serial and the first full-episode verifier pass is terminal. Do not
+sample additional successful alternatives for post-hoc ranking. Terminal cases
+are resumed from their small bound manifest without another Gemini or Qwen
+call. Distinct repair positions inside the one passing trajectory remain
+distinct PSD targets, matching upstream slate semantics.
+
 ## Repair-stage storage and compute envelope (2026-09-19)
 
 PSD repair should spend its budget on the Gemini proposal/review calls and the

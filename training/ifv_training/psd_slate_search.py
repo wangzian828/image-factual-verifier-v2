@@ -20,6 +20,9 @@ from .psd_slate_feedback import (POLICY, checker_feedback, diagnostic_position,
                                 load_slate_state)
 
 
+SUCCESS_STOP_POLICY = "first_verified_full_episode_pass"
+
+
 def _case_ledger(root: Path, stem: str) -> Path:
     """Keep historical plain ledgers readable; new ledgers are gzip-only."""
     plain, compressed = root / f"{stem}.jsonl", root / f"{stem}.jsonl.gz"
@@ -315,7 +318,11 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
         'proposal_count':len(state.get('proposals',[])),
         'rejected_proposal_count':sum(r['status']=='rejected' for r in state.get('proposals',[])),
         "accepted_count": sum(r["accepted"] for r in records), "elapsed_seconds": state["elapsed_seconds"],
-        "training_started": False, "per_target_weight": 1.0, "feedback_policy": POLICY}
+        "training_started": False, "per_target_weight": 1.0, "feedback_policy": POLICY,
+        # Attempts within one case are deliberately serial. The first
+        # full-episode verifier pass is terminal; later alternatives must not
+        # be sampled merely to rank multiple successful trajectories.
+        "success_stop_policy": SUCCESS_STOP_POLICY}
     write_json(root / "manifest.json", result)
     # The bound state is the terminal commit marker. Write every output first:
     # a crash must not leave a completed state pointing at a missing manifest.
@@ -336,6 +343,11 @@ def audit_slate_search(root):
             if sha256_file(path) != digest:
                 raise ValueError("PSD slate artifact changed after completion")
     result = load_json(root / "manifest.json")
-    if result["status"] != state["status"] or result["complete_reruns"] != len(state["rounds"]):
+    policy = result.get("success_stop_policy")
+    if (result["status"] != state["status"]
+            or result["complete_reruns"] != len(state["rounds"])
+            # Historical terminal packages predate this explicit receipt.
+            # New writers always emit it; keep old immutable packages readable.
+            or (policy is not None and policy != SUCCESS_STOP_POLICY)):
         raise ValueError("PSD slate manifest differs from checkpoint")
     return {"passed": not state["status"].startswith("paused_") and state["status"] != "repairing"}

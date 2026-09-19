@@ -318,6 +318,7 @@ def test_slate_search_resume_does_not_repeat_completed_full_reruns(
     assert set(calls[0]['hints_by_action']) == (set() if plain_retry else {0})
     assert result["complete_reruns"] == 2
     assert result["status"] == ("passed_without_intervention" if plain_retry else "converged")
+    assert result["success_stop_policy"] == "first_verified_full_episode_pass"
     assert result["accepted_count"] == (0 if plain_retry else 2)
     assert not list(tmp_path.glob('slate-rounds/*/continuation.json'))
     assert not list(tmp_path.glob('slate-rounds/*/episode.json*'))
