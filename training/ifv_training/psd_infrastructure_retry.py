@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 from pathlib import Path
 
 import httpx
@@ -276,6 +277,95 @@ async def retry_episode(*, root, identity, generate, max_attempts=MAX_ATTEMPTS,
                 continue
             save_bound(result_path, identity=binding, payload=result)
             row["status"] = "completed"
+            save_bound(marker, identity=binding, payload=state)
+            return result
+        raise InfrastructureRetriesExhausted(
+            f"PSD infrastructure retry budget exhausted ({max_attempts} attempts); slot remains pending")
+
+
+def _stat_identity(path: Path) -> dict:
+    stat = path.stat()
+    return {
+        "path": str(path.resolve()),
+        "device": stat.st_dev,
+        "inode": stat.st_ino,
+        "bytes": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "ctime_ns": stat.st_ctime_ns,
+    }
+
+
+async def retry_episode_compact(*, root, identity, canonical_path, generate,
+                                max_attempts=MAX_ATTEMPTS, sleep=asyncio.sleep,
+                                validate_result=None):
+    """Retry one episode while keeping exactly one successful trace payload.
+
+    ``generate(attempt_directory)`` returns ``(result, trace_path)``.  A valid
+    trace is atomically moved into ``canonical_path``; the retry ledger stores
+    only its stat identity.  Failed attempts keep their native attempt archive
+    as evidence but never gain an additional ``result.json`` copy.
+    """
+    from .psd_repair_search import search_lock
+
+    if type(max_attempts) is not int or not 1 <= max_attempts <= 5:
+        raise ValueError("PSD infrastructure max_attempts must be 1..5")
+    root, canonical_path = Path(root), Path(canonical_path)
+    max_attempts = recovery_attempt_budget(root, identity, max_attempts)
+    binding = {"version": VERSION, "inputs": identity, "max_attempts": max_attempts,
+               "storage": "single-canonical-trace-stat-v1"}
+    marker = root / "retry-state.json"
+    with search_lock(root):
+        state = load_bound(marker, identity=binding) if marker.exists() else {"attempts": []}
+        attempts = state["attempts"]
+        if attempts and attempts[-1]["status"] == "completed":
+            if not canonical_path.is_file() or attempts[-1].get("result") != _stat_identity(canonical_path):
+                raise ValueError("Compact PSD canonical trace binding changed")
+            cached = load_json(canonical_path)
+            if validate_result is not None and validate_result(cached):
+                raise ValueError("Cached compact PSD source is incomplete")
+            return cached
+        if canonical_path.exists():
+            raise RuntimeError("PSD canonical trace exists without a completed retry ledger")
+        if attempts and attempts[-1]["status"] not in {"infrastructure_failed", "trajectory_failed"}:
+            raise RuntimeError("PSD previous attempt is unresolved; inspect it before redispatch")
+        while len(attempts) < max_attempts:
+            if attempts:
+                await sleep(min(5 * 2 ** (len(attempts) - 1), 30))
+            directory = root / f"attempt-{len(attempts) + 1:03d}"
+            directory.mkdir(parents=True, exist_ok=False)
+            row = {"index": len(attempts) + 1, "directory": str(directory), "status": "running"}
+            attempts.append(row)
+            save_bound(marker, identity=binding, payload=state)
+            try:
+                result, trace_path = await generate(directory)
+            except PolicyInfrastructureFailure as error:
+                row.update(status="infrastructure_failed", reason=str(error))
+                save_bound(marker, identity=binding, payload=state)
+                continue
+            except BaseException as error:
+                reason = None if isinstance(error, asyncio.CancelledError) else _transport_reason(error)
+                if reason is not None:
+                    row.update(status="infrastructure_failed", reason=reason,
+                               error_type=type(error).__name__)
+                    save_bound(marker, identity=binding, payload=state)
+                    continue
+                row.update(status="interrupted" if isinstance(error, asyncio.CancelledError)
+                           else "nonretryable_error", error_type=type(error).__name__)
+                save_bound(marker, identity=binding, payload=state)
+                raise
+            trace_path = Path(trace_path).resolve()
+            trace_path.relative_to(directory.resolve())
+            if not trace_path.is_file():
+                raise FileNotFoundError("compact PSD generator did not persist its native trace")
+            reason = validate_result(result) if validate_result is not None else None
+            if reason:
+                row.update(status="trajectory_failed", reason=reason,
+                           result=_stat_identity(trace_path))
+                save_bound(marker, identity=binding, payload=state)
+                continue
+            canonical_path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(trace_path, canonical_path)
+            row.update(status="completed", result=_stat_identity(canonical_path))
             save_bound(marker, identity=binding, payload=state)
             return result
         raise InfrastructureRetriesExhausted(

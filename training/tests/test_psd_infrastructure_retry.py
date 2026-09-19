@@ -7,7 +7,8 @@ import pytest
 
 from ifv_training.psd_infrastructure_retry import (
     InfrastructureRetriesExhausted, PolicyInfrastructureFailure, guard_policy_backend,
-    retry_episode, validate_generated_probabilities, is_nonfinite_serialization_response)
+    retry_episode, retry_episode_compact, validate_generated_probabilities,
+    is_nonfinite_serialization_response)
 
 
 def response(value=-.5, candidate=-1.):
@@ -189,6 +190,27 @@ def test_parallel_same_slot_cannot_double_dispatch(tmp_path):
         release.set()
         await first
     asyncio.run(exercise())
+
+
+def test_compact_retry_promotes_one_trace_without_result_copy(tmp_path):
+    root, canonical = tmp_path / "slot", tmp_path / "run/traces/episode.json"
+    calls = []
+
+    async def generate(directory):
+        calls.append(directory)
+        trace = directory / "traces/episode.json"
+        trace.parent.mkdir()
+        payload = {"image_id": "episode", "termination": "success"}
+        trace.write_text(json.dumps(payload))
+        return payload, trace
+
+    kwargs = dict(root=root, identity={"episode_id": "episode"},
+        canonical_path=canonical, generate=generate, sleep=no_sleep)
+    assert asyncio.run(retry_episode_compact(**kwargs))["termination"] == "success"
+    assert canonical.is_file() and not (root / "result.json").exists()
+    assert not (calls[0] / "traces/episode.json").exists()
+    assert asyncio.run(retry_episode_compact(**kwargs))["image_id"] == "episode"
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize('mode', ['recover', 'exhaust', 'format_failure'])

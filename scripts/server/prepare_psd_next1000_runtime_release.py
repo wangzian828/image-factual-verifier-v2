@@ -1,6 +1,7 @@
 """Prepare the frozen next-1000 runtime release using hardlinks and no hashing."""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -33,8 +34,40 @@ def rows(path):
                 yield json.loads(line)
 
 
+def write_stat_identities(output):
+    path = output / "asset-identities.jsonl"
+    if path.exists():
+        raise FileExistsError("runtime stat identities already exist")
+    records = {}
+    for row in rows(output / "runtime_input/cases.jsonl"):
+        image = (output / "runtime_input" / row["image_path"]).resolve()
+        image.relative_to((output / "runtime_input/assets").resolve())
+        record = {**identity(image), "declared_image_sha256": row["image_sha256"]}
+        previous = records.setdefault(str(image), record)
+        if previous != record:
+            raise ValueError("one runtime asset has inconsistent frozen identities")
+    temporary = path.with_name("." + path.name + ".tmp")
+    with temporary.open("x", encoding="utf-8") as handle:
+        for record in sorted(records.values(), key=lambda item: item["path"]):
+            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    atomic_json(output / "asset-identities-receipt.json", {
+        "schema_version": "ifv-runtime-assets-stat-v1", "assets": len(records),
+        "large_payload_hashing": False, "identities": identity(path)})
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--stat-identities-only", action="store_true")
+    args = parser.parse_args()
     output = SELECTION / "runtime-release"
+    if args.stat_identities_only:
+        if not output.is_dir():
+            raise FileNotFoundError(output)
+        write_stat_identities(output)
+        return
     if output.exists():
         raise FileExistsError("next-1000 runtime release already exists")
     runtime = output / "runtime_input"
@@ -76,6 +109,7 @@ def main():
         "cases": 1000, "assets": len(selected_assets), "hardlinked_assets": True,
         "large_payload_hashing": False, "benchmark_identity": identity(runtime / "cases.jsonl"),
         "source_release": str(SOURCE)})
+    write_stat_identities(output)
 
 
 if __name__ == "__main__":
