@@ -12,9 +12,9 @@ import urllib.request
 
 
 ROOT = Path("/volume/ybo/wza")
-DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91"
+DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v92"
 CODE = DEPLOY / "code"
-TRAIN_DEPLOY = DEPLOY
+TRAIN_DEPLOY = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91"
 TRAIN_STATE = TRAIN_DEPLOY / "training-chain-state.json"
 RUN = ROOT / "runs/psd-production1000x4-20260920-v2"
 SELECTION = RUN / "selection"
