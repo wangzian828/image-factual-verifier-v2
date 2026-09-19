@@ -23,14 +23,14 @@ import urllib.request
 ROOT = Path("/volume/ybo/wza")
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
 ROUND = ROOT / "runs/psd-production-round1-20260917-v1"
-SEARCH = ROUND / "search-gemini37-flash-high"
-TARGETS = SEARCH / "targets/targets.jsonl"
-TARGET_MANIFEST = SEARCH / "targets/manifest.json"
 FINAL = ROOT / "runs/psd-stopped-tail-finalization-20260919-v1"
+DEDUP = FINAL / "preservation-dedup-v72/bank"
+TARGETS = DEDUP / "targets/targets.jsonl"
+TARGET_MANIFEST = DEDUP / "targets/manifest.json"
 SNAPSHOT = ROOT / "training-artifacts/psd-contract-audit-20260916-v10/snapshot"
 ROLLOUT_GATE = ROUND / "rollout-gate.json"
-OUT = FINAL / "teacher-topk-four-gpu-v1"
-DEPLOY = ROOT / "training-artifacts/psd-current-topk-20260920-v1"
+OUT = FINAL / "teacher-topk-preservation-dedup-v72"
+DEPLOY = ROOT / "training-artifacts/psd-preserve-dedup-20260920-v73"
 CODE = DEPLOY / "code"
 
 
@@ -199,8 +199,8 @@ def materialize(owner, cache: Path) -> None:
 def execute() -> None:
     owner = owner_module()
     owner.verify_export()
-    if owner.load(FINAL / "state.json")["phase"] != "requires_frozen_teacher_topk":
-        raise ValueError("Frozen finalization package is not waiting for teacher scoring")
+    if owner.load(FINAL / "preservation-dedup-v72/state.json")["phase"] != "requires_frozen_teacher_topk":
+        raise ValueError("Deduplicated package is not waiting for teacher scoring")
     shards = split_targets(owner)
     backends = [owner.load(SERVICE / f"replica-{index}.json") for index in range(4)]
     environments = [owner.checked(receipt) for receipt in backends]
