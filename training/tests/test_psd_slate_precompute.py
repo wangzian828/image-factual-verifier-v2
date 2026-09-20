@@ -4,6 +4,7 @@ import pytest
 
 from scripts.server.precompute_psd_slate_proposals import (
     build_offset_index,
+    pending_entries,
     read_indexed_row,
 )
 
@@ -39,3 +40,14 @@ def test_offset_index_rejects_duplicate_case(tmp_path):
     )
     with pytest.raises(ValueError, match="unique case IDs"):
         build_offset_index(selected, tmp_path / "offsets.json")
+
+
+def test_smoke_limit_does_not_count_unselected_pending_cases_as_complete(tmp_path):
+    entries = [{"case_id": f"case-{index}"} for index in range(3)]
+    receipt = tmp_path / "cases/case-0/proposal.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text("{}", encoding="utf-8")
+    pending, pending_before_limit, completed = pending_entries(entries, tmp_path, 1)
+    assert pending == [{"case_id": "case-1"}]
+    assert pending_before_limit == 2
+    assert completed == 1

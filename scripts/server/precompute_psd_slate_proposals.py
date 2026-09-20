@@ -95,6 +95,18 @@ def _jsonl_by_case(path: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
+def pending_entries(
+    entries: list[dict[str, Any]], output: Path, max_new_cases: int | None
+) -> tuple[list[dict[str, Any]], int, int]:
+    pending = [entry for entry in entries
+               if not (output / "cases" / entry["case_id"] / "proposal.json").exists()]
+    pending_before_limit = len(pending)
+    completed_before_run = len(entries) - pending_before_limit
+    if max_new_cases is not None:
+        pending = pending[:max_new_cases]
+    return pending, pending_before_limit, completed_before_run
+
+
 async def _prepare_case(
     *,
     entry: Mapping[str, Any],
@@ -209,16 +221,14 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     entries = build_offset_index(args.selected, output / "selected-offset-index.json")
     benchmark = _jsonl_by_case(args.benchmark)
     private_gold = _jsonl_by_case(args.private_gold)
-    missing = [entry for entry in entries
-               if not (output / "cases" / entry["case_id"] / "proposal.json").exists()]
-    pending_before_limit = len(missing)
-    if args.max_new_cases is not None:
-        missing = missing[:args.max_new_cases]
+    missing, pending_before_limit, completed_before_run = pending_entries(
+        entries, output, args.max_new_cases
+    )
     state = {
         "schema_version": "ifv-psd-slate-precompute-state-v1",
         "phase": "running",
         "selected_cases": len(entries),
-        "completed_cases": len(entries) - len(missing),
+        "completed_cases": completed_before_run,
         "model": args.model,
         "gpu_required": False,
         "selected_file_rescans_after_index": 0,
