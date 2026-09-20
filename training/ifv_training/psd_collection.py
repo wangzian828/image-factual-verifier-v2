@@ -339,3 +339,91 @@ def build_task_repair_selection_parallel(*, candidates_path, run_dir, output_dir
         "total": len(jobs), "workers": workers,
         "selected_tasks": len(selected_ids)})
     return manifest
+
+
+def build_task_repair_selection_from_rewards(*, candidates_path, rewards_path,
+                                              rollout_gate_path, output_dir):
+    """Select one longest failed episode per task without reopening source traces.
+
+    The reviewed-only postprocess already recorded the exact policy step IDs and
+    the rollout gate binds that reward file.  Stream the large candidate file
+    once, retaining only the current winner for each case on disk.
+    """
+    from .io import load_json, load_jsonl, require_new_or_empty, sha256_file, write_json
+
+    candidates_path = Path(candidates_path).resolve()
+    rewards_path = Path(rewards_path).resolve()
+    rollout_gate_path = Path(rollout_gate_path).resolve()
+    output_dir = Path(output_dir)
+    require_new_or_empty(output_dir)
+    gate = load_json(rollout_gate_path)
+    expected_rewards = str(gate.get("run", {}).get("post_rollout_rewards_sha256") or "")
+    actual_rewards = sha256_file(rewards_path)
+    if gate.get("passed") is not True or expected_rewards != actual_rewards:
+        raise ValueError("reward-only task selection requires its passed rollout gate")
+
+    step_counts = {}
+    for row in load_jsonl(rewards_path):
+        episode_id = str(row.get("episode_id") or "")
+        step_ids = row.get("step_ids")
+        if not episode_id or not isinstance(step_ids, list) or episode_id in step_counts:
+            raise ValueError("postprocess reward step identities are invalid")
+        step_counts[episode_id] = len(step_ids)
+
+    rows_dir = output_dir / ".rows"
+    rows_dir.mkdir(parents=True)
+    chosen = {}
+    seen_ids = set()
+    original_candidates = 0
+    with candidates_path.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            candidate_id = row.get("candidate_id")
+            case_id, episode_id = row.get("case_id"), row.get("episode_id")
+            if (row.get("class") != "repair_seed" or not candidate_id or not case_id
+                    or not episode_id or candidate_id in seen_ids):
+                raise ValueError(f"invalid PSD repair seed at line {line_number}")
+            seen_ids.add(candidate_id)
+            if episode_id not in step_counts:
+                raise ValueError("repair candidate lacks bound postprocess reward")
+            original_candidates += 1
+            rank = (-step_counts[episode_id], episode_id)
+            previous = chosen.get(case_id)
+            if previous is not None and previous["rank"] <= rank:
+                continue
+            shard = rows_dir / (hashlib.sha256(case_id.encode()).hexdigest() + ".jsonl")
+            shard.write_text(line if line.endswith("\n") else line + "\n", encoding="utf-8")
+            chosen[case_id] = {"rank": rank, "candidate_id": candidate_id,
+                "episode_id": episode_id, "source_steps": step_counts[episode_id],
+                "path": shard}
+
+    selected_path = output_dir / "selected_candidates.jsonl"
+    records = []
+    with selected_path.open("wb") as destination:
+        for case_id in sorted(chosen):
+            item = chosen[case_id]
+            with item["path"].open("rb") as selected:
+                shutil.copyfileobj(selected, destination, length=1024 * 1024)
+            records.append({"case_id": case_id,
+                "selected_episode_id": item["episode_id"],
+                "source_steps": item["source_steps"]})
+    shutil.rmtree(rows_dir)
+    selection = {"policy": "longest_failed_episode_per_task_from_gate_bound_step_ids",
+        "original_candidates": original_candidates, "selected_tasks": len(chosen),
+        "tasks": records}
+    write_json(output_dir / "selection.json", selection)
+    stat = candidates_path.stat()
+    manifest = {"schema_version": "ifv-psd-task-source-selection-v2",
+        "source_candidates": {"path": str(candidates_path), "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns},
+        "rewards": {"path": str(rewards_path), "sha256": actual_rewards},
+        "rollout_gate": {"path": str(rollout_gate_path),
+            "sha256": sha256_file(rollout_gate_path)},
+        "selected_candidates": "selected_candidates.jsonl",
+        "selected_candidates_sha256": sha256_file(selected_path),
+        "selection": "selection.json", "trace_files_reopened": 0,
+        "original_candidates": original_candidates, "selected_tasks": len(chosen)}
+    write_json(output_dir / "manifest.json", manifest)
+    return manifest

@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ifv_training.psd_collection import (build_task_repair_selection_parallel,
-    select_task_repair_sources, verify_collection)
+from ifv_training.psd_collection import (build_task_repair_selection_from_rewards,
+    build_task_repair_selection_parallel, select_task_repair_sources, verify_collection)
 from ifv_training.psd_collection import require_token_capture_environment
 from src.eval.rollout import rollout_specs
 from src.eval.result_records import run_result_record
@@ -124,3 +124,37 @@ def test_parallel_longest_selection_streams_exact_selected_rows(tmp_path):
     assert selection["selected_tasks"] == 2
     assert result["selected_candidates_sha256"] == hashlib.sha256(
         (tmp_path / "selected/selected_candidates.jsonl").read_bytes()).hexdigest()
+
+
+def test_reward_bound_selection_does_not_reopen_traces(tmp_path):
+    import hashlib
+    import json
+    from ifv_training.io import load_json, load_jsonl, write_json, write_jsonl
+
+    candidates = []
+    rewards = []
+    for case_id, episode_id, count in [
+            ("b", "b-short", 2), ("a", "a-long", 9),
+            ("a", "a-short", 3), ("b", "b-long", 8)]:
+        candidates.append({"class": "repair_seed", "candidate_id": f"candidate:{episode_id}",
+            "case_id": case_id, "episode_id": episode_id,
+            "large": list(range(count * 100)), "source": {"source_trace_sha256": "a" * 64}})
+        rewards.append({"case_id": case_id, "episode_id": episode_id,
+            "step_ids": [f"{episode_id}:{index}" for index in range(count)]})
+    candidate_path = tmp_path / "candidates.jsonl"
+    rewards_path = tmp_path / "rewards.jsonl"
+    gate_path = tmp_path / "rollout-gate.json"
+    write_jsonl(candidate_path, candidates)
+    write_jsonl(rewards_path, rewards)
+    write_json(gate_path, {"passed": True, "run": {
+        "post_rollout_rewards_sha256": hashlib.sha256(rewards_path.read_bytes()).hexdigest()}})
+
+    result = build_task_repair_selection_from_rewards(
+        candidates_path=candidate_path, rewards_path=rewards_path,
+        rollout_gate_path=gate_path, output_dir=tmp_path / "selected")
+
+    chosen = load_jsonl(tmp_path / "selected/selected_candidates.jsonl")
+    assert [(row["case_id"], row["episode_id"]) for row in chosen] == [
+        ("a", "a-long"), ("b", "b-long")]
+    assert result["trace_files_reopened"] == 0
+    assert load_json(tmp_path / "selected/selection.json")["selected_tasks"] == 2
