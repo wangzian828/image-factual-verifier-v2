@@ -75,6 +75,48 @@ def test_semantic_source_admission_propagates_into_rewards(
     assert reward["source_task_review"]["sha256"]
 
 
+def test_reviewed_only_skips_unreviewed_rollouts_without_reading_them(tmp_path, monkeypatch):
+    from test_psd_source_review import artifact, source_trace
+    from scripts.review_psd_sources import review_path
+    from ifv_training.psd_repair_storage import save_bound
+
+    args = setup_case(tmp_path, monkeypatch)
+    write(args["run_dir"] / "run_results.jsonl", [
+        {"case_id": "a", "episode_id": "a", "prompt_group_id": "a"},
+        {"case_id": "b", "episode_id": "b", "prompt_group_id": "b"},
+    ], True)
+    trace = source_trace()
+    write(args["run_dir"] / "traces/a.json", trace)
+    # Deliberately do not create b's trace: reviewed-only mode must not open it.
+    write(args["train_cases"], [
+        {"case_id": "a", "split": "train"},
+        {"case_id": "b", "split": "train"},
+    ], True)
+    write(args["private_gold"], [
+        {"case_id": "a", "factual_status": "supported"},
+        {"case_id": "b", "factual_status": "refuted"},
+    ], True)
+    reviews = tmp_path / "reviews"
+    save_bound(review_path(reviews, "a"), identity={"test": True},
+               payload=artifact(trace, status="pass"))
+    write(reviews / "summary.json", {
+        "status": "source_reviews_complete_with_unadopted",
+        "cases": [
+            {"case_id": "a", "reviews": [{"episode_id": "a"}]},
+            {"case_id": "b", "reviews": []},
+        ],
+    })
+
+    result = module.postprocess(
+        **args, source_reviews=reviews, reviewed_only=True)
+
+    assert result["episodes"] == 1
+    assert result["collection_episodes"] == 2
+    assert result["excluded_unreviewed_episodes"] == 1
+    assert [row["episode_id"] for row in module.load_jsonl(
+        args["run_dir"] / "post_rollout_rewards.jsonl")] == ["a"]
+
+
 @pytest.mark.parametrize("failure", ["heldout", "unknown_gold", "unfinished", "policy_changed", "duplicate"])
 def test_fail_closed_training_inputs(tmp_path, monkeypatch, failure):
     args = setup_case(tmp_path, monkeypatch)

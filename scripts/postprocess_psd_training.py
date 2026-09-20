@@ -49,6 +49,34 @@ def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
             temporary.unlink()
 
 
+def _completed_review_episode_ids(source_reviews: Path) -> set[str]:
+    """Return only episodes with a durable review in a completed summary."""
+    summary = load_json(source_reviews / "summary.json")
+    if not str(summary.get("status", "")).startswith("source_reviews_complete"):
+        raise ValueError("reviewed-only postprocess requires completed source reviews")
+    cases = summary.get("cases")
+    if not isinstance(cases, list):
+        raise ValueError("source-review summary cases are invalid")
+    episode_ids: list[str] = []
+    for case in cases:
+        reviews = case.get("reviews") if isinstance(case, Mapping) else None
+        if not isinstance(reviews, list):
+            raise ValueError("source-review summary review list is invalid")
+        for review in reviews:
+            episode = str(review.get("episode_id") or "") if isinstance(review, Mapping) else ""
+            if not episode:
+                raise ValueError("source-review summary episode is invalid")
+            episode_ids.append(episode)
+    if len(episode_ids) != len(set(episode_ids)):
+        raise ValueError("source-review summary contains duplicate episodes")
+    from scripts.review_psd_sources import review_path
+    missing = [episode for episode in episode_ids
+               if not review_path(source_reviews, episode).is_file()]
+    if missing:
+        raise ValueError("source-review summary references missing artifacts")
+    return set(episode_ids)
+
+
 def _saved_audit(
     path: Path,
     *,
@@ -156,18 +184,29 @@ def _derive_episode(job: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def postprocess(*, run_dir, train_cases, private_gold, source_access_policy,
-                source_reviews=None, workers=1):
+                source_reviews=None, workers=1, reviewed_only=False):
     run_dir = run_dir.resolve()
     manifest = load_json(run_dir / "run_manifest.json")
     require_completed_collection(run_dir, manifest)
     if manifest.get("benchmark", {}).get("training_prohibited"):
         raise ValueError("PSD requires a completed training-only rollout")
     allowed = _load_train_case_allowlist(train_cases)
-    rows = load_jsonl(run_dir / "run_results.jsonl")
+    all_rows = load_jsonl(run_dir / "run_results.jsonl")
     gold_rows = load_jsonl(private_gold)
     gold = {row["case_id"]: row for row in gold_rows}
-    if len(gold) != len(gold_rows) or not rows:
+    if len(gold) != len(gold_rows) or not all_rows:
         raise ValueError("empty rollout or duplicate private training references")
+    sizes = Counter(str(row.get("prompt_group_id") or row["case_id"]) for row in all_rows)
+    if reviewed_only:
+        if source_reviews is None:
+            raise ValueError("reviewed-only postprocess requires source reviews")
+        reviewed = _completed_review_episode_ids(source_reviews.resolve())
+        rows = [row for row in all_rows
+                if str(row.get("episode_id") or row["case_id"]) in reviewed]
+        if len(rows) != len(reviewed):
+            raise ValueError("source-review episodes differ from rollout collection")
+    else:
+        rows = all_rows
     episodes = [str(row.get("episode_id") or row["case_id"]) for row in rows]
     if len(set(episodes)) != len(episodes):
         raise ValueError("duplicate PSD rollout episode")
@@ -185,7 +224,6 @@ def postprocess(*, run_dir, train_cases, private_gold, source_access_policy,
             or sha256_file(Path(recorded_policy["path"])) != source_access_policy_sha256):
         raise ValueError("PSD source policy differs from rollout")
     groups, rewards, scores, audits = [], [], [], []
-    sizes = Counter(str(row.get("prompt_group_id") or row["case_id"]) for row in rows)
     jobs = [{"run_dir": str(run_dir), "row": row, "episode": episode,
         "group_size": sizes[str(row.get("prompt_group_id") or row["case_id"])],
         "gold": gold[row["case_id"]], "source_access_policy": str(source_access_policy.resolve()),
@@ -221,6 +259,8 @@ def postprocess(*, run_dir, train_cases, private_gold, source_access_policy,
     write_jsonl(run_dir / "post_rollout_rewards.jsonl", rewards)
     write_jsonl(run_dir / "psd-process-metrics.jsonl", scores)
     result = {"schema_version": "ifv-psd-training-postprocess-v1", "episodes": len(rows),
+        "collection_episodes": len(all_rows), "reviewed_only": bool(reviewed_only),
+        "excluded_unreviewed_episodes": len(all_rows) - len(rows),
         "correct": sum(row["classification_correct"] for row in rewards),
         "strict_pass": sum(row["strict_trace_audit_pass"] for row in rewards),
         "engineering_errors": sum(row["fatal_engineering_error"] for row in rewards),
@@ -243,4 +283,5 @@ if __name__ == "__main__":
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--source-reviews", type=Path)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--reviewed-only", action="store_true")
     print(json.dumps(postprocess(**vars(parser.parse_args())), ensure_ascii=False, indent=2))
