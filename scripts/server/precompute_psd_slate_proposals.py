@@ -211,6 +211,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     private_gold = _jsonl_by_case(args.private_gold)
     missing = [entry for entry in entries
                if not (output / "cases" / entry["case_id"] / "proposal.json").exists()]
+    pending_before_limit = len(missing)
+    if args.max_new_cases is not None:
+        missing = missing[:args.max_new_cases]
     state = {
         "schema_version": "ifv-psd-slate-precompute-state-v1",
         "phase": "running",
@@ -259,11 +262,18 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
         await asyncio.gather(*(one(entry) for entry in missing))
 
+    remaining = pending_before_limit - (completed - state["completed_cases"])
     final = {
         **state,
-        "phase": "complete" if failed == 0 else "complete_with_errors",
+        "phase": (
+            "partial_smoke"
+            if remaining > 0 and failed == 0
+            else "complete" if failed == 0
+            else "complete_with_errors"
+        ),
         "completed_cases": completed,
         "failed_cases": failed,
+        "remaining_cases": remaining,
     }
     _atomic_json(output / "state.json", final)
     return final
@@ -280,6 +290,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--model", default="gemini-3.6-flash")
     result.add_argument("--concurrency", type=int, default=8)
     result.add_argument("--proposal-budget", type=int, default=12)
+    result.add_argument("--max-new-cases", type=int)
     return result
 
 
@@ -289,6 +300,8 @@ def main() -> None:
         raise ValueError("concurrency must be between 1 and 32")
     if not 1 <= args.proposal_budget <= 64:
         raise ValueError("proposal budget must be between 1 and 64")
+    if args.max_new_cases is not None and args.max_new_cases < 1:
+        raise ValueError("max new cases must be positive")
     print(json.dumps(asyncio.run(run(args)), ensure_ascii=False, indent=2))
 
 
