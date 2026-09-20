@@ -20,7 +20,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "training")]
 
 from ifv_training.io import load_json, load_jsonl
 from ifv_training.psd_candidates import _load_train_case_allowlist, _safe_trace_path, _trace_case_id
-from ifv_training.psd_case_pool import completed_cases
+from ifv_training.psd_case_pool import completed_cases, safe_case_error
 from ifv_training.psd_collection import require_completed_collection
 from ifv_training.psd_gemini_judge import _atomic_json
 from ifv_training.psd_repair import _sha
@@ -123,52 +123,67 @@ async def run(*, run_dir: Path, benchmark: Path, train_cases: Path,
     async def one_case(item):
         case_id, case_rows = item
         results = []
+        review_errors = []
+        attempted = 0
         for row in case_rows:
+            attempted += 1
             episode_id = str(row.get("episode_id") or case_id)
-            trace_path = _safe_trace_path(run_dir, str(row.get("trace_path") or ""), episode_id)
-            image = (benchmark.parent / public[case_id]["image_path"]).resolve()
-            saved_path = _review_path(output, episode_id)
-            binding = _saved_identity(
-                run_identity=run_identity,
-                case_id=case_id,
-                episode_id=episode_id,
-                trace_path=trace_path,
-                image_sha256=str(public[case_id]["image_sha256"]),
-                gold=gold[case_id],
-            )
-            if saved_path.exists():
-                artifact = load_bound(saved_path, identity=binding)
-                status = str(artifact["decision"]["status"])
-            else:
-                trace = load_json(trace_path)
-                if _trace_case_id(trace) != case_id:
-                    raise ValueError("source trace case mismatch")
-                artifact = await judge_source(
-                    live_client,
-                    trace,
+            rollout_index = int(row.get("rollout_index", 0))
+            try:
+                trace_path = _safe_trace_path(
+                    run_dir, str(row.get("trace_path") or ""), episode_id)
+                image = (benchmark.parent / public[case_id]["image_path"]).resolve()
+                saved_path = _review_path(output, episode_id)
+                binding = _saved_identity(
+                    run_identity=run_identity,
+                    case_id=case_id,
+                    episode_id=episode_id,
+                    trace_path=trace_path,
+                    image_sha256=str(public[case_id]["image_sha256"]),
                     gold=gold[case_id],
-                    image_path=image,
-                    model=model,
-                    cache_dir=cache_dir,
                 )
-                status = validate_source_review(
-                    artifact,
-                    trace=trace,
-                    gold=gold[case_id],
-                    trace_canonical_sha256=artifact["source_trace_canonical_sha256"],
-                )
-                save_bound(saved_path, identity=binding, payload=artifact)
+                if saved_path.exists():
+                    artifact = load_bound(saved_path, identity=binding)
+                    status = str(artifact["decision"]["status"])
+                else:
+                    trace = load_json(trace_path)
+                    if _trace_case_id(trace) != case_id:
+                        raise ValueError("source trace case mismatch")
+                    artifact = await judge_source(
+                        live_client,
+                        trace,
+                        gold=gold[case_id],
+                        image_path=image,
+                        model=model,
+                        cache_dir=cache_dir,
+                    )
+                    status = validate_source_review(
+                        artifact,
+                        trace=trace,
+                        gold=gold[case_id],
+                        trace_canonical_sha256=artifact["source_trace_canonical_sha256"],
+                    )
+                    save_bound(saved_path, identity=binding, payload=artifact)
+            except Exception as exc:
+                review_errors.append({
+                    "episode_id": episode_id,
+                    "rollout_index": rollout_index,
+                    **safe_case_error(exc),
+                })
+                continue
             results.append({
                 "case_id": case_id,
                 "episode_id": episode_id,
-                "rollout_index": int(row.get("rollout_index", 0)),
+                "rollout_index": rollout_index,
                 "status": status,
                 "path": str(saved_path),
             })
             if status == "pass":
                 break
         return {"case_id": case_id, "reviews": results,
-                "skipped_after_pass": len(case_rows) - len(results)}
+                "review_errors": review_errors,
+                "attempted_reviews": attempted,
+                "skipped_after_pass": len(case_rows) - attempted}
 
     completed: dict[str, dict] = {}
     retry_error_types = list(retry_error_types or [])
@@ -204,9 +219,12 @@ async def run(*, run_dir: Path, benchmark: Path, train_cases: Path,
                 completed[item[0]] = result
             else:
                 completed[item[0]] = {"case_id": item[0], "reviews": [],
+                    "review_errors": [], "attempted_reviews": 0,
                     "skipped_after_pass": 0, "error_type": error,
                     "error_details": error_details.get(str(item[0]), {})}
             flattened = [review for case in completed.values() for review in case["reviews"]]
+            review_errors = [error for case in completed.values()
+                             for error in case.get("review_errors", [])]
             counts = Counter(review["status"] for review in flattened)
             _atomic_json(output / "progress.json", {
                 "schema_version": OWNER_VERSION,
@@ -214,20 +232,31 @@ async def run(*, run_dir: Path, benchmark: Path, train_cases: Path,
                 "retry_cases": len(work) if retry_error_types else 0,
                 "completed_cases": len(completed),
                 "provider_reviews": len(flattened),
+                "review_attempts": sum(case.get("attempted_reviews", len(case["reviews"]))
+                                       for case in completed.values()),
+                "review_errors": len(review_errors),
                 "skipped_after_pass": sum(case["skipped_after_pass"] for case in completed.values()),
                 "case_errors": sum("error_type" in case for case in completed.values()),
                 "review_counts": dict(sorted(counts.items())),
             })
         cases = [completed[case_id] for case_id in sorted(completed)]
         flattened = [review for case in cases for review in case["reviews"]]
+        review_errors = [error for case in cases for error in case.get("review_errors", [])]
         counts = Counter(review["status"] for review in flattened)
+        unadopted_cases = sum(not case["reviews"] for case in cases)
         summary = {
             "schema_version": OWNER_VERSION,
             "status": "paused_source_review_requires_resolution"
-                if any("error_type" in case for case in cases) else "source_reviews_complete",
+                if any("error_type" in case for case in cases)
+                else "source_reviews_complete_with_unadopted"
+                if unadopted_cases else "source_reviews_complete",
             "selected_cases": len(by_case),
             "selected_rollouts": len(rows),
             "provider_reviews": len(flattened),
+            "review_attempts": sum(case.get("attempted_reviews", len(case["reviews"]))
+                                   for case in cases),
+            "review_errors": len(review_errors),
+            "unadopted_cases": unadopted_cases,
             "skipped_after_pass": sum(case["skipped_after_pass"] for case in cases),
             "case_errors": sum("error_type" in case for case in cases),
             "review_counts": dict(sorted(counts.items())),
