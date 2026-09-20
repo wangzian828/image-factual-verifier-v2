@@ -234,13 +234,26 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "model": args.model,
         "gpu_required": False,
         "selected_file_rescans_after_index": 0,
+        "http_retry_policy": {
+            "max_retries": args.http_max_retries,
+            "base_seconds": args.retry_base_seconds,
+            "jitter_seconds": args.retry_jitter_seconds,
+            "max_seconds": args.retry_max_seconds,
+            "schedule": "bounded_exponential_with_jitter",
+        },
     }
     _atomic_json(output / "state.json", state)
     semaphore = asyncio.Semaphore(args.concurrency)
     completed = state["completed_cases"]
     failed = 0
 
-    async with GeminiInteractionsClient(timeout=240, max_retries=2) as client:
+    async with GeminiInteractionsClient(
+        timeout=240,
+        max_retries=args.http_max_retries,
+        retry_delay=args.retry_base_seconds,
+        retry_jitter=args.retry_jitter_seconds,
+        retry_max_delay=args.retry_max_seconds,
+    ) as client:
         async def one(entry: Mapping[str, Any]) -> None:
             nonlocal completed, failed
             async with semaphore:
@@ -303,6 +316,10 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--concurrency", type=int, default=8)
     result.add_argument("--proposal-budget", type=int, default=12)
     result.add_argument("--max-new-cases", type=int)
+    result.add_argument("--http-max-retries", type=int, default=2)
+    result.add_argument("--retry-base-seconds", type=float, default=1.0)
+    result.add_argument("--retry-jitter-seconds", type=float, default=0.5)
+    result.add_argument("--retry-max-seconds", type=float, default=8.0)
     return result
 
 
@@ -314,6 +331,14 @@ def main() -> None:
         raise ValueError("proposal budget must be between 1 and 64")
     if args.max_new_cases is not None and args.max_new_cases < 1:
         raise ValueError("max new cases must be positive")
+    if not 0 <= args.http_max_retries <= 8:
+        raise ValueError("http max retries must be between 0 and 8")
+    if args.retry_base_seconds < 0:
+        raise ValueError("retry base seconds must be non-negative")
+    if args.retry_jitter_seconds < 0:
+        raise ValueError("retry jitter seconds must be non-negative")
+    if not 0 < args.retry_max_seconds <= 60:
+        raise ValueError("retry max seconds must be in (0, 60]")
     print(json.dumps(asyncio.run(run(args)), ensure_ascii=False, indent=2))
 
 

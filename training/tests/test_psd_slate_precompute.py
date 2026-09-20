@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -7,7 +8,10 @@ from scripts.server.precompute_psd_slate_proposals import (
     pending_entries,
     read_indexed_row,
 )
-from scripts.server.run_psd_slate_precompute_controller import alive
+from scripts.server.run_psd_slate_precompute_controller import (
+    alive,
+    retry_delay_seconds,
+)
 
 
 def test_offset_index_is_stat_bound_and_resume_does_not_scan(monkeypatch, tmp_path):
@@ -56,3 +60,15 @@ def test_smoke_limit_does_not_count_unselected_pending_cases_as_complete(tmp_pat
 
 def test_controller_alive_rejects_missing_pid():
     assert alive(999_999_999) is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="/proc is unavailable on Windows")
+def test_controller_alive_accepts_current_process():
+    assert alive(os.getpid()) is True
+
+
+def test_controller_uses_bounded_exponential_retry_delay():
+    assert [
+        retry_delay_seconds(attempt, base_seconds=2, max_seconds=10)
+        for attempt in range(1, 6)
+    ] == [2, 4, 8, 10, 10]

@@ -35,6 +35,19 @@ def alive(pid: int) -> bool:
         return False
 
 
+def retry_delay_seconds(
+    attempt: int,
+    *,
+    base_seconds: float,
+    max_seconds: float,
+) -> float:
+    if attempt < 1:
+        raise ValueError("retry attempt must be positive")
+    if base_seconds < 0 or max_seconds <= 0:
+        raise ValueError("invalid retry delay bounds")
+    return min(max_seconds, base_seconds * (2 ** (attempt - 1)))
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     state_path = args.output / "state.json"
     owner_state = args.owner_state
@@ -76,7 +89,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         })
         if no_progress >= args.max_no_progress_passes:
             break
-        time.sleep(args.retry_delay_seconds)
+        time.sleep(
+            retry_delay_seconds(
+                attempt,
+                base_seconds=args.retry_base_seconds,
+                max_seconds=args.retry_max_seconds,
+            )
+        )
     final = _load(state_path)
     result = {**final, "phase": "bounded_incomplete"}
     _save(owner_state, result)
@@ -91,7 +110,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--adopt-pid", type=int)
     result.add_argument("--max-passes", type=int, default=3)
     result.add_argument("--max-no-progress-passes", type=int, default=2)
-    result.add_argument("--retry-delay-seconds", type=int, default=15)
+    result.add_argument("--retry-base-seconds", type=float, default=5.0)
+    result.add_argument("--retry-max-seconds", type=float, default=20.0)
     result.add_argument("command", nargs=argparse.REMAINDER)
     return result
 
@@ -106,6 +126,8 @@ def main() -> None:
         raise ValueError("max passes must be between 1 and 10")
     if not 1 <= args.max_no_progress_passes <= args.max_passes:
         raise ValueError("invalid no-progress pass budget")
+    if args.retry_base_seconds < 0 or args.retry_max_seconds <= 0:
+        raise ValueError("invalid retry delay bounds")
     print(json.dumps(run(args), ensure_ascii=False, indent=2))
 
 
