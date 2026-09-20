@@ -63,7 +63,8 @@ def _saved_identity(*, run_identity: str, case_id: str, episode_id: str,
 
 async def run(*, run_dir: Path, benchmark: Path, train_cases: Path,
               private_gold: Path, output: Path, model: str,
-              concurrency: int = 8, client=None) -> dict:
+              concurrency: int = 8, client=None,
+              retry_error_types: list[str] | None = None) -> dict:
     if type(concurrency) is not int or not 1 <= concurrency <= 32:
         raise ValueError("invalid lightweight source-review concurrency")
     run_dir, output = run_dir.resolve(), output.resolve()
@@ -170,9 +171,28 @@ async def run(*, run_dir: Path, benchmark: Path, train_cases: Path,
                 "skipped_after_pass": len(case_rows) - len(results)}
 
     completed: dict[str, dict] = {}
+    retry_error_types = list(retry_error_types or [])
+    if retry_error_types:
+        summary_path = output / "summary.json"
+        if not summary_path.is_file():
+            raise ValueError("selective retry requires an existing summary")
+        prior = load_json(summary_path)
+        if prior.get("schema_version") != OWNER_VERSION:
+            raise ValueError("selective retry summary has the wrong schema")
+        prior_cases = prior.get("cases")
+        if (not isinstance(prior_cases, list)
+                or {str(row.get("case_id")) for row in prior_cases} != set(by_case)):
+            raise ValueError("selective retry summary coverage changed")
+        allowed_errors = set(retry_error_types)
+        for row in prior_cases:
+            if row.get("error_type") not in allowed_errors:
+                completed[str(row["case_id"])] = row
 
     async def collect():
-        work = sorted(by_case.items())
+        work = sorted((case_id, rows) for case_id, rows in by_case.items()
+                      if case_id not in completed)
+        if retry_error_types and not work:
+            raise ValueError("selective retry matched no cases")
         async for _index, item, result, error in completed_cases(work, one_case, concurrency=concurrency):
             if error is None:
                 completed[item[0]] = result
@@ -183,7 +203,8 @@ async def run(*, run_dir: Path, benchmark: Path, train_cases: Path,
             counts = Counter(review["status"] for review in flattened)
             _atomic_json(output / "progress.json", {
                 "schema_version": OWNER_VERSION,
-                "selected_cases": len(work),
+                "selected_cases": len(by_case),
+                "retry_cases": len(work) if retry_error_types else 0,
                 "completed_cases": len(completed),
                 "provider_reviews": len(flattened),
                 "skipped_after_pass": sum(case["skipped_after_pass"] for case in completed.values()),
@@ -197,7 +218,7 @@ async def run(*, run_dir: Path, benchmark: Path, train_cases: Path,
             "schema_version": OWNER_VERSION,
             "status": "paused_source_review_requires_resolution"
                 if any("error_type" in case for case in cases) else "source_reviews_complete",
-            "selected_cases": len(work),
+            "selected_cases": len(by_case),
             "selected_rollouts": len(rows),
             "provider_reviews": len(flattened),
             "skipped_after_pass": sum(case["skipped_after_pass"] for case in cases),
@@ -227,6 +248,8 @@ def main() -> None:
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--model", default="gemini-3.6-flash")
     parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--retry-error-type", dest="retry_error_types", action="append",
+                        help="Retry only cases with this error type in the existing summary")
     result = asyncio.run(run(**vars(parser.parse_args())))
     print(json.dumps({key: value for key, value in result.items() if key != "cases"},
                      ensure_ascii=False, indent=2))
