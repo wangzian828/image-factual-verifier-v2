@@ -193,12 +193,19 @@ async def run(*, run_dir: Path, benchmark: Path, train_cases: Path,
                       if case_id not in completed)
         if retry_error_types and not work:
             raise ValueError("selective retry matched no cases")
-        async for _index, item, result, error in completed_cases(work, one_case, concurrency=concurrency):
+        error_details: dict[str, dict] = {}
+
+        def retain_safe_error(item, detail):
+            error_details[str(item[0])] = detail
+
+        async for _index, item, result, error in completed_cases(
+                work, one_case, concurrency=concurrency, on_error=retain_safe_error):
             if error is None:
                 completed[item[0]] = result
             else:
                 completed[item[0]] = {"case_id": item[0], "reviews": [],
-                    "skipped_after_pass": 0, "error_type": error}
+                    "skipped_after_pass": 0, "error_type": error,
+                    "error_details": error_details.get(str(item[0]), {})}
             flattened = [review for case in completed.values() for review in case["reviews"]]
             counts = Counter(review["status"] for review in flattened)
             _atomic_json(output / "progress.json", {
