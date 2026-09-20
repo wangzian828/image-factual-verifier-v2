@@ -195,6 +195,7 @@ async def _prepare_case(
                 "status": "ready_for_qwen",
             }
             _atomic_json(receipt, result)
+            (output / "errors" / f"{case_id}.json").unlink(missing_ok=True)
             return result
         except SlateProposalRejected:
             rejected += 1
@@ -210,6 +211,7 @@ async def _prepare_case(
         "status": "proposal_budget_exhausted",
     }
     _atomic_json(receipt, result)
+    (output / "errors" / f"{case_id}.json").unlink(missing_ok=True)
     return result
 
 
