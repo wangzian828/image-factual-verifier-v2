@@ -193,6 +193,25 @@ def _parse_args() -> argparse.Namespace:
             "The policy is never added to model context or traces."
         ),
     )
+    parser.add_argument(
+        "--disable-web-search",
+        action="store_true",
+        help="Ablation: remove text_search from the formal ReAct runtime.",
+    )
+    parser.add_argument(
+        "--disable-image-retrieval",
+        action="store_true",
+        help=(
+            "Ablation: remove text_image_search and reverse_image_search."
+        ),
+    )
+    parser.add_argument(
+        "--disable-evidence-inspection",
+        action="store_true",
+        help=(
+            "Ablation: remove visit and compare_with_reference."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -603,6 +622,15 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         llm_wire_api=getattr(args, "llm_wire_api", None),
         vlm_wire_api=getattr(args, "vlm_wire_api", None),
         timeout=args.timeout,
+        enable_web_search=not bool(
+            getattr(args, "disable_web_search", False)
+        ),
+        enable_image_retrieval=not bool(
+            getattr(args, "disable_image_retrieval", False)
+        ),
+        enable_evidence_inspection=not bool(
+            getattr(args, "disable_evidence_inspection", False)
+        ),
         save_traces=True,
         decision_policy_version=getattr(
             args,
@@ -757,6 +785,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             ),
             "rollouts_per_case": rollouts_per_case,
             "base_sampling_seed": base_sampling_seed,
+            "tool_families": config.react_tool_family_config.to_manifest(),
             "sampling_seed_derivation": (
                 "sha256(base_seed:case_id:rollout_index)-31bit-v1"
             ),

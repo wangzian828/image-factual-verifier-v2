@@ -187,6 +187,25 @@ def _parse_args() -> argparse.Namespace:
             "runtime projection; the run manifest records the explicit bypass."
         ),
     )
+    parser.add_argument(
+        "--disable-web-search",
+        action="store_true",
+        help="Ablation: remove text_search from the formal ReAct runtime.",
+    )
+    parser.add_argument(
+        "--disable-image-retrieval",
+        action="store_true",
+        help=(
+            "Ablation: remove text_image_search and reverse_image_search."
+        ),
+    )
+    parser.add_argument(
+        "--disable-evidence-inspection",
+        action="store_true",
+        help=(
+            "Ablation: remove visit and compare_with_reference."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -267,6 +286,15 @@ def _workflow_config(args: argparse.Namespace) -> WorkflowConfig:
         vlm_wire_api=getattr(args, "vlm_wire_api", None),
         timeout=args.timeout,
         resume_from=getattr(args, "resume_from", None),
+        enable_web_search=not bool(
+            getattr(args, "disable_web_search", False)
+        ),
+        enable_image_retrieval=not bool(
+            getattr(args, "disable_image_retrieval", False)
+        ),
+        enable_evidence_inspection=not bool(
+            getattr(args, "disable_evidence_inspection", False)
+        ),
         save_traces=True,
         decision_policy_version=getattr(
             args,
@@ -436,6 +464,7 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
             "rollouts_per_case": rollouts_per_case,
             "episode_namespace": getattr(args, "episode_namespace", None),
             "base_sampling_seed": base_sampling_seed,
+            "tool_families": config.react_tool_family_config.to_manifest(),
         },
         "execution": {
             "mode": "archive_case_run" if archive_input is not None else "case_run",

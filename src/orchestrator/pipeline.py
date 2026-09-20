@@ -43,6 +43,7 @@ from src.orchestrator.tool_cache import (
     WEB_EVIDENCE_CONTRACT_VERSION,
 )
 from src.orchestrator.tool_health import require_tools, summarize_health
+from src.orchestrator.tool_ablation import ReactToolFamilyConfig
 from src.orchestrator.tool_registry import (
     REQUIRED_TOOLS,
     build_all_tools_with_health,
@@ -87,6 +88,7 @@ class Orchestrator:
         sampling_seed: Optional[int] = None,
         validate_startup: bool = True,
         source_access_policy: Optional[SourceAccessPolicy] = None,
+        tool_family_config: Optional[ReactToolFamilyConfig] = None,
     ):
         self.provider = provider.lower().strip()
         self.model_name = model_name
@@ -114,6 +116,13 @@ class Orchestrator:
                 or os.getenv("GEMINI_WIRE_API")
             )
         self.source_access_policy = source_access_policy or SourceAccessPolicy()
+        self.tool_family_config = tool_family_config or ReactToolFamilyConfig()
+        self.enabled_runtime_tools = frozenset(
+            self.tool_family_config.enabled_tool_names
+        )
+        self.disabled_runtime_tools = (
+            self.tool_family_config.disabled_tool_names
+        )
         self.timeout = timeout
         self.sampling_seed = sampling_seed
         self._sampling_request_counts: Dict[str, int] = {}
@@ -215,13 +224,31 @@ class Orchestrator:
             vlm_wire_api=self.vlm_wire_api,
             vlm_base_url=self.vlm_base_url,
         )
+        self.all_tools = {
+            name: tool
+            for name, tool in self.all_tools.items()
+            if name not in self.disabled_runtime_tools
+        }
+        self.cacheable_tools.intersection_update(self.all_tools)
+        self.verification_tool_limits = {
+            name: limit
+            for name, limit in self.verification_tool_limits.items()
+            if name in self.enabled_runtime_tools
+        }
         for tool in self.all_tools.values():
             setter = getattr(tool, "set_source_access_policy", None)
             if callable(setter):
                 setter(self.source_access_policy)
         self.tool_health_summary = summarize_health(self.tool_health)
         if validate_startup:
-            require_tools(self.tool_health, REQUIRED_TOOLS)
+            require_tools(
+                self.tool_health,
+                (
+                    name
+                    for name in REQUIRED_TOOLS
+                    if name in self.enabled_runtime_tools
+                ),
+            )
             self._validate_startup_configuration()
         clock = SystemClockClient().now()
         self.date_prefix = (
@@ -315,7 +342,12 @@ class Orchestrator:
             raise RuntimeError(
                 "GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini perception."
             )
-        if not (
+        serper_tools = {
+            "text_search",
+            "text_image_search",
+            "reverse_image_search",
+        }
+        if self.enabled_runtime_tools.intersection(serper_tools) and not (
             os.getenv("SERPER_API_KEY", "").strip()
             or os.getenv("SERPER_KEY_ID", "").strip()
         ):
@@ -326,9 +358,13 @@ class Orchestrator:
         browse_extract_provider = os.getenv(
             "BROWSE_EXTRACT_PROVIDER", "gemini"
         ).strip().lower()
-        if browse_extract_provider == "gemini" and not (
-            os.getenv("GEMINI_API_KEY", "").strip()
-            or os.getenv("GOOGLE_API_KEY", "").strip()
+        if (
+            "visit" in self.enabled_runtime_tools
+            and browse_extract_provider == "gemini"
+            and not (
+                os.getenv("GEMINI_API_KEY", "").strip()
+                or os.getenv("GOOGLE_API_KEY", "").strip()
+            )
         ):
             raise RuntimeError(
                 "Gemini credentials are required for BROWSE_EXTRACT_PROVIDER=gemini."
@@ -480,8 +516,11 @@ class Orchestrator:
                 investigation,
                 self.all_tools,
                 image_path=image_path,
-                excluded_tool_names=self._exhausted_unified_react_tools(
-                    state.all_steps
+                excluded_tool_names=(
+                    set(self.disabled_runtime_tools)
+                    | set(
+                        self._exhausted_unified_react_tools(state.all_steps)
+                    )
                 ),
             )
             if not tools:
@@ -527,6 +566,7 @@ class Orchestrator:
                         tool_name=tool_name,
                         tool_args=tool_args,
                         source_access_policy=self.source_access_policy,
+                        allowed_tool_names=self.enabled_runtime_tools,
                     )
                 ),
                 max_protocol_corrections=4,

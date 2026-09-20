@@ -31,6 +31,7 @@ from src.orchestrator.runtime_events import (
 )
 from src.orchestrator.state import ImageOnlyRuntimeCase
 from src.orchestrator.source_access import SourceAccessPolicy
+from src.orchestrator.tool_ablation import ReactToolFamilyConfig
 from src.provider_profiles import resolve_provider_settings
 from src.redaction import sanitize_for_persistence
 from src.storage import default_trace_dir
@@ -59,6 +60,12 @@ class WorkflowConfig:
     temperature: float = 0.0
     max_tokens: int = 8192
     sampling_seed: Optional[int] = None
+
+    # External-evidence tool-family ablations. Direct visual operations and
+    # finish_investigation remain available in every configuration.
+    enable_web_search: bool = True
+    enable_image_retrieval: bool = True
+    enable_evidence_inspection: bool = True
 
     # Runtime settings
     timeout: float = 1800.0
@@ -106,6 +113,14 @@ class WorkflowConfig:
                 "current workflow."
             )
 
+    @property
+    def react_tool_family_config(self) -> ReactToolFamilyConfig:
+        return ReactToolFamilyConfig(
+            enable_web_search=self.enable_web_search,
+            enable_image_retrieval=self.enable_image_retrieval,
+            enable_evidence_inspection=self.enable_evidence_inspection,
+        )
+
 
 class VerificationWorkflow:
     """Main workflow for image factual verification."""
@@ -131,6 +146,7 @@ class VerificationWorkflow:
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 sampling_seed=self.config.sampling_seed,
+                tool_family_config=self.config.react_tool_family_config,
                 source_access_policy=self.config.source_access_policy,
                 validate_startup=validate_startup,
             )

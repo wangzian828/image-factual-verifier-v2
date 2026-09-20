@@ -220,6 +220,49 @@ def test_run_cases_writes_minimal_artifacts_without_private_gold(
         "traces": "traces/",
     }
     assert manifest["execution"]["preflight_image_hash_verification"] == "verified"
+    assert manifest["agent"]["tool_families"] == {
+        "schema_version": "ifv-react-tool-ablation-v1",
+        "web_search_enabled": True,
+        "image_retrieval_enabled": True,
+        "evidence_inspection_enabled": True,
+        "disabled_runtime_tools": [],
+        "exposed_runtime_tools": [
+            "perceive_scene",
+            "ocr_with_position",
+            "current_time",
+            "reverse_image_search",
+            "text_image_search",
+            "text_search",
+            "visit",
+            "compare_with_reference",
+            "check_consistency",
+            "analyze_visual_anomalies",
+            "crop_and_inspect",
+            "focused_visual_inspection",
+            "count_objects",
+            "finish_investigation",
+        ],
+    }
+
+
+def test_workflow_config_applies_independent_tool_family_switches(
+    tmp_path: Path,
+) -> None:
+    args = _args(None, tmp_path / "run", archive_root=tmp_path / "archive")
+    args.disable_web_search = True
+    args.disable_image_retrieval = False
+    args.disable_evidence_inspection = True
+
+    config = run_cases._workflow_config(args)
+
+    assert config.enable_web_search is False
+    assert config.enable_image_retrieval is True
+    assert config.enable_evidence_inspection is False
+    assert config.react_tool_family_config.disabled_tool_names == {
+        "text_search",
+        "visit",
+        "compare_with_reference",
+    }
 
 
 def test_run_cases_explicitly_skips_redundant_preflight_rehash(

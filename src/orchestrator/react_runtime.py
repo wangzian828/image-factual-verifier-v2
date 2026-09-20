@@ -373,7 +373,16 @@ def validate_react_action(
     tool_name: str,
     tool_args: Mapping[str, Any],
     source_access_policy: SourceAccessPolicy | None = None,
+    allowed_tool_names: Iterable[str] | None = None,
 ) -> str:
+    if (
+        tool_name != "finish_investigation"
+        and allowed_tool_names is not None
+        and tool_name not in {
+            str(name).strip() for name in allowed_tool_names
+        }
+    ):
+        return f"{tool_name} is disabled by the active tool-family configuration"
     if tool_name not in set(available_unified_react_runtime_tools(state)):
         return f"{tool_name} is not available in the current unified ReAct state"
     if tool_name == "finish_investigation":
