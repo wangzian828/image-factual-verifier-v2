@@ -313,9 +313,42 @@ class ServiceSession:
             os.kill(int(self.guard["pid"]), signal.SIGSTOP)
             self.guard_paused = True
 
+    def _live_receipt(self, index: int, receipt: dict[str, Any]) -> dict[str, Any] | None:
+        """Resolve an explicitly replaced replica without accepting command drift.
+
+        A bounded cache-recovery operation may restart one replica while a long
+        Agent profile is running.  The in-memory receipt then names the dead
+        process, while the authoritative SERVICE receipt names its replacement.
+        Accept that replacement only when it is alive and its complete command
+        is byte-for-byte identical.  A dead receipt is already stopped; a live
+        process with a different command remains a hard ownership error.
+        """
+
+        try:
+            self.owner.checked(receipt)
+            return receipt
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+
+        replacement = self.owner.load(SERVICE / f"replica-{index}.json")
+        try:
+            self.owner.checked(replacement)
+        except (FileNotFoundError, ProcessLookupError):
+            return None
+        if replacement.get("command") != receipt.get("command"):
+            raise RuntimeError(
+                f"replica {index} replacement command does not match active owner"
+            )
+        return replacement
+
     def _stop_active(self) -> None:
+        resolved = [
+            live
+            for index, receipt in enumerate(self.active)
+            if (live := self._live_receipt(index, receipt)) is not None
+        ]
         with ThreadPoolExecutor(max_workers=4) as pool:
-            list(pool.map(self.owner.stop, self.active))
+            list(pool.map(self.owner.stop, resolved))
         self.active = []
 
     def switch(self, key: str, model_root: Path) -> None:
