@@ -101,6 +101,17 @@ def validate_resume_binding(output: Path) -> dict[str, Any]:
     return binding
 
 
+def available_wave_name(output: Path, stem: str) -> str:
+    """Choose a fresh ledger name without discarding an interrupted wave."""
+
+    candidate = stem
+    suffix = 2
+    while (output / candidate).exists() or (output / f"{candidate}-cases.txt").exists():
+        candidate = f"{stem}-{suffix}"
+        suffix += 1
+    return candidate
+
+
 def validate_safe_cache_off(session: ServiceSession) -> None:
     cache_mode = os.environ.get("IFV_PREFIX_CACHE_MODE", "request_isolated").strip()
     for index, receipt in enumerate(session.originals):
@@ -156,13 +167,12 @@ def resume_sft(
         ("attempt-2", 12, 4903),
         ("attempt-3", 8, 5903),
     )
-    for name, concurrency, seed in waves:
+    for stem, concurrency, seed in waves:
         selected = successful(output)
         pending = [case for case in expected if case not in selected]
         if not pending:
             break
-        if (output / name).exists() or (output / f"{name}-cases.txt").exists():
-            raise FileExistsError(f"resume wave already exists: {name}")
+        name = available_wave_name(output, stem)
         run_attempt(
             deploy=deploy,
             source_code=source_code,

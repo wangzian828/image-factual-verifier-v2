@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 
 from scripts.server.resume_corrected_agent_eval import (
+    available_wave_name,
     validate_resume_binding,
     validate_safe_cache_off,
 )
@@ -127,3 +128,9 @@ def test_gateway_command_for_source_replaces_only_app_dir(tmp_path):
     assert observed[observed.index("--app-dir") + 1] == str(tmp_path.resolve())
     assert observed[observed.index("--port") + 1] == "19025"
     assert command[command.index("--app-dir") + 1] == "/old/code"
+
+
+def test_available_wave_name_preserves_interrupted_ledgers(tmp_path):
+    (tmp_path / "attempt-0-resume").mkdir()
+    (tmp_path / "attempt-0-resume-2-cases.txt").write_text("case\n", encoding="utf-8")
+    assert available_wave_name(tmp_path, "attempt-0-resume") == "attempt-0-resume-3"
