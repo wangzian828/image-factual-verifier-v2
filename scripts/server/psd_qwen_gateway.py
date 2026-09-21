@@ -14,6 +14,7 @@ import os
 import secrets
 import uuid
 from contextlib import asynccontextmanager
+from math import isfinite
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -162,6 +163,54 @@ def _update_domain_after_response(
         _rotate_domain(request, domain, "hybrid_block_boundary")
 
 
+def _prometheus_counter(text: str, name: str) -> float:
+    """Read one aggregate Prometheus counter and reject ambiguous metrics."""
+
+    values: list[float] = []
+    prefix = name + "{"
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not (line.startswith(prefix) or line.startswith(name + " ")):
+            continue
+        try:
+            value = float(line.rsplit(None, 1)[1])
+        except (IndexError, ValueError) as exc:
+            raise ValueError(f"invalid {name} metric line") from exc
+        if not isfinite(value) or value < 0:
+            raise ValueError(f"invalid {name} metric value")
+        values.append(value)
+    if not values:
+        raise ValueError(f"missing {name} metric")
+    return sum(values)
+
+
+async def _replica_corruption_total(request: Request, replica: str) -> float:
+    """Return vLLM's cumulative completed-request logits-NaN counter."""
+
+    response = await request.app.state.http.get(
+        f"{replica}/metrics", timeout=httpx.Timeout(10.0, connect=3.0)
+    )
+    try:
+        response.raise_for_status()
+        return _prometheus_counter(
+            response.text, "vllm:corrupted_requests_total"
+        )
+    finally:
+        await response.aclose()
+
+
+def _record_corruption_quarantine(request: Request) -> None:
+    request.app.state.cache_corruption_quarantines = (
+        getattr(request.app.state, "cache_corruption_quarantines", 0) + 1
+    )
+
+
+def _record_corruption_metric_failure(request: Request) -> None:
+    request.app.state.cache_corruption_metric_failures = (
+        getattr(request.app.state, "cache_corruption_metric_failures", 0) + 1
+    )
+
+
 def raw_teacher_binding():
     marker = os.environ.get('PSD_POLICY_LOGPROB_SEMANTICS', '')
     if not marker:
@@ -275,6 +324,14 @@ async def lifespan(app):
     app.state.cache_salt_rotations = 0
     app.state.cache_salt_rotation_reasons = {}
     app.state.prefix_cache_safety = prefix_cache_safety_config()
+    # Cache-on serving is allowed only with the vLLM logits-NaN counter.  The
+    # gateway samples it immediately before and after every case-isolated
+    # generation and turns any increase into a retryable engineering failure.
+    # Concurrent requests on the same replica can be conservatively rejected
+    # together; no response overlapping a detected corruption is accepted.
+    app.state.reject_corrupted_responses = prefix_cache_mode() == CASE_ISOLATED
+    app.state.cache_corruption_quarantines = 0
+    app.state.cache_corruption_metric_failures = 0
     app.state.wire_capture = WireCapture.from_env()
     app.state.http = httpx.AsyncClient(
         transport=httpx.AsyncHTTPTransport(retries=0),
@@ -309,6 +366,30 @@ async def _request_once_locked(request, path, payload, domain):
         request.app.state.sticky_dispatches += 1
     if request.method == 'POST':
         request.app.state.post_dispatches = getattr(request.app.state, 'post_dispatches', 0) + 1
+    reject_corrupted = bool(
+        domain is not None
+        and getattr(request.app.state, "reject_corrupted_responses", False)
+    )
+    corrupted_before = None
+    if reject_corrupted:
+        try:
+            corrupted_before = await _replica_corruption_total(request, replica)
+        except (httpx.HTTPError, ValueError) as exc:
+            _record_corruption_metric_failure(request)
+            _rotate_domain(request, domain, "corruption_metric_unavailable")
+            base._release_replica(index)
+            if ticket is not None:
+                try:
+                    capture.error(
+                        ticket, "corruption_metric_unavailable", replica=replica
+                    )
+                except OSError:
+                    logging.exception(
+                        "PSD corruption metric failure receipt could not be written"
+                    )
+            raise HTTPException(
+                503, "Replica corruption metric unavailable; request not dispatched"
+            ) from exc
     upstream = asyncio.create_task(request.app.state.http.request(
         request.method, f'{replica}/{path.lstrip("/")}',
         content=payload, headers=base._forward_headers(request)))
@@ -321,8 +402,30 @@ async def _request_once_locked(request, path, payload, domain):
             return_when=asyncio.FIRST_COMPLETED)
         if upstream in done:
             response = upstream.result()
-            _update_domain_after_response(request, domain, response)
             response_observed = True
+            if reject_corrupted:
+                try:
+                    corrupted_after = await _replica_corruption_total(
+                        request, replica
+                    )
+                except (httpx.HTTPError, ValueError) as exc:
+                    _record_corruption_metric_failure(request)
+                    _rotate_domain(
+                        request, domain, "corruption_metric_unavailable"
+                    )
+                    raise HTTPException(
+                        503,
+                        "Replica corruption metric unavailable after generation; "
+                        "response quarantined",
+                    ) from exc
+                if corrupted_after > corrupted_before:
+                    _record_corruption_quarantine(request)
+                    _rotate_domain(request, domain, "logits_nan_detected")
+                    raise HTTPException(
+                        502,
+                        "vLLM detected non-finite logits; response quarantined",
+                    )
+            _update_domain_after_response(request, domain, response)
             if ticket is not None:
                 try:
                     capture.response(ticket, response.content, status_code=response.status_code, replica=replica)
@@ -403,6 +506,11 @@ async def health(request: Request):
                   cache_salt_rotations=request.app.state.cache_salt_rotations,
                   cache_salt_rotation_reasons=dict(
                       request.app.state.cache_salt_rotation_reasons
+                  ),
+                  reject_corrupted_responses=request.app.state.reject_corrupted_responses,
+                  cache_corruption_quarantines=request.app.state.cache_corruption_quarantines,
+                  cache_corruption_metric_failures=(
+                      request.app.state.cache_corruption_metric_failures
                   ),
                   prefix_cache_block_size=request.app.state.prefix_cache_safety[0],
                   prefix_cache_unsafe_window=request.app.state.prefix_cache_safety[1])

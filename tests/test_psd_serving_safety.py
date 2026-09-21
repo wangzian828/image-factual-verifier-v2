@@ -254,6 +254,85 @@ def test_case_cache_requires_explicit_attested_block_size(gateway, monkeypatch):
         gateway.prefix_cache_safety_config()
 
 
+def test_corrupted_counter_parser_rejects_missing_and_nonfinite(gateway):
+    text = """
+# HELP vllm:corrupted_requests_total Completed requests with NaN logits
+vllm:corrupted_requests_total{engine="0",model_name="a"} 2.0
+vllm:corrupted_requests_total{engine="1",model_name="a"} 3.0
+"""
+    assert gateway._prometheus_counter(
+        text, "vllm:corrupted_requests_total"
+    ) == 5.0
+    with pytest.raises(ValueError, match="missing"):
+        gateway._prometheus_counter("", "vllm:corrupted_requests_total")
+    with pytest.raises(ValueError, match="invalid"):
+        gateway._prometheus_counter(
+            "vllm:corrupted_requests_total nan",
+            "vllm:corrupted_requests_total",
+        )
+
+
+def test_case_response_is_quarantined_when_nan_counter_increases(
+    gateway, monkeypatch
+):
+    monkeypatch.setenv('IFV_PREFIX_CACHE_MODE', 'case_isolated')
+    monkeypatch.setenv('IFV_PREFIX_CACHE_BLOCK_SIZE', '528')
+    salt = 'ifv-case-v1-' + 'N' * 43
+
+    class Http:
+        def __init__(self):
+            self.metric_reads = 0
+
+        async def get(self, url, timeout):
+            self.metric_reads += 1
+            value = 0 if self.metric_reads == 1 else 1
+            return httpx.Response(
+                200,
+                text=(
+                    'vllm:corrupted_requests_total'
+                    '{engine="0",model_name="sft"} '
+                    f'{value}.0\n'
+                ),
+                request=httpx.Request('GET', url),
+            )
+
+        async def request(self, method, url, content, headers):
+            return httpx.Response(
+                200,
+                json={
+                    'choices': [
+                        {'finish_reason': 'stop', 'message': {'content': 'bad'}}
+                    ],
+                    'usage': {'prompt_tokens': 545},
+                },
+            )
+
+    async def run():
+        request = Request(Http())
+        request.app.state.cache_domains = {}
+        request.app.state.sticky_dispatches = 0
+        request.app.state.cache_salt_rotations = 0
+        request.app.state.cache_salt_rotation_reasons = {}
+        request.app.state.prefix_cache_safety = gateway.prefix_cache_safety_config()
+        request.app.state.reject_corrupted_responses = True
+        request.app.state.cache_corruption_quarantines = 0
+        request.app.state.cache_corruption_metric_failures = 0
+        body = json.dumps({'cache_salt': salt}).encode()
+        with pytest.raises(HTTPException) as caught:
+            await gateway.request_once(
+                request, 'v1/chat/completions', body
+            )
+        assert caught.value.status_code == 502
+        assert request.app.state.cache_corruption_quarantines == 1
+        domain = request.app.state.cache_domains[salt]
+        assert domain.last_rotation_reason == 'logits_nan_detected'
+        assert gateway.base._inflight == [0, 0]
+
+    from fastapi import HTTPException
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize('salt', [None, '', 'case-123', 'ifv-case-v1-' + 'x' * 42])
 def test_case_isolated_cache_fails_closed_without_valid_scope(
     gateway, monkeypatch, salt

@@ -236,14 +236,18 @@ def main() -> None:
         ),
     )
     session = ServiceSession(deploy)
-    # The cache gate deliberately leaves its tested gateway active.  Refresh
-    # only that lightweight proxy from this immutable source snapshot so the
-    # formal run also gets post-test transport fixes without restarting the
-    # four validated vLLM replicas or discarding their prefix caches.
-    restart_gateway(deploy, "resume-source", source_code=source_code)
-    validate_safe_cache_off(session)
     completed: list[dict[str, Any]] = []
     try:
+        # Keep maintenance traffic out of the formal serving window.  The
+        # guard talks directly to replicas and therefore cannot participate in
+        # the gateway's per-case cache domains or corruption quarantine.
+        session.pause_guard()
+        # The cache gate deliberately leaves its tested gateway active.
+        # Refresh only that lightweight proxy from this immutable source
+        # snapshot so transport and corruption-quarantine fixes apply without
+        # restarting the four validated replicas or discarding their caches.
+        restart_gateway(deploy, "resume-source", source_code=source_code)
+        validate_safe_cache_off(session)
         wait_for_services(SFT_MODEL_ROOT)
         result = resume_sft(deploy=deploy, source_code=source_code, output=SFT_OUTPUT)
         completed.append(result)
