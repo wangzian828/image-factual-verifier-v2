@@ -772,7 +772,10 @@ def evaluate_model(
         atomic_json(output / "inference-summary.json", summary)
         raise RuntimeError(f"{key} corrected-protocol smoke failed")
 
-    for attempt, concurrency in enumerate((32, 24, 16, 8)):
+    # Keep the four replicas busy without over-subscribing the long ReAct
+    # sessions.  Engineering failures are retried by the progressively smaller
+    # waves below, so the first pass does not need to saturate at 32 clients.
+    for attempt, concurrency in enumerate((28, 20, 12, 8)):
         selected = successful(output)
         pending = [case for case in expected if case not in selected]
         if not pending:

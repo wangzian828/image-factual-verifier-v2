@@ -150,9 +150,9 @@ def resume_sft(
         },
     )
     waves = (
-        ("attempt-0-resume", 32, 2903),
-        ("attempt-1", 24, 3903),
-        ("attempt-2", 16, 4903),
+        ("attempt-0-resume", 28, 2903),
+        ("attempt-1", 20, 3903),
+        ("attempt-2", 12, 4903),
         ("attempt-3", 8, 5903),
     )
     for name, concurrency, seed in waves:
