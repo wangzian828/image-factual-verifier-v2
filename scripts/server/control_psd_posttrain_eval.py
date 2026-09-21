@@ -22,7 +22,7 @@ import urllib.request
 
 
 ROOT = Path("/volume/ybo/wza")
-DEPLOY = ROOT / "training-artifacts/psd-posttrain-full-eval-20260921-v111"
+DEPLOY = ROOT / "training-artifacts/psd-posttrain-full-eval-20260921-v112"
 SOURCE_CODE = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91/code"
 TRAIN_STATE = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91/training-chain-state.json"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
@@ -497,7 +497,7 @@ def smoke_anomaly_report(selected: dict[str, tuple[dict, Path]], expected: list[
                     finishes[str(metadata["finish_reason"])] += 1
                 if step.get("action_type") == "tool_call":
                     signatures[(str(step.get("tool_name") or ""),
-                        json.dumps(step.get("tool_input"), sort_keys=True, ensure_ascii=False))] += 1
+                        json.dumps(step.get("tool_args"), sort_keys=True, ensure_ascii=False))] += 1
             if finishes.get("length") or finishes.get("abort"):
                 issues.append("length_or_abort_finish")
             if signatures and max(signatures.values()) >= 8:
