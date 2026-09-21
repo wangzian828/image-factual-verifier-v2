@@ -4,6 +4,7 @@ from scripts.server.control_psd_posttrain_eval import (
     MODEL_ALIAS,
     adapter_command,
     merged_command,
+    smoke_directory,
     smoke_anomaly_report,
 )
 
@@ -34,6 +35,16 @@ def test_merged_command_uses_standalone_policy_without_lora(tmp_path):
     assert "--enable-lora" not in result
     assert "--lora-modules" not in result
     assert "--tool-parser-plugin" not in result
+
+
+def test_failed_completed_smoke_gets_one_recovery_directory(tmp_path):
+    smoke = tmp_path / "smoke"
+    smoke.mkdir()
+    (smoke / "summary.json").write_text("{}", encoding="utf-8")
+    (smoke / "run_results.jsonl").write_text(
+        '{"case_id":"x","status":"error","termination":"error"}\n',
+        encoding="utf-8")
+    assert smoke_directory(tmp_path) == tmp_path / "smoke-budget-recovery-v2"
 
 
 def _write_smoke(tmp_path, *, report="Normal grounded report.", finish="stop", repeats=1):

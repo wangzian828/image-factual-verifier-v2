@@ -22,7 +22,7 @@ import urllib.request
 
 
 ROOT = Path("/volume/ybo/wza")
-DEPLOY = ROOT / "training-artifacts/psd-posttrain-full-eval-20260921-v109"
+DEPLOY = ROOT / "training-artifacts/psd-posttrain-full-eval-20260921-v110"
 SOURCE_CODE = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91/code"
 TRAIN_STATE = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91/training-chain-state.json"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
@@ -30,6 +30,7 @@ BENCHMARK = ROOT / "evaluation/factcheck-formal1527-available1526-20260912/runti
 SMOKE_CASES = ROOT / "runs/eval/qwen35-sft1028-agent-canary4-20260914/target-case-list.txt"
 OUTPUT = ROOT / "evaluation/qwen35-psd-smallbank4095-agent-full1526-20260921-v1"
 MODEL_ALIAS = "ifv-psd-sft3084"
+PROFILE_MODEL = "ifv-qwen3.5-9b-sft3084-psd-smallbank4095"
 BASE_MODEL = ROOT / "exports/h20-sft-merged4872-3epoch-step3084-20260915/model"
 MERGED_MODEL = ROOT / "exports/qwen35-psd-smallbank4095-merged-20260921-v1/model"
 PORTS = (19002, 19003, 19004, 19005)
@@ -306,7 +307,10 @@ def runtime_environment() -> dict:
     if not all(required):
         raise RuntimeError("authorized Agent tool credentials are incomplete")
     env.update(QWEN35_LOCAL_BASE_URL="http://127.0.0.1:19025/v1",
-        QWEN35_LOCAL_MODEL=MODEL_ALIAS,
+        # The pipeline recognizes Qwen3.5 from this public profile identity and
+        # therefore emits the explicit thinking_token_budget required by the
+        # isolated PSD gateway.  The gateway pins requests to MODEL_ALIAS.
+        QWEN35_LOCAL_MODEL=PROFILE_MODEL,
         QWEN_UNIFIED_REACT_MAX_OUTPUT_TOKENS="32768",
         QWEN_UNIFIED_REACT_THINKING_TOKEN_BUDGET="8192",
         QWEN_UNIFIED_JUDGMENT_MAX_OUTPUT_TOKENS="32768",
@@ -329,6 +333,17 @@ def successful(directory: Path) -> dict[str, dict]:
                 raise ValueError(f"duplicate successful case: {case}")
             result[case] = row
     return result
+
+
+def smoke_directory(output: Path) -> Path:
+    """Preserve a completed failed smoke and use one bounded recovery name."""
+    original = output / "smoke"
+    if not (original / "summary.json").is_file():
+        return original
+    rows_path = original / "run_results.jsonl"
+    if rows_path.is_file() and successful(original):
+        return original
+    return output / "smoke-budget-recovery-v2"
 
 
 def run_attempt(directory: Path, cases: list[str], *, concurrency: int, seed: int,
@@ -433,13 +448,14 @@ def run_evaluation(adapter: Path) -> dict:
         raise ValueError("posttrain evaluation binding changed")
     atomic_json(binding_path, binding)
     environment = runtime_environment()
-    smoke = OUTPUT / "smoke"
+    smoke = smoke_directory(OUTPUT)
     run_attempt(smoke, smoke_ids, concurrency=4, seed=1903, environment=environment)
     audit = smoke_anomaly_report(smoke, smoke_ids)
-    atomic_json(OUTPUT / "smoke-anomaly-report.json", audit)
+    report_path = OUTPUT / (smoke.name + "-anomaly-report.json")
+    atomic_json(report_path, audit)
     if not audit["passed"]:
         atomic_json(DEPLOY / "state.json", {"phase": "smoke_failed_requires_inspection",
-            "report": str(OUTPUT / "smoke-anomaly-report.json")})
+            "report": str(report_path)})
         raise RuntimeError("PSD posttrain anomaly smoke did not pass")
     selected: dict[str, dict] = successful(smoke)
     attempts = [smoke]
