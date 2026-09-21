@@ -174,6 +174,7 @@ class JinaReaderClient:
     max_workers: int = 4
     fetch_provider: str = "jina"
     source_access_policy: Optional[SourceAccessPolicy] = None
+    extract_cache_salt: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.api_key is None:
@@ -1752,6 +1753,11 @@ class JinaReaderClient:
                 wire_api=wire_api,
                 timeout=self.extract_timeout,
                 max_retries=self.extract_max_retries,
+                cache_salt=(
+                    self.extract_cache_salt
+                    if provider in {"qwen_local", "lmdeploy"}
+                    else None
+                ),
             )
             raw = client.create_json_completion(
                 model_name=model_name,

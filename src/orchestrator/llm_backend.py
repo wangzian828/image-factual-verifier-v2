@@ -31,6 +31,7 @@ from src.integrations.llm.openai_compatible import (
     resolve_model_base_url,
     resolve_model_wire_api,
 )
+from src.integrations.llm.prefix_cache import validate_case_cache_salt
 
 
 @dataclass
@@ -298,6 +299,7 @@ class APIBackend(LLMBackend):
         max_retries: int = 1,
         proxy: Optional[str] = None,
         extra_body: Optional[Dict[str, Any]] = None,
+        cache_salt: Optional[str] = None,
     ):
         self.provider = provider.lower().strip()
         if self.provider == "gemini" and api_key is not None:
@@ -314,6 +316,11 @@ class APIBackend(LLMBackend):
         self.max_retries = max(0, int(max_retries))
         self.proxy = proxy or self._resolve_proxy()
         self.extra_body = extra_body or self._resolve_extra_body()
+        self.cache_salt = (
+            validate_case_cache_salt(cache_salt)
+            if cache_salt is not None
+            else None
+        )
         self._shared_client: Optional[httpx.AsyncClient] = None
         self._gemini_client_pool: Optional[_AsyncClientPool] = None
         self._client_registered_for_cleanup = False
@@ -473,6 +480,12 @@ class APIBackend(LLMBackend):
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
         }
+        if self.cache_salt is not None:
+            if self.provider not in {"qwen_local", "lmdeploy"}:
+                raise ValueError(
+                    "cache_salt is only supported for local Qwen-compatible serving"
+                )
+            body["cache_salt"] = self.cache_salt
         tools = kwargs.get("tools")
         if tools:
             body["tools"] = self._openai_tool_schemas(tools)

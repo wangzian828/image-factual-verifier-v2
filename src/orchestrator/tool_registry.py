@@ -25,6 +25,7 @@ def build_all_tools_with_health(
     vlm_model: str = "gemini-3.7-flash",
     vlm_wire_api: Optional[str] = None,
     vlm_base_url: Optional[str] = None,
+    prefix_cache_salt: Optional[str] = None,
 ) -> Tuple[Dict[str, BaseTool], Dict[str, ToolHealth]]:
     tools: Dict[str, BaseTool] = {}
     health: Dict[str, ToolHealth] = {}
@@ -73,7 +74,9 @@ def build_all_tools_with_health(
     # mutable caches/sessions internally. Sharing them lets visit and
     # crop_and_search reuse page content, HTTP keep-alive sessions, and the
     # persistent Gemini extraction transport without serializing page visits.
-    shared_browse_client = JinaReaderClient()
+    shared_browse_client = JinaReaderClient(
+        extract_cache_salt=prefix_cache_salt,
+    )
     shared_lens_client = SerperLensSearchClient()
     shared_image_search_client = SerperImageSearchClient()
     shared_visual_search_client = VisualReverseSearchClient(

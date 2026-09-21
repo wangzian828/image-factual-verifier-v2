@@ -18,6 +18,11 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from scripts.server import qwen_replica_gateway as base
 from scripts.server.psd_wire_capture import WireCapture
 from scripts.server.psd_raw_logprobs import SEMANTICS, validate_raw_worker_receipts
+from src.integrations.llm.prefix_cache import (
+    CASE_ISOLATED,
+    prefix_cache_mode,
+    validate_case_cache_salt,
+)
 
 
 def raw_teacher_binding():
@@ -106,9 +111,14 @@ def normalize_payload(payload):
     if xargs:
         parsed['vllm_xargs'] = xargs
     # A reproduced hybrid-state prefix-cache failure emitted token 0 from the
-    # first decoding step even with the budget disabled. Unique cache domains
-    # bypass that unsafe reuse without changing images, messages, or sampling.
-    parsed['cache_salt'] = 'ifv-psd-isolated-' + uuid.uuid4().hex
+    # first decoding step even with the budget disabled. The production-safe
+    # default therefore gives every request a unique domain. A future canary
+    # may opt into one validated, unguessable domain per rollout; missing or
+    # malformed scopes fail before dispatch rather than sharing accidentally.
+    if prefix_cache_mode() == CASE_ISOLATED:
+        parsed['cache_salt'] = validate_case_cache_salt(parsed.get('cache_salt'))
+    else:
+        parsed['cache_salt'] = 'ifv-psd-isolated-' + uuid.uuid4().hex
     if os.environ.get('PSD_DIAGNOSTIC_RETURN_TOKEN_IDS') == '1':
         if not os.environ.get('PSD_WIRE_CAPTURE_DIR'):
             raise ValueError('Diagnostic token IDs require an explicit wire archive')
@@ -200,7 +210,7 @@ async def health(request: Request):
     result.update(protocol='isolated-psd-thinking-budget-v1',
                   timeout_contract=request.app.state.timeout_contract,
                   post_retries=0, gpu_boundary_validated=False,
-                  prefix_cache_policy='unique_salt_per_request',
+                  prefix_cache_policy=prefix_cache_mode(),
                   public_model_alias=public_alias() or None,
                   tokenizer_endpoint='/tokenize',
                   diagnostic_token_ids=os.environ.get('PSD_DIAGNOSTIC_RETURN_TOKEN_IDS') == '1',

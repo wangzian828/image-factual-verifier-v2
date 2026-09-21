@@ -27,6 +27,7 @@ from src.orchestrator.investigation_models import (
     RawHistoryJudgmentOutput,
 )
 from src.orchestrator.llm_backend import APIBackend
+from src.integrations.llm.prefix_cache import new_case_cache_salt
 from src.orchestrator.stage_runner import (
     InteractionSession,
     StageRunner,
@@ -192,6 +193,24 @@ class Orchestrator:
             )
         self.verification_tool_limits = dict(REACT_RUNTIME_TOOL_CALL_LIMITS)
 
+        # ``run_batch`` creates one Orchestrator per rollout.  In the optional
+        # canary mode this therefore stays stable across that rollout's ReAct
+        # turns and page extractions, while never crossing a case boundary.
+        rollout_cache_salt = new_case_cache_salt()
+        self.prefix_cache_salt = (
+            rollout_cache_salt
+            if self.provider in {"qwen_local", "lmdeploy"}
+            else None
+        )
+        browse_extract_provider = os.getenv(
+            "BROWSE_EXTRACT_PROVIDER", "gemini"
+        ).strip().lower()
+        self.browse_extract_prefix_cache_salt = (
+            rollout_cache_salt
+            if browse_extract_provider in {"qwen_local", "lmdeploy"}
+            else None
+        )
+
         self.llm = APIBackend(
             provider=self.provider,
             model_name=model_name,
@@ -217,12 +236,14 @@ class Orchestrator:
                     "12" if self.provider == "gemini" else "0",
                 )
             ),
+            cache_salt=self.prefix_cache_salt,
         )
         self.all_tools, self.tool_health = build_all_tools_with_health(
             vlm_provider=self.vlm_provider,
             vlm_model=self.vlm_model,
             vlm_wire_api=self.vlm_wire_api,
             vlm_base_url=self.vlm_base_url,
+            prefix_cache_salt=self.browse_extract_prefix_cache_salt,
         )
         self.all_tools = {
             name: tool

@@ -31,6 +31,7 @@ def test_chat_json_completion_forwards_explicit_thinking_contract(monkeypatch):
         api_key="none",
         base_url="http://127.0.0.1:19025/v1",
         max_retries=0,
+        cache_salt="ifv-case-v1-" + "A" * 43,
     )
     monkeypatch.setattr(client, "_get_client", lambda: transport)
 
@@ -48,3 +49,6 @@ def test_chat_json_completion_forwards_explicit_thinking_contract(monkeypatch):
         "enable_thinking": True
     }
     assert transport.request["json"]["thinking_token_budget"] == 2048
+    assert transport.request["json"]["cache_salt"] == (
+        "ifv-case-v1-" + "A" * 43
+    )

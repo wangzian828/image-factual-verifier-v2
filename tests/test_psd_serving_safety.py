@@ -122,6 +122,38 @@ def test_requests_cannot_share_a_corrupted_prefix_cache(gateway):
     assert one == two
 
 
+def test_case_isolated_cache_reuses_only_an_opaque_rollout_scope(
+    gateway, monkeypatch
+):
+    monkeypatch.setenv('IFV_PREFIX_CACHE_MODE', 'case_isolated')
+    salt = 'ifv-case-v1-' + 'A' * 43
+    value = {
+        'max_tokens': 32768,
+        'thinking_token_budget': 8192,
+        'cache_salt': salt,
+    }
+    one = json.loads(gateway.normalize_payload(json.dumps(value).encode()))
+    two = json.loads(gateway.normalize_payload(json.dumps(value).encode()))
+    assert one['cache_salt'] == two['cache_salt'] == salt
+
+    other = json.loads(gateway.normalize_payload(json.dumps({
+        **value, 'cache_salt': 'ifv-case-v1-' + 'B' * 43,
+    }).encode()))
+    assert other['cache_salt'] != salt
+
+
+@pytest.mark.parametrize('salt', [None, '', 'case-123', 'ifv-case-v1-' + 'x' * 42])
+def test_case_isolated_cache_fails_closed_without_valid_scope(
+    gateway, monkeypatch, salt
+):
+    monkeypatch.setenv('IFV_PREFIX_CACHE_MODE', 'case_isolated')
+    value = {'max_tokens': 32768, 'thinking_token_budget': 8192}
+    if salt is not None:
+        value['cache_salt'] = salt
+    with pytest.raises(ValueError):
+        gateway.normalize_payload(json.dumps(value).encode())
+
+
 def test_tokenizer_only_remaps_attested_alias(gateway, monkeypatch):
     monkeypatch.setenv('PSD_PUBLIC_MODEL_ALIAS', 'public-qwen3.5-policy')
     monkeypatch.setattr(gateway.base, 'PINNED_MODEL_ID', 'backend-policy')

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from src.integrations.http_transport import provider_httpx_limits
+from src.integrations.llm.prefix_cache import validate_case_cache_salt
 
 
 @dataclass
@@ -19,6 +20,7 @@ class OpenAICompatibleChatClient:
     wire_api: str = "chat_completions"
     timeout: float = 60.0
     max_retries: int = 2
+    cache_salt: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.wire_api = validate_wire_api(self.wire_api)
@@ -29,6 +31,8 @@ class OpenAICompatibleChatClient:
                 "OpenAICompatibleChatClient does not implement Gemini Interactions; "
                 "use GeminiInteractionsClient."
             )
+        if self.cache_salt is not None:
+            self.cache_salt = validate_case_cache_salt(self.cache_salt)
         self._thread_local = threading.local()
 
     def _client_kwargs(self) -> Dict[str, Any]:
@@ -154,6 +158,8 @@ class OpenAICompatibleChatClient:
             payload["chat_template_kwargs"] = dict(chat_template_kwargs)
         if thinking_token_budget is not None:
             payload["thinking_token_budget"] = int(thinking_token_budget)
+        if self.cache_salt is not None:
+            payload["cache_salt"] = self.cache_salt
         response = self._get_client().post(
             f"{base_url}/chat/completions",
             headers={
