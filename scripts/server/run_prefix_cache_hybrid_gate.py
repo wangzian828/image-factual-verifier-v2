@@ -186,6 +186,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--deploy", type=Path, required=True)
     parser.add_argument("--source-code", type=Path, required=True)
+    parser.add_argument("--source-commit", required=True)
     args = parser.parse_args()
     os.umask(0o077)
     deploy = args.deploy.resolve()
@@ -198,7 +199,7 @@ def main() -> None:
             "pgid": os.getpgid(0),
             "command": [sys.executable, *sys.argv],
             "started_unix": time.time(),
-            "commit": "3508fd5",
+            "commit": args.source_commit,
         },
     )
     running = active_agent_processes()
