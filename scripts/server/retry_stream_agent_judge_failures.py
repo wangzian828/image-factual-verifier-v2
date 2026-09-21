@@ -83,8 +83,14 @@ class TailRepair:
                 raise ValueError(f"failure receipt case identity mismatch: {directory}")
             self.failure_rows[case_id] = failure
         binding = {
-            "schema_version": "ifv-streaming-agent-judge-tail-repair-v1",
-            "judge_binding": stat_identity(self.judge.output / "binding.json"),
+            "schema_version": "ifv-streaming-agent-judge-tail-repair-v2",
+            # StreamingJudge validates and rewrites an identical small binding
+            # during initialization.  Bind to its contents, not its resulting
+            # mtime, so a credential-free preflight cannot invalidate a safe
+            # retry before any provider request was sent.
+            "judge_binding": json.loads(
+                (self.judge.output / "binding.json").read_text(encoding="utf-8")
+            ),
             "source_model": args.source_model,
             "judge_model": args.judge_model,
             "thinking_level": args.thinking_level,
@@ -93,7 +99,7 @@ class TailRepair:
             "case_ids": sorted(self.failure_rows),
             "large_payload_hashing": False,
         }
-        binding_path = self.judge.output / "tail-repair-binding.json"
+        binding_path = self.judge.output / "tail-repair-binding-v2.json"
         if binding_path.exists() and json.loads(binding_path.read_text(encoding="utf-8")) != binding:
             raise ValueError("judge tail-repair binding changed")
         atomic_json(binding_path, binding)
