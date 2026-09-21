@@ -34,6 +34,7 @@ def test_qwen_local_extract_model_is_explicitly_receipted(monkeypatch):
     assert extract[0]["model"] == "ifv-sft3-under-test"
     assert extract[0]["status"] == "success"
     assert extract[0]["thinking_enabled"] is False
+    assert extract[0]["thinking_token_budget"] is None
 
 
 def test_qwen_local_extract_model_never_falls_back_to_gemini(monkeypatch):

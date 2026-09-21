@@ -41,7 +41,8 @@ def test_extract_protocol_requires_qwen_local_and_exact_model(tmp_path):
                                     "provider": "qwen_local",
                                     "model": "policy-under-test",
                                     "status": "success",
-                                    "thinking_enabled": False,
+                                    "thinking_enabled": True,
+                                    "thinking_token_budget": 2048,
                                 }
                             ]
                         }
