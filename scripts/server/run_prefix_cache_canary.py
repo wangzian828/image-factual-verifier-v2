@@ -209,11 +209,21 @@ def growing_payload(initial: dict[str, Any], response: dict[str, Any]) -> dict[s
 def response_signature(response: dict[str, Any]) -> dict[str, Any]:
     choice = response["choices"][0]
     message = choice.get("message") or {}
+    tool_calls = [
+        {
+            "type": call.get("type"),
+            "function": call.get("function"),
+        }
+        for call in (message.get("tool_calls") or [])
+    ]
     return {
         "finish_reason": choice.get("finish_reason"),
         "content": message.get("content"),
         "reasoning": message.get("reasoning") or message.get("reasoning_content"),
-        "tool_calls": message.get("tool_calls"),
+        # vLLM generates a fresh opaque call ID for every response.  It is not
+        # model output and must not turn a deterministic cache probe into a
+        # false mismatch.
+        "tool_calls": tool_calls,
         "token_ids": choice.get("token_ids") or response.get("token_ids"),
     }
 
