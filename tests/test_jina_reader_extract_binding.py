@@ -33,6 +33,7 @@ def test_qwen_local_extract_model_is_explicitly_receipted(monkeypatch):
     assert extract[0]["provider"] == "qwen_local"
     assert extract[0]["model"] == "ifv-sft3-under-test"
     assert extract[0]["status"] == "success"
+    assert extract[0]["thinking_enabled"] is False
 
 
 def test_qwen_local_extract_model_never_falls_back_to_gemini(monkeypatch):
@@ -46,3 +47,11 @@ def test_qwen_local_extract_model_never_falls_back_to_gemini(monkeypatch):
 
     with pytest.raises(RuntimeError, match="qwen_local page extraction requires"):
         client.resolved_extract_model()
+
+
+def test_qwen_local_extract_thinking_contract_is_explicit(monkeypatch):
+    monkeypatch.setenv("BROWSE_EXTRACT_PROVIDER", "qwen_local")
+    monkeypatch.setenv("BROWSE_EXTRACT_ENABLE_THINKING", "true")
+    monkeypatch.setenv("BROWSE_EXTRACT_THINKING_TOKEN_BUDGET", "2048")
+    client = JinaReaderClient()
+    assert client.extract_thinking_config() == (True, 2048)

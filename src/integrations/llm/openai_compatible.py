@@ -78,11 +78,16 @@ class OpenAICompatibleChatClient:
         temperature: float = 0.0,
         response_schema: Optional[Dict[str, Any]] = None,
         chat_template_kwargs: Optional[Dict[str, Any]] = None,
+        thinking_token_budget: Optional[int] = None,
     ) -> str:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
                 if self.wire_api == "responses":
+                    if thinking_token_budget is not None:
+                        raise ValueError(
+                            "thinking_token_budget is only supported by chat_completions"
+                        )
                     return self._create_responses_json_completion(
                         model_name=model_name,
                         messages=messages,
@@ -98,6 +103,7 @@ class OpenAICompatibleChatClient:
                         temperature=temperature,
                         response_schema=response_schema,
                         chat_template_kwargs=chat_template_kwargs,
+                        thinking_token_budget=thinking_token_budget,
                     )
                 raise RuntimeError(f"Unsupported wire API at runtime: {self.wire_api}")
             except httpx.HTTPStatusError as exc:
@@ -121,6 +127,7 @@ class OpenAICompatibleChatClient:
         temperature: float,
         response_schema: Optional[Dict[str, Any]],
         chat_template_kwargs: Optional[Dict[str, Any]],
+        thinking_token_budget: Optional[int],
     ) -> str:
         if not self.api_key:
             raise RuntimeError("LLM API key is not set.")
@@ -145,6 +152,8 @@ class OpenAICompatibleChatClient:
         }
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = dict(chat_template_kwargs)
+        if thinking_token_budget is not None:
+            payload["thinking_token_budget"] = int(thinking_token_budget)
         response = self._get_client().post(
             f"{base_url}/chat/completions",
             headers={

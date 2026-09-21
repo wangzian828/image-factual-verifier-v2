@@ -40,6 +40,8 @@ def test_extract_protocol_requires_qwen_local_and_exact_model(tmp_path):
                                     "kind": "page_extract",
                                     "provider": "qwen_local",
                                     "model": "policy-under-test",
+                                    "status": "success",
+                                    "thinking_enabled": False,
                                 }
                             ]
                         }

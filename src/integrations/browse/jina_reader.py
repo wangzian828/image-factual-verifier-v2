@@ -299,6 +299,23 @@ class JinaReaderClient:
             f"page extraction requires an explicit model for provider {provider!r}"
         )
 
+    def extract_thinking_config(self) -> tuple[bool, Optional[int]]:
+        """Resolve the explicit Qwen page-extraction thinking contract."""
+        if self.extract_provider not in {"qwen_local", "lmdeploy"}:
+            return False, None
+        raw = os.getenv("BROWSE_EXTRACT_ENABLE_THINKING", "0").strip().lower()
+        if raw not in {"0", "1", "false", "true", "no", "yes"}:
+            raise ValueError("BROWSE_EXTRACT_ENABLE_THINKING must be boolean")
+        enabled = raw in {"1", "true", "yes"}
+        if not enabled:
+            return False, None
+        budget = int(os.getenv("BROWSE_EXTRACT_THINKING_TOKEN_BUDGET", "2048"))
+        if not 1 <= budget <= 8192:
+            raise ValueError(
+                "BROWSE_EXTRACT_THINKING_TOKEN_BUDGET must be in [1, 8192]"
+            )
+        return True, budget
+
     def close(self) -> None:
         """Close the shared Gemini extraction transport, if it was started."""
 
@@ -544,6 +561,7 @@ class JinaReaderClient:
                         "kind": "page_extract",
                         "provider": self.extract_provider,
                         "model": self.resolved_extract_model(),
+                        "thinking_enabled": self.extract_thinking_config()[0],
                         "status": "error",
                         "request_count": 1,
                         "duration_ms": extract_duration_ms,
@@ -595,6 +613,7 @@ class JinaReaderClient:
                     "kind": "page_extract",
                     "provider": self.extract_provider,
                     "model": self.resolved_extract_model(),
+                    "thinking_enabled": self.extract_thinking_config()[0],
                     "status": "success",
                     "request_count": 1,
                     "duration_ms": extract_duration_ms,
@@ -1698,6 +1717,7 @@ class JinaReaderClient:
         provider = self.extract_provider
         wire_api = resolve_model_wire_api(provider, self.extract_wire_api)
         model_name = self.resolved_extract_model()
+        thinking_enabled, thinking_budget = self.extract_thinking_config()
         max_output_tokens = max(
             1,
             int(
@@ -1739,6 +1759,12 @@ class JinaReaderClient:
                     EXTRACT_SCHEMA,
                     require_all_properties=True,
                 ),
+                chat_template_kwargs=(
+                    {"enable_thinking": thinking_enabled}
+                    if provider in {"qwen_local", "lmdeploy"}
+                    else None
+                ),
+                thinking_token_budget=thinking_budget,
                 messages=[
                     {"role": "system", "content": EXTRACT_PROMPT},
                     {

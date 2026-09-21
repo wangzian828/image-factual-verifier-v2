@@ -388,6 +388,7 @@ def runtime_environment(source_code: Path, profile_model: str) -> dict[str, str]
         BROWSE_EXTRACT_BASE_URL=f"http://127.0.0.1:{GATEWAY_PORT}/v1",
         BROWSE_EXTRACT_API_KEY="none",
         BROWSE_EXTRACT_WIRE_API="chat_completions",
+        BROWSE_EXTRACT_ENABLE_THINKING="0",
         QWEN_UNIFIED_REACT_MAX_OUTPUT_TOKENS="32768",
         QWEN_UNIFIED_REACT_THINKING_TOKEN_BUDGET="8192",
         QWEN_UNIFIED_JUDGMENT_MAX_OUTPUT_TOKENS="32768",
@@ -458,12 +459,21 @@ def extraction_protocol_report(
         for extract in extracts:
             provider = str(extract.get("provider") or "")
             model = str(extract.get("model") or "")
-            if provider != "qwen_local" or model != expected_model:
+            status = str(extract.get("status") or "")
+            thinking_enabled = extract.get("thinking_enabled")
+            if (
+                provider != "qwen_local"
+                or model != expected_model
+                or status != "success"
+                or thinking_enabled is not False
+            ):
                 mismatches.append(
                     {
                         "case_id": case_id,
                         "provider": provider,
                         "model": model,
+                        "status": status,
+                        "thinking_enabled": str(thinking_enabled),
                     }
                 )
         records.append(
@@ -691,6 +701,7 @@ def evaluate_model(
         "formal_denominator": FORMAL_DENOMINATOR,
         "page_extract_provider": "qwen_local",
         "page_extract_model": profile_model,
+        "page_extract_thinking_enabled": False,
         "judge_model": "gemini-3.7-flash",
         "judge_submission": "per_case_immediately_after_durable_agent_result",
         "output_tokens": 32768,
@@ -796,20 +807,20 @@ def main() -> None:
             "ifv-qwen3.5-9b-sft3084-selfextract",
             ROOT / "exports/h20-sft-merged4872-3epoch-step3084-20260915/model",
             ROOT
-            / "evaluation/qwen35-sft3084-agent-full1526-selfextract-20260921-v1",
+            / "evaluation/qwen35-sft3084-agent-full1526-selfextract-20260921-v2",
         ),
         (
             "sft3-psd",
             "ifv-qwen3.5-9b-sft3084-psd-smallbank4095-selfextract",
             ROOT / "exports/qwen35-psd-smallbank4095-merged-20260921-v1/model",
             ROOT
-            / "evaluation/qwen35-psd-smallbank4095-agent-full1526-selfextract-20260921-v1",
+            / "evaluation/qwen35-psd-smallbank4095-agent-full1526-selfextract-20260921-v2",
         ),
         (
             "base",
             "ifv-qwen3.5-9b-base-selfextract",
             ROOT / "models/Qwen3.5-9B-local",
-            ROOT / "evaluation/qwen35-base-agent-full1526-selfextract-20260921-v1",
+            ROOT / "evaluation/qwen35-base-agent-full1526-selfextract-20260921-v2",
         ),
     )
     session = ServiceSession(deploy)
