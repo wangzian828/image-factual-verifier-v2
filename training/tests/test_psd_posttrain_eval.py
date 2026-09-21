@@ -3,6 +3,7 @@ import json
 from scripts.server.control_psd_posttrain_eval import (
     MODEL_ALIAS,
     adapter_command,
+    merged_command,
     smoke_anomaly_report,
 )
 
@@ -19,6 +20,20 @@ def test_adapter_command_binds_lora_and_uses_formal_tool_parser(tmp_path):
     assert result[result.index("--lora-modules") + 1] == f"{MODEL_ALIAS}={adapter}"
     assert "--enable-tower-connector-lora" in result
     assert "scripts.server.psd_qwen_thinking:PSDThinkingBudget" in result
+
+
+def test_merged_command_uses_standalone_policy_without_lora(tmp_path):
+    merged = tmp_path / "merged"
+    command = ["python", "vllm", "serve", "base-model", "--served-model-name", MODEL_ALIAS,
+        "--tool-call-parser", "ifv_psd_qwen3_single", "--tool-parser-plugin", "old.py",
+        "--enable-lora", "--lora-modules", "old=adapter"]
+    result = merged_command(command, merged)
+    assert result[3] == str(merged)
+    assert result[result.index("--served-model-name") + 1] == MODEL_ALIAS
+    assert result[result.index("--tool-call-parser") + 1] == "qwen3_coder"
+    assert "--enable-lora" not in result
+    assert "--lora-modules" not in result
+    assert "--tool-parser-plugin" not in result
 
 
 def _write_smoke(tmp_path, *, report="Normal grounded report.", finish="stop", repeats=1):

@@ -26,7 +26,14 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _source_identity(base_model: Path, adapter: Path) -> dict[str, Any]:
+def stat_identity(path: Path) -> dict[str, Any]:
+    value = path.stat()
+    return {"bytes": value.st_size, "mtime_ns": value.st_mtime_ns}
+
+
+def _source_identity(
+    base_model: Path, adapter: Path, *, hash_large_files: bool = True
+) -> dict[str, Any]:
     base_config = base_model / "config.json"
     adapter_config = adapter / "adapter_config.json"
     adapter_weights = adapter / "adapter_model.safetensors"
@@ -38,7 +45,11 @@ def _source_identity(base_model: Path, adapter: Path) -> dict[str, Any]:
         "base_config_sha256": sha256_file(base_config),
         "adapter": str(adapter),
         "adapter_config_sha256": sha256_file(adapter_config),
-        "adapter_weights_sha256": sha256_file(adapter_weights),
+        "adapter_weights": (
+            {"sha256": sha256_file(adapter_weights)}
+            if hash_large_files else stat_identity(adapter_weights)
+        ),
+        "large_payload_hashing": hash_large_files,
     }
 
 
@@ -52,14 +63,24 @@ def _existing_export(output: Path, source: dict[str, Any]) -> dict[str, Any] | N
             return None
         for name, artifact in record["model_artifacts"].items():
             path = output / name
-            if not path.is_file() or sha256_file(path) != artifact.get("sha256"):
+            if not path.is_file():
+                return None
+            if "sha256" in artifact:
+                if sha256_file(path) != artifact["sha256"]:
+                    return None
+            elif stat_identity(path) != {
+                "bytes": artifact.get("bytes"), "mtime_ns": artifact.get("mtime_ns")
+            }:
                 return None
         return record
     except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
         return None
 
 
-def merge_for_serving(*, base_model: Path, adapter: Path, output: Path) -> dict[str, Any]:
+def merge_for_serving(
+    *, base_model: Path, adapter: Path, output: Path,
+    hash_large_files: bool = True,
+) -> dict[str, Any]:
     base_model = base_model.expanduser().resolve()
     adapter = adapter.expanduser().resolve()
     output = output.expanduser().resolve()
@@ -67,7 +88,7 @@ def merge_for_serving(*, base_model: Path, adapter: Path, output: Path) -> dict[
         raise FileNotFoundError(base_model)
     if not adapter.is_dir():
         raise FileNotFoundError(adapter)
-    source = _source_identity(base_model, adapter)
+    source = _source_identity(base_model, adapter, hash_large_files=hash_large_files)
     if output.exists():
         existing = _existing_export(output, source)
         if existing is not None:
@@ -136,10 +157,9 @@ def merge_for_serving(*, base_model: Path, adapter: Path, output: Path) -> dict[
             raise ValueError("merged export has no safetensors weights")
         artifacts: dict[str, dict[str, Any]] = {}
         for path in sorted(p for p in temporary.iterdir() if p.is_file()):
-            artifacts[path.name] = {
-                "bytes": path.stat().st_size,
-                "sha256": sha256_file(path),
-            }
+            artifacts[path.name] = stat_identity(path)
+            if hash_large_files:
+                artifacts[path.name]["sha256"] = sha256_file(path)
         record = {
             "schema_version": "ifv-merged-lora-serving-export-v1",
             "passed": True,
@@ -149,6 +169,7 @@ def merge_for_serving(*, base_model: Path, adapter: Path, output: Path) -> dict[
             "parameter_count": parameter_count,
             "adapter_parameter_count": adapter_parameters,
             "source_adapter_parameter_count": source_adapter_parameters,
+            "large_payload_hashing": hash_large_files,
             "weight_file_count": len(weight_files),
             "weight_bytes": sum(path.stat().st_size for path in weight_files),
             "elapsed_seconds": round(time.monotonic() - started, 3),
@@ -169,11 +190,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("base-model", "adapter", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--no-large-hashes", action="store_true")
     args = parser.parse_args()
     result = merge_for_serving(
         base_model=args.base_model,
         adapter=args.adapter,
         output=args.output,
+        hash_large_files=not args.no_large_hashes,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

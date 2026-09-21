@@ -22,7 +22,7 @@ import urllib.request
 
 
 ROOT = Path("/volume/ybo/wza")
-DEPLOY = ROOT / "training-artifacts/psd-posttrain-full-eval-20260921-v107"
+DEPLOY = ROOT / "training-artifacts/psd-posttrain-full-eval-20260921-v109"
 SOURCE_CODE = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91/code"
 TRAIN_STATE = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91/training-chain-state.json"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
@@ -30,6 +30,8 @@ BENCHMARK = ROOT / "evaluation/factcheck-formal1527-available1526-20260912/runti
 SMOKE_CASES = ROOT / "runs/eval/qwen35-sft1028-agent-canary4-20260914/target-case-list.txt"
 OUTPUT = ROOT / "evaluation/qwen35-psd-smallbank4095-agent-full1526-20260921-v1"
 MODEL_ALIAS = "ifv-psd-sft3084"
+BASE_MODEL = ROOT / "exports/h20-sft-merged4872-3epoch-step3084-20260915/model"
+MERGED_MODEL = ROOT / "exports/qwen35-psd-smallbank4095-merged-20260921-v1/model"
 PORTS = (19002, 19003, 19004, 19005)
 
 
@@ -112,12 +114,32 @@ def adapter_command(command: list[str], adapter: Path) -> list[str]:
     return result
 
 
+def merged_command(command: list[str], merged_model: Path) -> list[str]:
+    """Serve a statically merged policy when vLLM cannot mount hybrid LoRA."""
+    result = list(command)
+    if len(result) < 4 or result[2] != "serve" or "--served-model-name" not in result:
+        raise ValueError("unrecognized vLLM replica command")
+    for option, takes_value in (
+        ("--tool-parser-plugin", True), ("--enable-lora", False),
+        ("--max-lora-rank", True), ("--enable-tower-connector-lora", False),
+        ("--lora-modules", True),
+    ):
+        result = _remove_option(result, option, takes_value=takes_value)
+    result[3] = str(merged_model)
+    result[result.index("--served-model-name") + 1] = MODEL_ALIAS
+    if "--tool-call-parser" in result:
+        result[result.index("--tool-call-parser") + 1] = "qwen3_coder"
+    else:
+        result += ["--tool-call-parser", "qwen3_coder"]
+    return result
+
+
 def _url_json(url: str, timeout: float = 10) -> dict:
     with urllib.request.urlopen(url, timeout=timeout) as response:
         return json.loads(response.read())
 
 
-def wait_for_services(adapter: Path, timeout_seconds: int = 1200) -> None:
+def wait_for_services(model_root: Path, timeout_seconds: int = 1200) -> None:
     deadline = time.monotonic() + timeout_seconds
     last = "not checked"
     while time.monotonic() < deadline:
@@ -125,8 +147,8 @@ def wait_for_services(adapter: Path, timeout_seconds: int = 1200) -> None:
             for port in PORTS:
                 cards = _url_json(f"http://127.0.0.1:{port}/v1/models")["data"]
                 matches = [card for card in cards if card.get("id") == MODEL_ALIAS]
-                if len(matches) != 1 or Path(matches[0].get("root", "")).resolve() != adapter.resolve():
-                    raise ValueError(f"port {port} does not expose the bound PSD adapter")
+                if len(matches) != 1 or Path(matches[0].get("root", "")).resolve() != model_root.resolve():
+                    raise ValueError(f"port {port} does not expose the bound PSD model")
             health = _url_json("http://127.0.0.1:19025/health")
             if len(health.get("replicas") or []) != 4:
                 raise ValueError("gateway does not see four replicas")
@@ -134,7 +156,7 @@ def wait_for_services(adapter: Path, timeout_seconds: int = 1200) -> None:
         except (OSError, KeyError, TypeError, ValueError) as error:
             last = f"{type(error).__name__}: {error}"
             time.sleep(10)
-    raise RuntimeError(f"PSD adapter serving readiness timed out: {last}")
+    raise RuntimeError(f"PSD serving readiness timed out: {last}")
 
 
 def wait_for_idle_gateway(timeout_seconds: int = 600) -> None:
@@ -185,6 +207,60 @@ def start_adapter_serving(adapter: Path) -> dict:
             "environments": environments, "adapter_receipts": adapter_receipts}
     except Exception:
         for receipt in adapter_receipts:
+            try:
+                owner.stop(receipt)
+            except Exception:
+                pass
+        for index in sorted(stopped):
+            receipt = owner.spawn(originals[index]["command"], environments[index],
+                DEPLOY / f"failed-start-restore-{index}.log")
+            owner.save(SERVICE / f"replica-{index}.json", receipt)
+        os.kill(guard["pid"], signal.SIGCONT)
+        raise
+
+
+def merge_for_serving(adapter: Path) -> Path:
+    record = MERGED_MODEL / "merge-export.json"
+    if record.is_file():
+        value = load(record)
+        if value.get("passed") is True and value.get("large_payload_hashing") is False:
+            return MERGED_MODEL
+    script = DEPLOY / "training/scripts/h20/merge_lora_for_serving.py"
+    subprocess.run([sys.executable, str(script), "--base-model", str(BASE_MODEL),
+        "--adapter", str(adapter), "--output", str(MERGED_MODEL),
+        "--no-large-hashes"], check=True)
+    value = load(record)
+    if value.get("passed") is not True or value.get("large_payload_hashing") is not False:
+        raise RuntimeError("stat-only merged serving export failed")
+    return MERGED_MODEL
+
+
+def start_merged_serving(merged_model: Path) -> dict:
+    owner = owner_module()
+    guard = owner.load(SERVICE / "guard.json")
+    owner.checked(guard)
+    originals = [owner.load(SERVICE / f"replica-{index}.json") for index in range(4)]
+    environments = [owner.checked(receipt) for receipt in originals]
+    wait_for_idle_gateway()
+    os.kill(guard["pid"], signal.SIGSTOP)
+    stopped: list[int] = []
+    receipts: list[dict] = []
+    try:
+        def stop(index: int) -> None:
+            owner.stop(originals[index])
+            stopped.append(index)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(stop, range(4)))
+        for index in range(4):
+            receipt = owner.spawn(merged_command(originals[index]["command"], merged_model),
+                environments[index], DEPLOY / f"merged-replica-{index}.log")
+            receipts.append(receipt)
+            owner.save(DEPLOY / f"merged-replica-{index}.json", receipt)
+        wait_for_services(merged_model)
+        return {"owner": owner, "guard": guard, "originals": originals,
+            "environments": environments, "adapter_receipts": receipts}
+    except Exception:
+        for receipt in receipts:
             try:
                 owner.stop(receipt)
             except Exception:
@@ -400,9 +476,13 @@ def main() -> None:
     adapter = Path(report["adapter"]).resolve()
     context = None
     try:
-        atomic_json(DEPLOY / "state.json", {"phase": "starting_psd_adapter_serving",
-            "adapter": str(adapter)})
-        context = start_adapter_serving(adapter)
+        atomic_json(DEPLOY / "state.json", {"phase": "merging_psd_adapter_for_serving",
+            "adapter": str(adapter), "large_payload_hashing": False})
+        merged_model = merge_for_serving(adapter)
+        atomic_json(DEPLOY / "state.json", {"phase": "starting_psd_merged_serving",
+            "adapter": str(adapter), "merged_model": str(merged_model),
+            "large_payload_hashing": False})
+        context = start_merged_serving(merged_model)
         result = run_evaluation(adapter)
         atomic_json(DEPLOY / "state.json", {"phase": result["phase"],
             "success": result["success"], "expected_runnable": result["expected_runnable"],

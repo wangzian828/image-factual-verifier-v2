@@ -36,3 +36,24 @@ def test_merged_export_identity_is_content_bound(tmp_path: Path) -> None:
     assert _existing_export(output, source) == record
     (output / "model.safetensors").write_bytes(b"changed")
     assert _existing_export(output, source) is None
+
+
+def test_stat_only_identity_and_export_avoid_large_hashes(tmp_path: Path, monkeypatch) -> None:
+    base = tmp_path / "base"
+    adapter = tmp_path / "adapter"
+    output = tmp_path / "merged"
+    base.mkdir(); adapter.mkdir(); output.mkdir()
+    (base / "config.json").write_text("{}", encoding="utf-8")
+    (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+    (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+    model = output / "model.safetensors"
+    model.write_bytes(b"merged")
+    source = _source_identity(base.resolve(), adapter.resolve(), hash_large_files=False)
+    assert source["large_payload_hashing"] is False
+    record = {"passed": True, "source": source,
+        "model_artifacts": {model.name: {
+            "bytes": model.stat().st_size, "mtime_ns": model.stat().st_mtime_ns}}}
+    (output / "merge-export.json").write_text(json.dumps(record), encoding="utf-8")
+    monkeypatch.setattr("merge_lora_for_serving.sha256_file",
+        lambda path: (_ for _ in ()).throw(AssertionError(path)))
+    assert _existing_export(output, source) == record
