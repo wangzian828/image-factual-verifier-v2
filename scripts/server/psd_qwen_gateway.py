@@ -6,9 +6,12 @@ Closing the upstream connection on cancellation must still be GPU-verified.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
+import hashlib
 import json
 import logging
 import os
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 
@@ -19,10 +22,144 @@ from scripts.server import qwen_replica_gateway as base
 from scripts.server.psd_wire_capture import WireCapture
 from scripts.server.psd_raw_logprobs import SEMANTICS, validate_raw_worker_receipts
 from src.integrations.llm.prefix_cache import (
+    CASE_CACHE_SALT_PREFIX,
     CASE_ISOLATED,
     prefix_cache_mode,
     validate_case_cache_salt,
 )
+
+
+@dataclass
+class CacheDomain:
+    """One rollout's backend affinity and current safe vLLM cache domain."""
+
+    replica_index: int
+    effective_salt: str
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    prompt_tokens: int | None = None
+    rotations: int = 0
+    last_rotation_reason: str | None = None
+
+
+def prefix_cache_safety_config() -> tuple[int, int]:
+    """Return the attested hybrid block size and conservative hazard window."""
+
+    raw_block_size = os.environ.get("IFV_PREFIX_CACHE_BLOCK_SIZE")
+    if prefix_cache_mode() == CASE_ISOLATED and raw_block_size is None:
+        raise ValueError(
+            "case-isolated prefix caching requires an explicitly attested "
+            "IFV_PREFIX_CACHE_BLOCK_SIZE"
+        )
+    block_size = int(raw_block_size or "528")
+    unsafe_window = int(os.environ.get("IFV_PREFIX_CACHE_UNSAFE_WINDOW", "16"))
+    if block_size < 1:
+        raise ValueError("IFV_PREFIX_CACHE_BLOCK_SIZE must be positive")
+    if not 0 <= unsafe_window < block_size:
+        raise ValueError(
+            "IFV_PREFIX_CACHE_UNSAFE_WINDOW must be in [0, block_size)"
+        )
+    return block_size, unsafe_window
+
+
+def cache_routing_salt(payload: bytes) -> str | None:
+    """Read the validated client cache domain without changing the payload."""
+
+    if prefix_cache_mode() != CASE_ISOLATED:
+        return None
+    parsed = json.loads(payload)
+    if not isinstance(parsed, dict):
+        raise ValueError("Expected JSON object")
+    return validate_case_cache_salt(parsed.get("cache_salt"))
+
+
+def sticky_replica_index(cache_salt: str, replica_count: int) -> int:
+    """Map a private rollout salt to one stable backend without exposing it."""
+
+    if replica_count < 1:
+        raise ValueError("replica_count must be positive")
+    digest = hashlib.blake2b(cache_salt.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % replica_count
+
+
+def _domain_for(request: Request, cache_salt: str) -> CacheDomain:
+    domains = getattr(request.app.state, "cache_domains", None)
+    if domains is None:
+        domains = request.app.state.cache_domains = {}
+    domain = domains.get(cache_salt)
+    if domain is None:
+        loads = base._replica_loads()
+        minimum = min(loads)
+        candidates = [index for index, load in enumerate(loads) if load == minimum]
+        tie_break = sticky_replica_index(cache_salt, len(candidates))
+        domain = CacheDomain(
+            # Balance the first turn, then pin every later turn to that replica.
+            replica_index=candidates[tie_break],
+            effective_salt=cache_salt,
+        )
+        domains[cache_salt] = domain
+    return domain
+
+
+def _effective_payload(payload: bytes, domain: CacheDomain | None) -> bytes:
+    if domain is None:
+        return payload
+    parsed = json.loads(payload)
+    parsed["cache_salt"] = domain.effective_salt
+    return json.dumps(parsed, ensure_ascii=False, separators=(",", ":")).encode()
+
+
+def _rotate_domain(request: Request, domain: CacheDomain | None, reason: str) -> None:
+    if domain is None:
+        return
+    # Keep the original private salt as the sticky-routing key, but make every
+    # later backend request miss any state whose correctness is uncertain.
+    domain.effective_salt = validate_case_cache_salt(
+        CASE_CACHE_SALT_PREFIX + secrets.token_urlsafe(32)
+    )
+    domain.rotations += 1
+    domain.last_rotation_reason = reason
+    request.app.state.cache_salt_rotations = (
+        getattr(request.app.state, "cache_salt_rotations", 0) + 1
+    )
+    reasons = getattr(request.app.state, "cache_salt_rotation_reasons", None)
+    if reasons is None:
+        reasons = request.app.state.cache_salt_rotation_reasons = {}
+    reasons[reason] = reasons.get(reason, 0) + 1
+
+
+def _update_domain_after_response(
+    request: Request,
+    domain: CacheDomain | None,
+    response: httpx.Response,
+) -> None:
+    if domain is None:
+        return
+    if response.status_code != 200:
+        _rotate_domain(request, domain, "non_200_response")
+        return
+    try:
+        raw_prompt_tokens = (response.json().get("usage") or {})["prompt_tokens"]
+        if type(raw_prompt_tokens) is not int or raw_prompt_tokens < 1:
+            raise ValueError("prompt_tokens must be a positive integer")
+        prompt_tokens = raw_prompt_tokens
+    except (
+        AttributeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        json.JSONDecodeError,
+    ):
+        _rotate_domain(request, domain, "missing_or_invalid_prompt_tokens")
+        return
+    domain.prompt_tokens = prompt_tokens
+    block_size, unsafe_window = request.app.state.prefix_cache_safety
+    remainder = prompt_tokens % block_size
+    if 0 < remainder <= unsafe_window:
+        # A later request must not restore a hybrid GDN checkpoint produced
+        # just past the aligned block boundary.  Rotate only this rollout's
+        # effective domain; its private routing key and GPU affinity stay fixed.
+        _rotate_domain(request, domain, "hybrid_block_boundary")
 
 
 def raw_teacher_binding():
@@ -133,6 +270,11 @@ async def lifespan(app):
     app.state.deadline = gateway
     app.state.timeout_contract = {'gateway': gateway, 'model_client': client, 'stage': stage}
     app.state.post_dispatches = 0
+    app.state.cache_domains = {}
+    app.state.sticky_dispatches = 0
+    app.state.cache_salt_rotations = 0
+    app.state.cache_salt_rotation_reasons = {}
+    app.state.prefix_cache_safety = prefix_cache_safety_config()
     app.state.wire_capture = WireCapture.from_env()
     app.state.http = httpx.AsyncClient(
         transport=httpx.AsyncHTTPTransport(retries=0),
@@ -151,7 +293,8 @@ async def disconnected(request):
         await asyncio.sleep(0.1)
 
 
-async def request_once(request, path, payload):
+async def _request_once_locked(request, path, payload, domain):
+    payload = _effective_payload(payload, domain)
     capture = getattr(request.app.state, 'wire_capture', None)
     ticket = None
     if capture is not None and request.method == 'POST' and path == 'v1/chat/completions':
@@ -159,19 +302,26 @@ async def request_once(request, path, payload):
             ticket = capture.begin(payload)
         except (OSError, ValueError) as exc:
             raise HTTPException(507, 'Diagnostic capture unavailable before dispatch') from exc
-    index, replica = base._acquire_replica()
+    if domain is None:
+        index, replica = base._acquire_replica()
+    else:
+        index, replica = base._acquire_replica_at(domain.replica_index)
+        request.app.state.sticky_dispatches += 1
     if request.method == 'POST':
         request.app.state.post_dispatches = getattr(request.app.state, 'post_dispatches', 0) + 1
     upstream = asyncio.create_task(request.app.state.http.request(
         request.method, f'{replica}/{path.lstrip("/")}',
         content=payload, headers=base._forward_headers(request)))
     watcher = asyncio.create_task(disconnected(request))
+    response_observed = False
     try:
         done, _ = await asyncio.wait(
             [upstream, watcher], timeout=request.app.state.deadline,
             return_when=asyncio.FIRST_COMPLETED)
         if upstream in done:
             response = upstream.result()
+            _update_domain_after_response(request, domain, response)
+            response_observed = True
             if ticket is not None:
                 try:
                     capture.response(ticket, response.content, status_code=response.status_code, replica=replica)
@@ -190,6 +340,8 @@ async def request_once(request, path, payload):
     except httpx.TransportError as exc:
         raise HTTPException(502, 'Upstream transport failure; not retried') from exc
     finally:
+        if domain is not None and not response_observed:
+            _rotate_domain(request, domain, "incomplete_or_uncertain_request")
         for task in [upstream, watcher]:
             if not task.done():
                 task.cancel()
@@ -204,9 +356,27 @@ async def request_once(request, path, payload):
                     logging.exception('PSD diagnostic failure receipt could not be written')
 
 
+async def request_once(request, path, payload):
+    cache_salt = (
+        cache_routing_salt(payload)
+        if request.method == "POST" and path == "v1/chat/completions"
+        else None
+    )
+    domain = _domain_for(request, cache_salt) if cache_salt is not None else None
+    if domain is None:
+        return await _request_once_locked(request, path, payload, None)
+    # A rollout is sequential by protocol.  This lock fails safe if two
+    # components accidentally issue concurrent requests under the same salt.
+    async with domain.lock:
+        return await _request_once_locked(request, path, payload, domain)
+
+
 @app.get('/health')
 async def health(request: Request):
     result = await base.health(request)
+    domain_replicas = {str(index): 0 for index in range(len(base.REPLICA_URLS))}
+    for domain in request.app.state.cache_domains.values():
+        domain_replicas[str(domain.replica_index)] += 1
     result.update(protocol='isolated-psd-thinking-budget-v1',
                   timeout_contract=request.app.state.timeout_contract,
                   post_retries=0, gpu_boundary_validated=False,
@@ -214,7 +384,16 @@ async def health(request: Request):
                   public_model_alias=public_alias() or None,
                   tokenizer_endpoint='/tokenize',
                   diagnostic_token_ids=os.environ.get('PSD_DIAGNOSTIC_RETURN_TOKEN_IDS') == '1',
-                  post_dispatches=request.app.state.post_dispatches)
+                  post_dispatches=request.app.state.post_dispatches,
+                  sticky_dispatches=request.app.state.sticky_dispatches,
+                  cache_domains=len(request.app.state.cache_domains),
+                  cache_domain_replicas=domain_replicas,
+                  cache_salt_rotations=request.app.state.cache_salt_rotations,
+                  cache_salt_rotation_reasons=dict(
+                      request.app.state.cache_salt_rotation_reasons
+                  ),
+                  prefix_cache_block_size=request.app.state.prefix_cache_safety[0],
+                  prefix_cache_unsafe_window=request.app.state.prefix_cache_safety[1])
     capture = getattr(request.app.state, 'wire_capture', None)
     result['wire_capture'] = capture.status() if capture else {'enabled':False}
     return result

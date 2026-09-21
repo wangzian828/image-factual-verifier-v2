@@ -142,6 +142,118 @@ def test_case_isolated_cache_reuses_only_an_opaque_rollout_scope(
     assert other['cache_salt'] != salt
 
 
+def test_case_isolated_cache_uses_sticky_replica(gateway, monkeypatch):
+    monkeypatch.setenv('IFV_PREFIX_CACHE_MODE', 'case_isolated')
+    salt = 'ifv-case-v1-' + 'S' * 43
+    assert gateway.sticky_replica_index(salt, 4) == gateway.sticky_replica_index(salt, 4)
+    assert 0 <= gateway.sticky_replica_index(salt, 4) < 4
+
+
+def test_new_cache_domain_starts_on_a_least_loaded_replica(gateway, monkeypatch):
+    monkeypatch.setenv('IFV_PREFIX_CACHE_MODE', 'case_isolated')
+    gateway.base._inflight[:] = [3, 0]
+    request = NS(app=NS(state=NS(cache_domains={})))
+    salt = 'ifv-case-v1-' + 'L' * 43
+    domain = gateway._domain_for(request, salt)
+    assert domain.replica_index == 1
+    gateway.base._inflight[:] = [0, 0]
+
+
+def test_hybrid_hazard_rotates_effective_salt_without_changing_affinity(
+    gateway, monkeypatch
+):
+    monkeypatch.setenv('IFV_PREFIX_CACHE_MODE', 'case_isolated')
+    monkeypatch.setenv('IFV_PREFIX_CACHE_BLOCK_SIZE', '528')
+    monkeypatch.setenv('IFV_PREFIX_CACHE_UNSAFE_WINDOW', '16')
+    salt = 'ifv-case-v1-' + 'H' * 43
+
+    class Http:
+        calls = []
+
+        async def request(self, method, url, content, headers):
+            self.calls.append((url, json.loads(content)))
+            return httpx.Response(
+                200,
+                json={
+                    'choices': [{'finish_reason': 'stop', 'message': {'content': 'ok'}}],
+                    'usage': {'prompt_tokens': 532},
+                },
+            )
+
+    async def run():
+        http = Http()
+        request = Request(http)
+        request.app.state.cache_domains = {}
+        request.app.state.sticky_dispatches = 0
+        request.app.state.cache_salt_rotations = 0
+        request.app.state.cache_salt_rotation_reasons = {}
+        request.app.state.prefix_cache_safety = gateway.prefix_cache_safety_config()
+        body = json.dumps({'cache_salt': salt}).encode()
+        await gateway.request_once(request, 'v1/chat/completions', body)
+        await gateway.request_once(request, 'v1/chat/completions', body)
+        first_url, first_body = http.calls[0]
+        second_url, second_body = http.calls[1]
+        assert first_url == second_url
+        assert first_body['cache_salt'] == salt
+        assert second_body['cache_salt'] != salt
+        assert second_body['cache_salt'].startswith('ifv-case-v1-')
+        assert request.app.state.cache_salt_rotations == 2
+        assert request.app.state.cache_salt_rotation_reasons == {
+            'hybrid_block_boundary': 2
+        }
+        assert request.app.state.sticky_dispatches == 2
+        assert gateway.base._inflight == [0, 0]
+
+    asyncio.run(run())
+
+
+def test_safe_hybrid_boundary_keeps_effective_salt(gateway, monkeypatch):
+    monkeypatch.setenv('IFV_PREFIX_CACHE_MODE', 'case_isolated')
+    monkeypatch.setenv('IFV_PREFIX_CACHE_BLOCK_SIZE', '528')
+    monkeypatch.setenv('IFV_PREFIX_CACHE_UNSAFE_WINDOW', '16')
+    salt = 'ifv-case-v1-' + 'J' * 43
+    domain = gateway.CacheDomain(replica_index=0, effective_salt=salt)
+    request = NS(app=NS(state=NS(
+        prefix_cache_safety=gateway.prefix_cache_safety_config(),
+        cache_salt_rotations=0,
+        cache_salt_rotation_reasons={},
+    )))
+    response = httpx.Response(200, json={'usage': {'prompt_tokens': 545}})
+    gateway._update_domain_after_response(request, domain, response)
+    assert domain.effective_salt == salt
+    assert domain.rotations == 0
+
+
+@pytest.mark.parametrize('body', [
+    {},
+    {'usage': {}},
+    {'usage': {'prompt_tokens': True}},
+    {'usage': {'prompt_tokens': 0}},
+])
+def test_missing_prompt_usage_fails_closed_by_rotating(gateway, monkeypatch, body):
+    monkeypatch.setenv('IFV_PREFIX_CACHE_MODE', 'case_isolated')
+    monkeypatch.setenv('IFV_PREFIX_CACHE_BLOCK_SIZE', '528')
+    salt = 'ifv-case-v1-' + 'K' * 43
+    domain = gateway.CacheDomain(replica_index=0, effective_salt=salt)
+    request = NS(app=NS(state=NS(
+        prefix_cache_safety=gateway.prefix_cache_safety_config(),
+        cache_salt_rotations=0,
+        cache_salt_rotation_reasons={},
+    )))
+    gateway._update_domain_after_response(
+        request, domain, httpx.Response(200, json=body)
+    )
+    assert domain.effective_salt != salt
+    assert domain.last_rotation_reason == 'missing_or_invalid_prompt_tokens'
+
+
+def test_case_cache_requires_explicit_attested_block_size(gateway, monkeypatch):
+    monkeypatch.setenv('IFV_PREFIX_CACHE_MODE', 'case_isolated')
+    monkeypatch.delenv('IFV_PREFIX_CACHE_BLOCK_SIZE', raising=False)
+    with pytest.raises(ValueError, match='explicitly attested'):
+        gateway.prefix_cache_safety_config()
+
+
 @pytest.mark.parametrize('salt', [None, '', 'case-123', 'ifv-case-v1-' + 'x' * 42])
 def test_case_isolated_cache_fails_closed_without_valid_scope(
     gateway, monkeypatch, salt

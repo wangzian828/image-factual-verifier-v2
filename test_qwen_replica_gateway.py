@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 
 def _load_gateway(monkeypatch):
@@ -50,6 +51,22 @@ def test_qwen_gateway_sends_new_work_to_the_replica_that_drains(monkeypatch) -> 
         gateway._release_replica(index)
     gateway._release_replica(replacement[0])
     assert gateway._replica_loads() == [0, 0, 0, 0]
+
+
+def test_qwen_gateway_can_reserve_one_sticky_replica(monkeypatch) -> None:
+    gateway = _load_gateway(monkeypatch)
+
+    first = gateway._acquire_replica_at(2)
+    second = gateway._acquire_replica_at(2)
+
+    assert first == second == (2, "http://replica-2")
+    assert gateway._replica_loads() == [0, 0, 2, 0]
+    gateway._release_replica(2)
+    gateway._release_replica(2)
+    assert gateway._replica_loads() == [0, 0, 0, 0]
+
+    with pytest.raises(IndexError):
+        gateway._acquire_replica_at(4)
 
 
 def test_qwen_gateway_transport_retry_releases_failed_reservation(

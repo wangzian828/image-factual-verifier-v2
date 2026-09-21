@@ -72,6 +72,15 @@ def _acquire_replica(excluded: set[int] | None = None) -> tuple[int, str]:
     return selected, REPLICA_URLS[selected]
 
 
+def _acquire_replica_at(index: int) -> tuple[int, str]:
+    """Reserve one specific replica for a request-scoped sticky route."""
+
+    if not 0 <= index < len(REPLICA_URLS):
+        raise IndexError(f"Qwen replica index {index} is out of range")
+    _inflight[index] += 1
+    return index, REPLICA_URLS[index]
+
+
 def _release_replica(index: int) -> None:
     if _inflight[index] <= 0:
         raise RuntimeError(f"Qwen replica {index} has no in-flight reservation")

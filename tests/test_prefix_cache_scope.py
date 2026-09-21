@@ -4,6 +4,7 @@ import asyncio
 
 from src.integrations.llm.prefix_cache import (
     new_case_cache_salt,
+    new_rollout_cache_salts,
     validate_case_cache_salt,
 )
 from src.orchestrator.llm_backend import APIBackend
@@ -40,6 +41,19 @@ def test_case_scope_is_random_valid_and_not_shared(monkeypatch):
     assert validate_case_cache_salt(first) == first
     assert validate_case_cache_salt(second) == second
     assert first != second
+
+
+def test_agent_and_extractor_use_distinct_private_domains(monkeypatch):
+    monkeypatch.setenv("IFV_PREFIX_CACHE_MODE", "case_isolated")
+    agent, extractor = new_rollout_cache_salts()
+    assert validate_case_cache_salt(agent) == agent
+    assert validate_case_cache_salt(extractor) == extractor
+    assert agent != extractor
+
+
+def test_rollout_domains_are_both_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("IFV_PREFIX_CACHE_MODE", raising=False)
+    assert new_rollout_cache_salts() == (None, None)
 
 
 def test_local_backend_forwards_explicit_case_scope(monkeypatch):

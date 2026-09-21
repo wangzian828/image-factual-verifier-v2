@@ -27,7 +27,7 @@ from src.orchestrator.investigation_models import (
     RawHistoryJudgmentOutput,
 )
 from src.orchestrator.llm_backend import APIBackend
-from src.integrations.llm.prefix_cache import new_case_cache_salt
+from src.integrations.llm.prefix_cache import new_rollout_cache_salts
 from src.orchestrator.stage_runner import (
     InteractionSession,
     StageRunner,
@@ -194,9 +194,10 @@ class Orchestrator:
         self.verification_tool_limits = dict(REACT_RUNTIME_TOOL_CALL_LIMITS)
 
         # ``run_batch`` creates one Orchestrator per rollout.  In the optional
-        # canary mode this therefore stays stable across that rollout's ReAct
-        # turns and page extractions, while never crossing a case boundary.
-        rollout_cache_salt = new_case_cache_salt()
+        # Canary mode keeps each domain stable within one rollout while never
+        # crossing a case boundary. Agent and page-extractor prompt families
+        # deliberately use different private domains.
+        rollout_cache_salt, browse_cache_salt = new_rollout_cache_salts()
         self.prefix_cache_salt = (
             rollout_cache_salt
             if self.provider in {"qwen_local", "lmdeploy"}
@@ -206,7 +207,7 @@ class Orchestrator:
             "BROWSE_EXTRACT_PROVIDER", "gemini"
         ).strip().lower()
         self.browse_extract_prefix_cache_salt = (
-            rollout_cache_salt
+            browse_cache_salt
             if browse_extract_provider in {"qwen_local", "lmdeploy"}
             else None
         )

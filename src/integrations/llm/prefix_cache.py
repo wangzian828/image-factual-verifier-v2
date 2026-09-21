@@ -58,6 +58,23 @@ def new_case_cache_salt() -> Optional[str]:
     return validate_case_cache_salt(value)
 
 
+def new_rollout_cache_salts() -> tuple[Optional[str], Optional[str]]:
+    """Mint independent Agent and page-extractor cache domains.
+
+    The two prompt families have no useful common prefix.  Keeping them in
+    separate private domains also prevents one family's hybrid-state cache
+    entry from affecting the other family.
+    """
+
+    agent = new_case_cache_salt()
+    if agent is None:
+        return None, None
+    extractor = new_case_cache_salt()
+    while extractor == agent:  # Defensive even though a collision is negligible.
+        extractor = new_case_cache_salt()
+    return agent, extractor
+
+
 def validate_case_cache_salt(value: object) -> str:
     """Reject predictable, malformed, or cross-protocol cache domains."""
 
