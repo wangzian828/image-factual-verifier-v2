@@ -517,17 +517,79 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
     try:
         _write_json(manifest_path, manifest)
         workflow = VerificationWorkflow(config)
-        results = await workflow.run_batch(
-            image_paths=[str(spec["sample"]["image_path"]) for spec in rollout_specs],
-            image_ids=[str(spec["episode_id"]) for spec in rollout_specs],
-            runtime_cases=[spec["runtime_case"] for spec in rollout_specs],
-            sampling_seeds=[spec["sampling_seed"] for spec in rollout_specs],
-            concurrency=max(1, args.concurrency),
-        )
+        stream_results = os.getenv("IFV_STREAM_RUN_RESULTS", "0") == "1"
+        streamed_results: list[Dict[str, Any] | None] = [None] * len(rollout_specs)
+        result_handle = None
+        prediction_handle = None
+        if stream_results:
+            result_path = run_dir / "run_results.jsonl"
+            prediction_path = run_dir / "predictions.jsonl"
+            if result_path.exists() or prediction_path.exists():
+                raise RuntimeError("streaming result ledgers already exist")
+            result_handle = result_path.open("x", encoding="utf-8")
+            prediction_handle = prediction_path.open("x", encoding="utf-8")
+
+        def persist_result(index: int, result: Dict[str, Any]) -> None:
+            if not stream_results or result_handle is None or prediction_handle is None:
+                return
+            spec = rollout_specs[index]
+            case_id = str(spec["case_id"])
+            episode_id = str(spec["episode_id"])
+            trace_path = trace_dir / _safe_trace_filename(episode_id)
+            relative_trace = (
+                trace_path.relative_to(run_dir).as_posix()
+                if trace_path.exists()
+                else None
+            )
+            record = run_result_record(
+                spec["sample"],
+                result,
+                trace_path=relative_trace,
+                metadata=metadata_by_case.get(case_id),
+                episode_id=episode_id,
+                prompt_group_id=str(spec["prompt_group_id"]),
+                rollout_index=int(spec["rollout_index"]),
+                sampling_seed=int(spec["sampling_seed"]),
+            )
+            streamed_results[index] = record
+            result_handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            result_handle.flush()
+            os.fsync(result_handle.fileno())
+            prediction = classification_prediction(spec["sample"], result)
+            if prediction is not None and int(spec["rollout_index"]) == 0:
+                prediction_handle.write(json.dumps(prediction, ensure_ascii=False) + "\n")
+                prediction_handle.flush()
+                os.fsync(prediction_handle.fileno())
+
+        try:
+            results = await workflow.run_batch(
+                image_paths=[
+                    str(spec["sample"]["image_path"]) for spec in rollout_specs
+                ],
+                image_ids=[str(spec["episode_id"]) for spec in rollout_specs],
+                runtime_cases=[spec["runtime_case"] for spec in rollout_specs],
+                sampling_seeds=[spec["sampling_seed"] for spec in rollout_specs],
+                concurrency=max(1, args.concurrency),
+                on_result=persist_result if stream_results else None,
+            )
+        finally:
+            if result_handle is not None:
+                result_handle.close()
+            if prediction_handle is not None:
+                prediction_handle.close()
 
         run_results: list[Dict[str, Any]] = []
         predictions: list[Dict[str, Any]] = []
-        for spec, result in zip(rollout_specs, results):
+        for index, (spec, result) in enumerate(zip(rollout_specs, results)):
+            if stream_results:
+                record = streamed_results[index]
+                if record is None:
+                    raise RuntimeError("streamed result ledger is incomplete")
+                run_results.append(record)
+                prediction = classification_prediction(spec["sample"], result)
+                if prediction is not None and int(spec["rollout_index"]) == 0:
+                    predictions.append(prediction)
+                continue
             case_id = str(spec["case_id"])
             episode_id = str(spec["episode_id"])
             trace_path = trace_dir / _safe_trace_filename(episode_id)
@@ -578,8 +640,9 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
             manifest["artifacts"][
                 "baseline_case_metrics"
             ] = "baseline_case_metrics.jsonl"
-        _write_jsonl(run_dir / "run_results.jsonl", run_results)
-        _write_jsonl(run_dir / "predictions.jsonl", predictions)
+        if not stream_results:
+            _write_jsonl(run_dir / "run_results.jsonl", run_results)
+            _write_jsonl(run_dir / "predictions.jsonl", predictions)
         _write_json(run_dir / "summary.json", summary)
 
         manifest["status"] = (

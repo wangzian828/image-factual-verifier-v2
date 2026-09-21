@@ -261,6 +261,44 @@ class JinaReaderClient:
         init_tracked_sessions(self)
         atexit.register(self.close)
 
+    def resolved_extract_model(self) -> str:
+        """Return the exact model identity used by the page extractor.
+
+        ``qwen_local`` is an OpenAI-compatible transport label, not a model
+        identity. Resolve the model once and persist it in visit receipts so
+        evaluation audits can distinguish policies that share the adapter.
+        """
+        if self.extract_model:
+            return self.extract_model
+        provider = self.extract_provider
+        if provider == "lmdeploy":
+            model_name = os.getenv("LMDEPLOY_MODEL", "").strip()
+            if not model_name:
+                raise RuntimeError("lmdeploy page extraction requires LMDEPLOY_MODEL")
+            return model_name
+        if provider == "qwen_local":
+            model_name = (
+                os.getenv("QWEN_LOCAL_MODEL", "").strip()
+                or os.getenv("QWEN35_LOCAL_MODEL", "").strip()
+            )
+            if not model_name:
+                raise RuntimeError(
+                    "qwen_local page extraction requires BROWSE_EXTRACT_MODEL, "
+                    "QWEN_LOCAL_MODEL, or QWEN35_LOCAL_MODEL"
+                )
+            return model_name
+        if provider == "gemini":
+            return os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
+        if provider == "qwen":
+            return os.getenv("QWEN_MODEL", "qwen3.6-plus")
+        if provider == "necodex":
+            return "gpt-5.5"
+        if provider == "openai":
+            return "gpt-4o-mini"
+        raise RuntimeError(
+            f"page extraction requires an explicit model for provider {provider!r}"
+        )
+
     def close(self) -> None:
         """Close the shared Gemini extraction transport, if it was started."""
 
@@ -505,6 +543,7 @@ class JinaReaderClient:
                     {
                         "kind": "page_extract",
                         "provider": self.extract_provider,
+                        "model": self.resolved_extract_model(),
                         "status": "error",
                         "request_count": 1,
                         "duration_ms": extract_duration_ms,
@@ -555,6 +594,7 @@ class JinaReaderClient:
                 {
                     "kind": "page_extract",
                     "provider": self.extract_provider,
+                    "model": self.resolved_extract_model(),
                     "status": "success",
                     "request_count": 1,
                     "duration_ms": extract_duration_ms,
@@ -1657,7 +1697,7 @@ class JinaReaderClient:
     ) -> Dict[str, Any]:
         provider = self.extract_provider
         wire_api = resolve_model_wire_api(provider, self.extract_wire_api)
-        model_name = self.extract_model
+        model_name = self.resolved_extract_model()
         max_output_tokens = max(
             1,
             int(
@@ -1667,24 +1707,6 @@ class JinaReaderClient:
                 )
             ),
         )
-
-        if not model_name:
-            if provider == "lmdeploy":
-                model_name = os.getenv("LMDEPLOY_MODEL", "").strip()
-                if not model_name:
-                    raise RuntimeError(
-                        "lmdeploy page extraction requires LMDEPLOY_MODEL"
-                    )
-            elif provider == "gemini":
-                model_name = os.getenv("BROWSE_EXTRACT_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.7-flash"))
-            elif provider == "qwen":
-                model_name = os.getenv("QWEN_MODEL", "qwen3.6-plus")
-            elif provider == "necodex":
-                model_name = "gpt-5.5"
-            elif provider == "openai":
-                model_name = "gpt-4o-mini"
-            else:
-                model_name = os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
 
         if provider == "gemini":
             interaction_result = self._run_async(

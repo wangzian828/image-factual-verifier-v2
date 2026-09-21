@@ -13,7 +13,7 @@ import asyncio
 import copy
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 # Limit thread usage to prevent memory explosion
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -280,6 +280,9 @@ class VerificationWorkflow:
         runtime_cases: Optional[List[Optional[ImageOnlyRuntimeCase]]] = None,
         sampling_seeds: Optional[List[Optional[int]]] = None,
         concurrency: int = 1,
+        on_result: Optional[
+            Callable[[int, Dict[str, Any]], Optional[Awaitable[None]]]
+        ] = None,
     ) -> List[Dict[str, Any]]:
         """Run verification on multiple images.
 
@@ -348,32 +351,50 @@ class VerificationWorkflow:
                         return error_result
                     raise
 
-        tasks = [
-            _verify(path, img_id, runtime_case, sampling_seed)
-            for path, img_id, runtime_case, sampling_seed in zip(
-                image_paths,
-                image_ids,
-                runtime_cases,
-                sampling_seeds,
-            )
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Convert exceptions to error dicts
-        final = []
-        for i, r in enumerate(results):
-            if isinstance(r, Exception):
-                final.append({
-                    "image_id": image_ids[i],
-                    "image_path": image_paths[i],
+        async def _indexed(
+            index: int,
+            path: str,
+            img_id: str,
+            runtime_case: Optional[ImageOnlyRuntimeCase],
+            sampling_seed: Optional[int],
+        ) -> tuple[int, Dict[str, Any]]:
+            try:
+                value = await _verify(path, img_id, runtime_case, sampling_seed)
+            except Exception as error:
+                value = {
+                    "image_id": img_id,
+                    "image_path": path,
                     "verdict": "error",
                     "termination": "error",
-                    "error": str(r),
-                })
-            else:
-                final.append(r)
+                    "error": str(error),
+                }
+            return index, value
 
-        return final
+        tasks = [
+            asyncio.create_task(
+                _indexed(index, path, img_id, runtime_case, sampling_seed)
+            )
+            for index, (path, img_id, runtime_case, sampling_seed) in enumerate(
+                zip(image_paths, image_ids, runtime_cases, sampling_seeds)
+            )
+        ]
+        final: List[Optional[Dict[str, Any]]] = [None] * len(tasks)
+        try:
+            for task in asyncio.as_completed(tasks):
+                index, value = await task
+                final[index] = value
+                if on_result is not None:
+                    callback = on_result(index, value)
+                    if callback is not None:
+                        await callback
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        if any(value is None for value in final):
+            raise RuntimeError("batch completed without one result per input")
+        return [value for value in final if value is not None]
 
     def _save_trace(self, result: Dict[str, Any]) -> None:
         """Save the canonical verification trace to the output directory."""
