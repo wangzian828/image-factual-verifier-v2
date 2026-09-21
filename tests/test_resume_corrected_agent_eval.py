@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from scripts.server.resume_corrected_agent_eval import (
     available_wave_name,
+    validate_judge_ownership,
     validate_resume_binding,
     validate_safe_cache_off,
 )
@@ -134,3 +135,25 @@ def test_available_wave_name_preserves_interrupted_ledgers(tmp_path):
     (tmp_path / "attempt-0-resume").mkdir()
     (tmp_path / "attempt-0-resume-2-cases.txt").write_text("case\n", encoding="utf-8")
     assert available_wave_name(tmp_path, "attempt-0-resume") == "attempt-0-resume-3"
+
+
+def test_unfinished_resume_requires_exactly_one_live_judge():
+    validate_judge_ownership(durable_successes=1000, judges=[123])
+    for judges in ([], [123, 456]):
+        try:
+            validate_judge_ownership(durable_successes=1000, judges=judges)
+        except RuntimeError as error:
+            assert "one preserved SFT judge" in str(error)
+        else:
+            raise AssertionError("unfinished inference accepted invalid judge ownership")
+
+
+def test_completed_resume_allows_exited_judge_but_not_duplicates():
+    validate_judge_ownership(durable_successes=1526, judges=[])
+    validate_judge_ownership(durable_successes=1526, judges=[123])
+    try:
+        validate_judge_ownership(durable_successes=1526, judges=[123, 456])
+    except RuntimeError as error:
+        assert "at most one" in str(error)
+    else:
+        raise AssertionError("completed inference accepted duplicate judges")

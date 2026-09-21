@@ -73,6 +73,17 @@ def matching_judges(output: Path) -> list[int]:
     return sorted(matches)
 
 
+def validate_judge_ownership(*, durable_successes: int, judges: list[int]) -> None:
+    """Require live streaming ownership only while inference is unfinished."""
+
+    if durable_successes < EXPECTED_RUNNABLE:
+        if len(judges) != 1:
+            raise RuntimeError(f"expected one preserved SFT judge, found {judges}")
+        return
+    if len(judges) > 1:
+        raise RuntimeError(f"expected at most one completed-SFT judge, found {judges}")
+
+
 def validate_resume_binding(output: Path) -> dict[str, Any]:
     binding = load(output / "binding.json")
     required = {
@@ -137,14 +148,13 @@ def resume_sft(
     *, deploy: Path, source_code: Path, output: Path
 ) -> dict[str, Any]:
     validate_resume_binding(output)
-    judges = matching_judges(output)
-    if len(judges) != 1:
-        raise RuntimeError(f"expected one preserved SFT judge, found {judges}")
     expected = [str(row["case_id"]) for row in rows(BENCHMARK)]
     if len(expected) != EXPECTED_RUNNABLE or len(set(expected)) != EXPECTED_RUNNABLE:
         raise ValueError("frozen runnable cohort is not 1526 unique cases")
     environment = runtime_environment(source_code, SFT_PROFILE_MODEL)
     initial = successful(output)
+    judges = matching_judges(output)
+    validate_judge_ownership(durable_successes=len(initial), judges=judges)
     if not set(SMOKE_CASES) <= set(initial):
         raise ValueError("preserved output lost a protocol smoke success")
     if len(initial) < len(SMOKE_CASES):
@@ -155,7 +165,8 @@ def resume_sft(
             "schema_version": "ifv-corrected-agent-resume-v1",
             "output": str(output),
             "durable_successes_before_resume": len(initial),
-            "judge_pid": judges[0],
+            "judge_pid": judges[0] if judges else None,
+            "judge_required_for_resume": len(initial) < EXPECTED_RUNNABLE,
             "original_attempt": "attempt-0",
             "original_base_sampling_seed": 2903,
             "large_payload_hashing": False,
