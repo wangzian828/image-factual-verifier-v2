@@ -22,7 +22,7 @@ import urllib.request
 
 
 ROOT = Path("/volume/ybo/wza")
-DEPLOY = ROOT / "training-artifacts/psd-posttrain-full-eval-20260921-v110"
+DEPLOY = ROOT / "training-artifacts/psd-posttrain-full-eval-20260921-v111"
 SOURCE_CODE = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91/code"
 TRAIN_STATE = ROOT / "training-artifacts/psd-lightweight-recovery-20260920-v91/training-chain-state.json"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
@@ -34,6 +34,8 @@ PROFILE_MODEL = "ifv-qwen3.5-9b-sft3084-psd-smallbank4095"
 BASE_MODEL = ROOT / "exports/h20-sft-merged4872-3epoch-step3084-20260915/model"
 MERGED_MODEL = ROOT / "exports/qwen35-psd-smallbank4095-merged-20260921-v1/model"
 PORTS = (19002, 19003, 19004, 19005)
+GATEWAY_PORT = "19025"
+SMOKE_ATTEMPT_NAMES = ("smoke", "smoke-budget-recovery-v2", "smoke-infra-recovery-v3")
 
 
 def atomic_json(path: Path, value: object) -> None:
@@ -171,6 +173,74 @@ def wait_for_idle_gateway(timeout_seconds: int = 600) -> None:
             pass
         time.sleep(5)
     raise RuntimeError("serving gateway did not become idle")
+
+
+def _gateway_process() -> tuple[int, list[str], dict[str, str], str]:
+    """Capture the sole frozen gateway without persisting its environment."""
+    matches: list[tuple[int, list[str]]] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            command = [part.decode(errors="surrogateescape") for part in
+                (entry / "cmdline").read_bytes().split(b"\0") if part]
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        if ("scripts.server.psd_qwen_gateway:app" in command and "--port" in command
+                and command[command.index("--port") + 1] == GATEWAY_PORT):
+            matches.append((int(entry.name), command))
+    if len(matches) != 1:
+        raise RuntimeError(f"expected one PSD gateway, found {len(matches)}")
+    pid, command = matches[0]
+    if os.getpgid(pid) != pid:
+        raise RuntimeError("PSD gateway is not its process-group owner")
+    raw_environment = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0")
+    environment: dict[str, str] = {}
+    for item in raw_environment:
+        if not item or b"=" not in item:
+            continue
+        key, value = item.split(b"=", 1)
+        environment[key.decode(errors="surrogateescape")] = value.decode(errors="surrogateescape")
+    cwd = os.readlink(Path("/proc") / str(pid) / "cwd")
+    return pid, command, environment, cwd
+
+
+def restart_gateway() -> dict:
+    """Clear stale HTTP pools after swapping all four backend processes."""
+    pid, command, environment, cwd = _gateway_process()
+    os.killpg(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and Path(f"/proc/{pid}").exists():
+        time.sleep(0.5)
+    if Path(f"/proc/{pid}").exists():
+        raise RuntimeError("PSD gateway did not stop after SIGTERM")
+    log_path = DEPLOY / "fresh-gateway.log"
+    with log_path.open("xb") as log:
+        process = subprocess.Popen(command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    receipt = {"schema_version": "ifv-psd-fresh-gateway-v1", "old_pid": pid,
+        "pid": process.pid, "pgid": os.getpgid(process.pid), "port": int(GATEWAY_PORT),
+        "reason": "clear stale HTTP connection pool after backend service swap",
+        "environment_persisted": False, "large_payload_hashing": False,
+        "started_at": time.time()}
+    if receipt["pgid"] != process.pid:
+        raise RuntimeError("fresh PSD gateway is not its process-group owner")
+    atomic_json(DEPLOY / "fresh-gateway.json", receipt)
+    deadline = time.monotonic() + 120
+    last = "not checked"
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"fresh PSD gateway exited with {process.returncode}")
+        try:
+            health = _url_json(f"http://127.0.0.1:{GATEWAY_PORT}/health")
+            replicas = health.get("replicas") or []
+            if len(replicas) == 4 and all(row.get("healthy") is True for row in replicas):
+                return receipt
+            last = f"replicas={len(replicas)}"
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            last = f"{type(error).__name__}: {error}"
+        time.sleep(2)
+    raise RuntimeError(f"fresh PSD gateway readiness timed out: {last}")
 
 
 def owner_module():
@@ -335,15 +405,28 @@ def successful(directory: Path) -> dict[str, dict]:
     return result
 
 
-def smoke_directory(output: Path) -> Path:
-    """Preserve a completed failed smoke and use one bounded recovery name."""
-    original = output / "smoke"
-    if not (original / "summary.json").is_file():
-        return original
-    rows_path = original / "run_results.jsonl"
-    if rows_path.is_file() and successful(original):
-        return original
-    return output / "smoke-budget-recovery-v2"
+def collected_smoke_successes(output: Path) -> dict[str, tuple[dict, Path]]:
+    """Reuse terminal smoke successes across bounded engineering recoveries."""
+    selected: dict[str, tuple[dict, Path]] = {}
+    for name in SMOKE_ATTEMPT_NAMES:
+        directory = output / name
+        if not directory.exists():
+            continue
+        if not (directory / "summary.json").is_file():
+            raise RuntimeError(f"interrupted smoke attempt is preserved: {directory}")
+        for case, row in successful(directory).items():
+            if case in selected:
+                raise ValueError(f"successful smoke case was resampled: {case}")
+            selected[case] = (row, directory)
+    return selected
+
+
+def next_smoke_directory(output: Path) -> Path | None:
+    for name in SMOKE_ATTEMPT_NAMES:
+        directory = output / name
+        if not directory.exists():
+            return directory
+    return None
 
 
 def run_attempt(directory: Path, cases: list[str], *, concurrency: int, seed: int,
@@ -383,16 +466,16 @@ def _looks_garbled(text: str) -> bool:
     return longest >= 80
 
 
-def smoke_anomaly_report(directory: Path, expected: list[str]) -> dict:
-    selected = successful(directory)
+def smoke_anomaly_report(selected: dict[str, tuple[dict, Path]], expected: list[str]) -> dict:
     records: list[dict] = []
     for case in expected:
-        row = selected.get(case)
+        item = selected.get(case)
         issues: list[str] = []
-        if row is None:
+        if item is None:
             issues.append("no_terminal_success")
             records.append({"case_id": case, "issues": issues})
             continue
+        row, directory = item
         report = str(row.get("fact_check_report") or "").strip()
         if _looks_garbled(report):
             issues.append("empty_or_garbled_report")
@@ -448,17 +531,27 @@ def run_evaluation(adapter: Path) -> dict:
         raise ValueError("posttrain evaluation binding changed")
     atomic_json(binding_path, binding)
     environment = runtime_environment()
-    smoke = smoke_directory(OUTPUT)
-    run_attempt(smoke, smoke_ids, concurrency=4, seed=1903, environment=environment)
-    audit = smoke_anomaly_report(smoke, smoke_ids)
-    report_path = OUTPUT / (smoke.name + "-anomaly-report.json")
+    selected_smoke = collected_smoke_successes(OUTPUT)
+    pending_smoke = [case for case in smoke_ids if case not in selected_smoke]
+    if pending_smoke:
+        smoke = next_smoke_directory(OUTPUT)
+        if smoke is None:
+            raise RuntimeError("bounded smoke recovery attempts are exhausted")
+        previous = [OUTPUT / name for name in SMOKE_ATTEMPT_NAMES
+            if (OUTPUT / name / "summary.json").is_file()]
+        run_attempt(smoke, pending_smoke, concurrency=4, seed=3903,
+            environment=environment, resume_from=previous[-1] if previous else None)
+        selected_smoke = collected_smoke_successes(OUTPUT)
+    audit = smoke_anomaly_report(selected_smoke, smoke_ids)
+    report_path = OUTPUT / "smoke-combined-anomaly-report.json"
     atomic_json(report_path, audit)
     if not audit["passed"]:
         atomic_json(DEPLOY / "state.json", {"phase": "smoke_failed_requires_inspection",
             "report": str(report_path)})
         raise RuntimeError("PSD posttrain anomaly smoke did not pass")
-    selected: dict[str, dict] = successful(smoke)
-    attempts = [smoke]
+    selected: dict[str, dict] = {case: item[0] for case, item in selected_smoke.items()}
+    attempts = [OUTPUT / name for name in SMOKE_ATTEMPT_NAMES
+        if (OUTPUT / name / "summary.json").is_file()]
     for attempt, concurrency in enumerate((32, 24, 16, 8)):
         pending = [case for case in expected if case not in selected]
         if not pending:
@@ -499,6 +592,9 @@ def main() -> None:
             "adapter": str(adapter), "merged_model": str(merged_model),
             "large_payload_hashing": False})
         context = start_merged_serving(merged_model)
+        atomic_json(DEPLOY / "state.json", {"phase": "restarting_gateway_for_psd_eval",
+            "reason": "clear stale backend connection pool", "large_payload_hashing": False})
+        restart_gateway()
         result = run_evaluation(adapter)
         atomic_json(DEPLOY / "state.json", {"phase": result["phase"],
             "success": result["success"], "expected_runnable": result["expected_runnable"],
