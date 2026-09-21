@@ -61,16 +61,42 @@ def unresolved_failed_directories(judge: StreamingJudge) -> list[Path]:
     )
 
 
+def retryable_503_directories(directories: list[Path]) -> list[Path]:
+    """Select only confirmed provider rejections; timeouts may be ambiguous."""
+    result: list[Path] = []
+    for directory in directories:
+        failure = json.loads((directory / "failed.json").read_text(encoding="utf-8"))
+        if (
+            failure.get("error_type") == "GeminiInteractionsHTTPError"
+            and "HTTP 503" in str(failure.get("error") or "")
+        ):
+            result.append(directory)
+    return result
+
+
 class TailRepair:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.judge = StreamingJudge(args)
         discovered = self.judge.discover()
-        if len(discovered) != args.expected_count:
+        expected_agent_successes = (
+            args.expected_agent_successes
+            if args.expected_agent_successes is not None
+            else args.expected_count
+        )
+        if len(discovered) != expected_agent_successes:
             raise ValueError(
-                f"expected {args.expected_count} successful Agent traces, found {len(discovered)}"
+                f"expected {expected_agent_successes} successful Agent traces, found {len(discovered)}"
             )
-        self.failures = unresolved_failed_directories(self.judge)
+        self.all_failures = unresolved_failed_directories(self.judge)
+        if (
+            args.expected_total_failures is not None
+            and len(self.all_failures) != args.expected_total_failures
+        ):
+            raise ValueError(
+                f"expected {args.expected_total_failures} total judge failures, found {len(self.all_failures)}"
+            )
+        self.failures = retryable_503_directories(self.all_failures)
         if len(self.failures) != args.expected_failures:
             raise ValueError(
                 f"expected {args.expected_failures} unresolved judge failures, found {len(self.failures)}"
@@ -96,6 +122,9 @@ class TailRepair:
             "thinking_level": args.thinking_level,
             "max_output_tokens": args.max_output_tokens,
             "expected_failures": args.expected_failures,
+            "expected_agent_successes": expected_agent_successes,
+            "expected_total_failures": args.expected_total_failures,
+            "excluded_non_503_failures": len(self.all_failures) - len(self.failures),
             "case_ids": sorted(self.failure_rows),
             "large_payload_hashing": False,
         }
@@ -207,6 +236,7 @@ class TailRepair:
             "final_records": len(records),
             "agent_missing_or_failed": len(self.judge.expected) - len(self.judge.success_rows),
             "historical_failed_attempts_preserved": len(self.failures),
+            "non_503_prior_failures_preserved": len(self.all_failures) - len(self.failures),
             "tail_retry_outcomes": outcomes,
             "large_payload_hashing": False,
         }
@@ -239,6 +269,8 @@ def main() -> None:
     parser.add_argument("--max-output-tokens", type=int, default=32768)
     parser.add_argument("--concurrency", type=int, default=5)
     parser.add_argument("--expected-failures", type=int, required=True)
+    parser.add_argument("--expected-total-failures", type=int)
+    parser.add_argument("--expected-agent-successes", type=int)
     args = parser.parse_args()
     if not 1 <= args.concurrency <= args.expected_failures:
         parser.error("concurrency must be within the bounded failed-case count")

@@ -5,6 +5,7 @@ import pytest
 
 from scripts.server.retry_stream_agent_judge_failures import (
     retryable_failure,
+    retryable_503_directories,
     unresolved_failed_directories,
 )
 
@@ -56,3 +57,11 @@ def test_unresolved_failures_excludes_repaired_cases(tmp_path: Path) -> None:
     make_failed(second)
     write(second / "result.json", {"status": "completed"})
     assert unresolved_failed_directories(Judge()) == [first]
+
+
+def test_retryable_subset_excludes_ambiguous_timeout(tmp_path: Path) -> None:
+    rejected = tmp_path / "rejected"
+    timeout = tmp_path / "timeout"
+    make_failed(rejected)
+    make_failed(timeout, error_type="ReadTimeout", error="")
+    assert retryable_503_directories([rejected, timeout]) == [rejected]
