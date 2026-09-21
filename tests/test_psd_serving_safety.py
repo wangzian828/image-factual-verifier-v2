@@ -404,11 +404,19 @@ def test_gateway_cancels_upstream_and_releases_reservation(gateway, mode):
 
 
 def test_gateway_success_returns_original_body(gateway):
+    class Response(httpx.Response):
+        closed_by_gateway = False
+
+        async def aclose(self):
+            self.closed_by_gateway = True
+            await super().aclose()
+
     class Http:
         async def request(self, *args, **kwargs):
-            return httpx.Response(200, content=b'{"exact":true}')
+            return Response(200, content=b'{"exact":true}')
     result = asyncio.run(gateway.request_once(Request(Http()), 'v1/chat/completions', b'{}'))
     assert result.content == b'{"exact":true}'
+    assert result.closed_by_gateway is True
     assert gateway.base._inflight == [0, 0]
 
 

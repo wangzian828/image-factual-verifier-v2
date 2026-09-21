@@ -314,6 +314,7 @@ async def _request_once_locked(request, path, payload, domain):
         content=payload, headers=base._forward_headers(request)))
     watcher = asyncio.create_task(disconnected(request))
     response_observed = False
+    response = None
     try:
         done, _ = await asyncio.wait(
             [upstream, watcher], timeout=request.app.state.deadline,
@@ -348,6 +349,17 @@ async def _request_once_locked(request, path, payload, domain):
         try:
             await asyncio.gather(upstream, watcher, return_exceptions=True)
         finally:
+            # ``AsyncClient.request`` buffers the body, so callers can still
+            # consume ``response.content`` after this close.  Explicitly
+            # release the upstream response here: relying on response-object
+            # collection left vLLM sockets in CLOSE_WAIT under concurrent
+            # non-streaming Agent traffic and could strand the downstream
+            # request after generation had already finished.
+            if response is not None:
+                try:
+                    await response.aclose()
+                except Exception:
+                    logging.exception('PSD upstream response close failed')
             base._release_replica(index)
             if ticket is not None and not (ticket/'response-meta.json').exists() and not (ticket/'error.json').exists():
                 try:
