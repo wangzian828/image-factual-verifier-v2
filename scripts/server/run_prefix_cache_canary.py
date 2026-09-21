@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import time
 from typing import Any
 import urllib.request
@@ -414,6 +415,15 @@ def main() -> None:
     source_code = args.source_code.resolve()
     deploy.mkdir(parents=True, exist_ok=True)
     state_path = deploy / "state.json"
+    atomic_json(
+        deploy / "process.json",
+        {
+            "pid": os.getpid(),
+            "pgid": os.getpgid(0),
+            "command": [sys.executable, *sys.argv],
+            "started_unix": time.time(),
+        },
+    )
     owner = owner_module()
     guard = load(SERVICE / "guard.json")
     owner.checked(guard)
