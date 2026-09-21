@@ -27,6 +27,7 @@ from scripts.server.control_corrected_agent_eval import (
     load,
     rows,
     run_attempt,
+    restart_gateway,
     runtime_environment,
     successful,
     wait_for_services,
@@ -225,6 +226,11 @@ def main() -> None:
         ),
     )
     session = ServiceSession(deploy)
+    # The cache gate deliberately leaves its tested gateway active.  Refresh
+    # only that lightweight proxy from this immutable source snapshot so the
+    # formal run also gets post-test transport fixes without restarting the
+    # four validated vLLM replicas or discarding their prefix caches.
+    restart_gateway(deploy, "resume-source", source_code=source_code)
     validate_safe_cache_off(session)
     completed: list[dict[str, Any]] = []
     try:

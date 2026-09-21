@@ -183,8 +183,26 @@ def _gateway_process() -> tuple[int, list[str], dict[str, str], str]:
     return pid, command, environment, os.readlink(f"/proc/{pid}/cwd")
 
 
-def restart_gateway(deploy: Path, label: str) -> None:
+def gateway_command_for_source(command: list[str], source_code: Path) -> list[str]:
+    result = list(command)
+    if "--app-dir" not in result:
+        raise ValueError("gateway command has no --app-dir")
+    result[result.index("--app-dir") + 1] = str(source_code.resolve())
+    return result
+
+
+def restart_gateway(
+    deploy: Path, label: str, source_code: Path | None = None
+) -> None:
     pid, command, environment, cwd = _gateway_process()
+    if source_code is not None:
+        source_code = source_code.resolve()
+        command = gateway_command_for_source(command, source_code)
+        previous = environment.get("PYTHONPATH", "")
+        environment["PYTHONPATH"] = str(source_code) + (
+            ":" + previous if previous else ""
+        )
+        cwd = str(source_code)
     os.killpg(pid, signal.SIGTERM)
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:

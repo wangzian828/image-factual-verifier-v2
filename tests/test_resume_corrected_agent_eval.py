@@ -6,6 +6,7 @@ from scripts.server.resume_corrected_agent_eval import (
     validate_resume_binding,
     validate_safe_cache_off,
 )
+from scripts.server.control_corrected_agent_eval import gateway_command_for_source
 
 
 def test_validate_resume_binding_accepts_frozen_protocol(tmp_path, monkeypatch):
@@ -109,3 +110,20 @@ def test_validate_safe_cache_off_accepts_validated_case_cache(monkeypatch):
         ]
     )
     validate_safe_cache_off(session)
+
+
+def test_gateway_command_for_source_replaces_only_app_dir(tmp_path):
+    command = [
+        "python",
+        "-m",
+        "uvicorn",
+        "scripts.server.psd_qwen_gateway:app",
+        "--app-dir",
+        "/old/code",
+        "--port",
+        "19025",
+    ]
+    observed = gateway_command_for_source(command, tmp_path)
+    assert observed[observed.index("--app-dir") + 1] == str(tmp_path.resolve())
+    assert observed[observed.index("--port") + 1] == "19025"
+    assert command[command.index("--app-dir") + 1] == "/old/code"
