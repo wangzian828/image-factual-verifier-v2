@@ -114,10 +114,41 @@ def stop_gateway(pid: int) -> None:
     except ProcessLookupError:
         return
     deadline = time.monotonic() + 60
-    while time.monotonic() < deadline and Path(f"/proc/{pid}").exists():
+    while time.monotonic() < deadline:
+        proc = Path(f"/proc/{pid}")
+        if not proc.exists():
+            return
+        try:
+            state = (proc / "stat").read_text().split()[2]
+        except (FileNotFoundError, ProcessLookupError):
+            return
+        if state == "Z":
+            # Gateways launched by this controller remain as zombies until the
+            # direct parent reaps them.  A zombie owns no socket or GPU work and
+            # must not be mistaken for a live gateway during restoration.
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+            return
         time.sleep(0.5)
-    if Path(f"/proc/{pid}").exists():
-        raise RuntimeError("gateway did not stop after SIGTERM")
+    raise RuntimeError("gateway did not stop after SIGTERM")
+
+
+def validate_source_snapshot(source_code: Path) -> None:
+    """Reject partial overlays before stopping the live service."""
+
+    required = (
+        "scripts/__init__.py",
+        "scripts/server/control_corrected_agent_eval.py",
+        "scripts/server/psd_qwen_gateway.py",
+        "scripts/server/run_prefix_cache_hybrid_gate.py",
+        "src/integrations/llm/prefix_cache.py",
+        "src/orchestrator/pipeline.py",
+    )
+    missing = [relative for relative in required if not (source_code / relative).is_file()]
+    if missing:
+        raise ValueError(f"source snapshot is incomplete: {missing}")
 
 
 def start_gateway(
@@ -187,11 +218,13 @@ def main() -> None:
     parser.add_argument("--deploy", type=Path, required=True)
     parser.add_argument("--source-code", type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--keep-cache-on-if-passed", action="store_true")
     args = parser.parse_args()
     os.umask(0o077)
     deploy = args.deploy.resolve()
     source_code = args.source_code.resolve()
     deploy.mkdir(parents=True, exist_ok=True)
+    validate_source_snapshot(source_code)
     atomic_json(
         deploy / "process.json",
         {
@@ -210,6 +243,8 @@ def main() -> None:
     guard = owner.load(SERVICE / "guard.json")
     owner.checked(guard)
     originals = [owner.load(SERVICE / f"replica-{index}.json") for index in range(4)]
+    for index, receipt in enumerate(originals):
+        owner.save(deploy / f"original-replica-{index}.json", receipt)
     environments = [owner.checked(receipt) for receipt in originals]
     model_root = validate_original_replicas(originals)
     gateway_pid, gateway_command, gateway_environment, gateway_cwd = _gateway_process()
@@ -223,6 +258,7 @@ def main() -> None:
     canary_gateway: dict[str, Any] | None = None
     canary_replicas: list[dict[str, Any]] = []
     restored = False
+    cache_on_kept = False
     probe_error: BaseException | None = None
     restore_errors: list[dict[str, str]] = []
     try:
@@ -312,19 +348,40 @@ def main() -> None:
             },
         )
     finally:
-        if canary_gateway is not None:
+        keep_cache_on = (
+            args.keep_cache_on_if_passed
+            and probe_error is None
+            and canary_gateway is not None
+            and len(canary_replicas) == 4
+        )
+        if keep_cache_on:
+            try:
+                for index, receipt in enumerate(canary_replicas):
+                    owner.checked(receipt)
+                    owner.save(SERVICE / f"replica-{index}.json", receipt)
+                wait_for_services(model_root)
+                cache_on_kept = True
+                restored = True
+            except BaseException as error:
+                keep_cache_on = False
+                restore_errors.append(
+                    {"stage": "keep_cache_on", "error": type(error).__name__}
+                )
+        if canary_gateway is not None and not keep_cache_on:
             try:
                 stop_gateway(int(canary_gateway["pid"]))
             except BaseException as error:
                 restore_errors.append({"stage": "stop_canary_gateway", "error": type(error).__name__})
-        if canary_replicas:
+        if canary_replicas and not keep_cache_on:
             try:
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     list(pool.map(owner.stop, canary_replicas))
             except BaseException as error:
                 restore_errors.append({"stage": "stop_canary_replicas", "error": type(error).__name__})
         restored_replicas: list[dict[str, Any]] = []
-        if original_replicas_stop_attempted:
+        if keep_cache_on:
+            restored_replicas = list(canary_replicas)
+        elif original_replicas_stop_attempted:
             # A parallel stop can fail after some siblings have already exited.
             # Reconcile any surviving original process before restoring all four.
             for receipt in originals:
@@ -354,7 +411,7 @@ def main() -> None:
                     restored_replicas.append(receipt)
             except BaseException as error:
                 restore_errors.append({"stage": "verify_original_replicas", "error": type(error).__name__})
-        if len(restored_replicas) == 4:
+        if len(restored_replicas) == 4 and not keep_cache_on:
             try:
                 wait_replicas(model_root)
                 if original_gateway_stopped:
@@ -379,11 +436,15 @@ def main() -> None:
         state = owner.load(state_path) if state_path.is_file() else {}
         if restore_errors or not restored:
             state["phase"] = "failed_requires_fix"
+        elif cache_on_kept:
+            state["phase"] = "complete_cache_candidate_service_active"
         elif probe_error is not None:
             state["phase"] = "complete_cache_rejected_service_restored"
         else:
             state["phase"] = "complete_cache_candidate_service_restored"
-        state["service_restored"] = restored
+        state["service_restored"] = restored and not cache_on_kept
+        state["service_ready"] = restored
+        state["cache_on_active"] = cache_on_kept
         state["guard_resumed"] = guard_resumed
         state["restore_errors"] = restore_errors
         atomic_json(state_path, state)

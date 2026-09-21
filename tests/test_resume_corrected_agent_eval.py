@@ -55,7 +55,8 @@ def test_validate_resume_binding_rejects_protocol_change(tmp_path):
         raise AssertionError("protocol mismatch was accepted")
 
 
-def test_validate_safe_cache_off_requires_both_hybrid_flags():
+def test_validate_safe_cache_off_requires_both_hybrid_flags(monkeypatch):
+    monkeypatch.setenv("IFV_PREFIX_CACHE_MODE", "request_isolated")
     good = SimpleNamespace(
         originals=[
             {
@@ -71,10 +72,40 @@ def test_validate_safe_cache_off_requires_both_hybrid_flags():
         ]
     )
     validate_safe_cache_off(good)
-    bad = SimpleNamespace(originals=[{"command": ["python", "vllm"]}])
+    bad = SimpleNamespace(
+        originals=[
+            {
+                "command": [
+                    "python",
+                    "vllm",
+                    "--mamba-cache-mode",
+                    "none",
+                ]
+            }
+        ]
+    )
     try:
         validate_safe_cache_off(bad)
     except ValueError as error:
         assert "cache-off" in str(error)
     else:
         raise AssertionError("unsafe cache configuration was accepted")
+
+
+def test_validate_safe_cache_off_accepts_validated_case_cache(monkeypatch):
+    monkeypatch.setenv("IFV_PREFIX_CACHE_MODE", "case_isolated")
+    session = SimpleNamespace(
+        originals=[
+            {
+                "command": [
+                    "python",
+                    "vllm",
+                    "--enable-prefix-caching",
+                    "--mamba-cache-mode",
+                    "align",
+                ]
+            }
+            for _ in range(4)
+        ]
+    )
+    validate_safe_cache_off(session)

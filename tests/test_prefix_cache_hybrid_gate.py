@@ -6,7 +6,9 @@ from scripts.server.run_prefix_cache_hybrid_gate import (
     BLOCK_SIZE,
     attest_block_size,
     canary_gateway_command,
+    stop_gateway,
     validate_original_replicas,
+    validate_source_snapshot,
 )
 
 
@@ -56,3 +58,30 @@ def test_block_size_attestation_requires_every_replica(tmp_path):
     logs[-1].write_text("wrong")
     with pytest.raises(ValueError, match="attestation missing"):
         attest_block_size(logs)
+
+
+def test_source_snapshot_rejects_partial_overlay(tmp_path):
+    with pytest.raises(ValueError, match="incomplete"):
+        validate_source_snapshot(tmp_path)
+
+
+def test_stop_gateway_treats_zombie_as_stopped(monkeypatch):
+    import scripts.server.run_prefix_cache_hybrid_gate as gate
+
+    class FakeStat:
+        def read_text(self):
+            return "1 (gateway) Z 0"
+
+    class FakeProc:
+        def exists(self):
+            return True
+
+        def __truediv__(self, name):
+            assert name == "stat"
+            return FakeStat()
+
+    monkeypatch.setattr(gate.os, "killpg", lambda *_: None, raising=False)
+    monkeypatch.setattr(gate.os, "waitpid", lambda *_: (7, 0), raising=False)
+    monkeypatch.setattr(gate.os, "WNOHANG", 1, raising=False)
+    monkeypatch.setattr(gate, "Path", lambda *_: FakeProc())
+    stop_gateway(7)

@@ -187,9 +187,22 @@ def restart_gateway(deploy: Path, label: str) -> None:
     pid, command, environment, cwd = _gateway_process()
     os.killpg(pid, signal.SIGTERM)
     deadline = time.monotonic() + 60
-    while time.monotonic() < deadline and Path(f"/proc/{pid}").exists():
+    while time.monotonic() < deadline:
+        proc = Path(f"/proc/{pid}")
+        if not proc.exists():
+            break
+        try:
+            state = (proc / "stat").read_text().split()[2]
+        except (FileNotFoundError, ProcessLookupError):
+            break
+        if state == "Z":
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+            break
         time.sleep(0.5)
-    if Path(f"/proc/{pid}").exists():
+    else:
         raise RuntimeError("gateway did not stop")
     log_path = deploy / f"gateway-{label}.log"
     with log_path.open("xb") as log:

@@ -101,15 +101,24 @@ def validate_resume_binding(output: Path) -> dict[str, Any]:
 
 
 def validate_safe_cache_off(session: ServiceSession) -> None:
+    cache_mode = os.environ.get("IFV_PREFIX_CACHE_MODE", "request_isolated").strip()
     for index, receipt in enumerate(session.originals):
         command = receipt.get("command") or []
-        if "--no-enable-prefix-caching" not in command:
-            raise ValueError(f"replica {index} is not explicitly cache-off")
         if "--mamba-cache-mode" not in command:
             raise ValueError(f"replica {index} has no mamba cache mode")
         mode = command[command.index("--mamba-cache-mode") + 1]
-        if mode != "none":
-            raise ValueError(f"replica {index} mamba cache mode is {mode}")
+        if cache_mode == "case_isolated":
+            if "--enable-prefix-caching" not in command or mode != "align":
+                raise ValueError(
+                    f"replica {index} is not validated cache-on/align"
+                )
+        elif cache_mode == "request_isolated":
+            if "--no-enable-prefix-caching" not in command:
+                raise ValueError(f"replica {index} is not explicitly cache-off")
+            if mode != "none":
+                raise ValueError(f"replica {index} mamba cache mode is {mode}")
+        else:
+            raise ValueError(f"unsupported IFV_PREFIX_CACHE_MODE={cache_mode!r}")
 
 
 def resume_sft(
