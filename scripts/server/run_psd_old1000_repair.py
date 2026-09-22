@@ -14,6 +14,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -393,6 +394,61 @@ def recovery_case_cli(entry: dict[str, Any], benchmark: dict[str, dict[str, Any]
     return args
 
 
+def reconcile_orphaned_running_attempts(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Make orphaned in-flight attempts retryable before queue construction.
+
+    A dead owner cannot finish a ``running`` retry ledger. Once this owner has
+    acquired the process lock, no other repair worker can still own the output,
+    so such ledgers are safe to classify as interrupted. Existing result or
+    canonical artifacts are never touched; the original tiny ledger is backed
+    up before the status migration.
+    """
+    migrated, skipped = [], []
+    for entry in entries:
+        candidate = read_indexed_row(SELECTED, entry)
+        key = hashlib.sha256(candidate["candidate_id"].encode()).hexdigest()[:16]
+        repair = OUTPUT / "repairs" / key
+        for marker in sorted(repair.glob("slate-rounds/*/infrastructure-attempts/retry-state.json")):
+            raw = load(marker)
+            identity = raw["identity"]
+            payload = load_bound(marker, identity=identity)
+            attempts = payload.get("attempts", [])
+            if not attempts or attempts[-1].get("status") != "running":
+                continue
+            last = attempts[-1]
+            attempt_dir = Path(last.get("directory", ""))
+            round_dir = marker.parent.parent
+            has_result = any(path.exists() for path in (
+                attempt_dir / "result.json", round_dir / "result.json", repair / "result.json"))
+            if has_result:
+                skipped.append({"case_id": entry["case_id"], "marker": str(marker),
+                                "reason": "result_exists_with_running_ledger"})
+                continue
+            backup = (OUTPUT / "recoveries/orphaned-attempts-v2" /
+                      key / marker.parent.name / "ledger-original.json")
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            original = marker.read_bytes()
+            if backup.exists() and backup.read_bytes() != original:
+                raise ValueError("orphaned retry ledger backup changed")
+            if not backup.exists():
+                shutil.copy2(marker, backup)
+            old = dict(last)
+            last.update({"status": "infrastructure_failed",
+                         "reason": "orphaned_running_attempt_recovered_at_owner_start",
+                         "legacy_status": "running", "error_type": "ProcessTerminated",
+                         "migration_version": "ifv-old1000-orphaned-attempt-v2",
+                         "backup": str(backup)})
+            save_bound(marker, identity=identity, payload=payload)
+            migrated.append({"case_id": entry["case_id"], "marker": str(marker),
+                             "attempt_index": old.get("index"), "backup": str(backup)})
+    summary = {"schema_version": "ifv-old1000-orphaned-attempt-v2",
+               "migrated_count": len(migrated), "skipped_count": len(skipped),
+               "migrated": migrated, "skipped": skipped,
+               "budget_reset": False, "time": time.time()}
+    save(OUTPUT / "recoveries/orphaned-attempts-v2/summary.json", summary)
+    return summary
+
+
 async def cache_probe(entry: dict[str, Any]) -> dict[str, Any]:
     """Prove the precomputed first proposal is an exact cache hit, offline."""
     from ifv_training.psd_gemini_judge import review_images, trace_steps
@@ -485,6 +541,8 @@ async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False
         state_path = OUTPUT / ("parallel-state.json" if parallel else "state.json")
         benchmark = by_case(RUN / "selection/runtime-release/runtime_input/cases.jsonl")
         gold = by_case(GOLD)
+        orphan_summary = reconcile_orphaned_running_attempts(entries) if not parallel else {
+            "migrated_count": 0, "skipped_count": 0}
         pending, terminal_carried = select_pending(entries, excluded)
         recovery_rows = [] if parallel or max_new_cases else terminal_recovery_candidates(entries)
         entry_by_case = {entry["case_id"]: entry for entry in entries}
@@ -499,6 +557,7 @@ async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False
             "terminal_carried": counts["terminal_carried"],
             "pending_at_start": pending_before_limit, "scheduled": len(pending),
             "recovery_scheduled": len(recovery_rows),
+            "orphaned_attempts_migrated": orphan_summary["migrated_count"],
             "concurrency": concurrency, "excluded_smoke_cases": len(excluded),
             "training_started": False})
         queue = asyncio.Queue()
@@ -562,6 +621,7 @@ async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False
                         "terminal_carried": counts["terminal_carried"],
                         "pending_at_start": pending_before_limit, "scheduled": scheduled_total,
                         "recovery_scheduled": len(recovery_rows),
+                        "orphaned_attempts_migrated": orphan_summary["migrated_count"],
                         "completed_this_pass": counts["regular_terminal"],
                         "recovery_completed": counts["recovery_terminal"],
                         "regular_remaining": regular_remaining,
@@ -579,6 +639,7 @@ async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False
                   "remaining": remaining, "regular_remaining": regular_remaining,
                   "recovery_remaining": recovery_remaining,
                   "recovery_scheduled": len(recovery_rows),
+                  "orphaned_attempts_migrated": orphan_summary["migrated_count"],
                   "statuses_this_pass": dict(counts),
                   "excluded_smoke_cases": len(excluded), "training_started": False}
         save(state_path, result)
