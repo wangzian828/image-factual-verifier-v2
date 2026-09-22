@@ -95,6 +95,17 @@ def test_main_worker_allows_requested_28_way_concurrency():
     assert old1000.MAX_WORKER_CONCURRENCY == 28
 
 
+def test_judge_only_recheck_does_not_block_old1000_handoff(monkeypatch):
+    class Result:
+        stdout = "\\n".join([
+            "2177924 python judge-gemini37-rerun-20260922-v1/launch-rerun.py",
+            "2178000 python run_cases --output-dir qwen35-base-agent-full1526-selfextract-20260921-v3",
+        ])
+
+    monkeypatch.setattr(old1000.subprocess, "run", lambda *args, **kwargs: Result())
+    old1000.no_competing_eval()
+
+
 def test_parallel_handoff_excludes_exact_smoke_cases_after_some_finish(tmp_path, monkeypatch):
     output = tmp_path / "repair-search-v1"
     (output / "case-receipts").mkdir(parents=True)

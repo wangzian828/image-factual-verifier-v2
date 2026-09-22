@@ -141,8 +141,13 @@ def no_competing_eval() -> None:
     running = subprocess.run(["ps", "-eo", "pid,args"], text=True,
                              capture_output=True, check=True).stdout
     for line in running.splitlines():
-        if ("resume_corrected_agent_eval.py" in line
-                or "qwen35-base-agent-full1526-selfextract-20260921-v3" in line):
+        judge_only = (
+            "stream_agent_judges.py" in line
+            or "judge-gemini37" in line
+        )
+        if (("resume_corrected_agent_eval.py" in line
+             or "qwen35-base-agent-full1526-selfextract-20260921-v3" in line)
+                and not judge_only):
             raise RuntimeError("three-weight GPU Agent owner is still running")
 
 
