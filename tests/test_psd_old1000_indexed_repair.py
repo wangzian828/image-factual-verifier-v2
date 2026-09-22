@@ -91,6 +91,33 @@ def test_detached_worker_keeps_immutable_launch_base_code():
                                  "/frozen/base", "/frozen/base/training", "/old/service"]
 
 
+def test_parallel_handoff_excludes_exact_smoke_cases_after_some_finish(tmp_path, monkeypatch):
+    output = tmp_path / "repair-search-v1"
+    (output / "case-receipts").mkdir(parents=True)
+    (output / "latest-process.json").write_text(json.dumps({
+        "pid": 42, "max_new_cases": 16, "concurrency": 16,
+        "created_unix": 1000.0}))
+    entries = [{"case_id": f"main-{index:05d}"} for index in range(20)]
+    for index in (0, 2):
+        (output / "case-receipts" / f"main-{index:05d}.json").write_text(json.dumps({
+            "status": "converged", "completed_unix": 900.0}))
+    for index in (1, 3):
+        (output / "case-receipts" / f"main-{index:05d}.json").write_text(json.dumps({
+            "status": "infrastructure_budget_exhausted", "completed_unix": 1100.0}))
+    monkeypatch.setattr(old1000, "OUTPUT", output)
+    monkeypatch.setattr(old1000, "selected_index", lambda: entries)
+    expected = [row["case_id"] for row in entries if row["case_id"] not in {
+        "main-00000", "main-00002"}][:16]
+    assert old1000.parallel_exclusions() == expected
+    # Finishing another in-flight smoke case cannot shift the frozen boundary.
+    (output / "case-receipts" / "main-00004.json").write_text(json.dumps({
+        "status": "converged", "completed_unix": 1200.0}))
+    assert old1000.parallel_exclusions() == expected
+    pending, carried = old1000.select_pending(entries, set(expected))
+    assert carried == 2
+    assert [row["case_id"] for row in pending] == ["main-00018", "main-00019"]
+
+
 def test_cache_mode_requires_fail_closed_case_isolation():
     healthy = {"prefix_cache_policy": "case_isolated",
                "reject_corrupted_responses": True,

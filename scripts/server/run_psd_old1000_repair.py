@@ -375,34 +375,72 @@ async def cache_probe(entry: dict[str, Any]) -> dict[str, Any]:
             "provider_calls": 0}
 
 
-async def worker(max_new_cases: int, concurrency: int) -> dict[str, Any]:
+def parallel_exclusions() -> list[str]:
+    """Freeze the smoke's original 16 cases, including ones now terminal."""
+    smoke = load(OUTPUT / "latest-process.json")
+    if smoke.get("max_new_cases") != 16 or smoke.get("concurrency") != 16:
+        raise ValueError("parallel handoff requires the exact frozen smoke")
+    created = smoke.get("created_unix")
+    if not isinstance(created, (int, float)):
+        raise ValueError("smoke start time is unavailable")
+    excluded = []
+    for entry in selected_index():
+        case_id = entry["case_id"]
+        receipt = OUTPUT / "case-receipts" / (case_id + ".json")
+        if receipt.is_file():
+            row = load(receipt)
+            if row.get("status") in TERMINAL and row.get("completed_unix", 0) < created:
+                continue
+        excluded.append(case_id)
+        if len(excluded) == 16:
+            break
+    if len(excluded) != 16:
+        raise ValueError("smoke case set cannot be reconstructed")
+    return excluded
+
+
+def select_pending(entries: list[dict[str, Any]], excluded: set[str]) -> tuple[list[dict[str, Any]], int]:
+    pending = []
+    terminal_carried = 0
+    for entry in entries:
+        if entry["case_id"] in excluded:
+            continue
+        receipt = OUTPUT / "case-receipts" / (entry["case_id"] + ".json")
+        if receipt.is_file() and load(receipt).get("status") in TERMINAL:
+            terminal_carried += 1
+        else:
+            pending.append(entry)
+    return pending, terminal_carried
+
+
+async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False) -> dict[str, Any]:
     if not 1 <= concurrency <= 16 or max_new_cases < 0:
         raise ValueError("invalid old-1000 repair worker bounds")
     if fcntl is None:
         raise RuntimeError("old-1000 repair owner requires Linux process locks")
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    with (OUTPUT / "owner.lock").open("a+b") as lock:
+    with (OUTPUT / ("owner-parallel.lock" if parallel else "owner.lock")).open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         serving_ready()
         no_competing_eval()
         entries = selected_index()
+        excluded = set(load(OUTPUT / "parallel-binding.json")["excluded_case_ids"]) if parallel else set()
+        if parallel and (len(excluded) != 16 or excluded != set(parallel_exclusions())):
+            raise ValueError("parallel smoke exclusion binding changed")
+        state_path = OUTPUT / ("parallel-state.json" if parallel else "state.json")
         benchmark = by_case(RUN / "selection/runtime-release/runtime_input/cases.jsonl")
         gold = by_case(GOLD)
-        pending = []
+        pending, terminal_carried = select_pending(entries, excluded)
         counts = Counter()
-        for entry in entries:
-            receipt = OUTPUT / "case-receipts" / (entry["case_id"] + ".json")
-            if receipt.is_file() and load(receipt).get("status") in TERMINAL:
-                counts["terminal_carried"] += 1
-            else:
-                pending.append(entry)
+        counts["terminal_carried"] = terminal_carried
         pending_before_limit = len(pending)
         if max_new_cases:
             pending = pending[:max_new_cases]
-        save(OUTPUT / "state.json", {"phase": "repairing", "selected": 775,
+        save(state_path, {"phase": "repairing", "selected": 775,
             "terminal_carried": counts["terminal_carried"],
             "pending_at_start": pending_before_limit, "scheduled": len(pending),
-            "concurrency": concurrency, "training_started": False})
+            "concurrency": concurrency, "excluded_smoke_cases": len(excluded),
+            "training_started": False})
         queue = asyncio.Queue()
         for entry in pending:
             queue.put_nowait(entry)
@@ -443,21 +481,76 @@ async def worker(max_new_cases: int, concurrency: int) -> dict[str, Any]:
                     counts["case_error"] += 1
                 finally:
                     queue.task_done()
-                    save(OUTPUT / "state.json", {"phase": "repairing", "selected": 775,
+                    save(state_path, {"phase": "repairing", "selected": 775,
                         "terminal_carried": counts["terminal_carried"],
                         "pending_at_start": pending_before_limit, "scheduled": len(pending),
                         "completed_this_pass": sum(counts[s] for s in TERMINAL),
                         "case_errors_this_pass": counts["case_error"],
-                        "concurrency": concurrency, "training_started": False})
+                        "concurrency": concurrency, "excluded_smoke_cases": len(excluded),
+                        "training_started": False})
 
         await asyncio.gather(*(one() for _ in range(concurrency)))
         remaining = pending_before_limit - sum(counts[s] for s in TERMINAL)
         result = {"phase": "repair_search_complete" if remaining == 0 else "needs_resume",
-                  "selected": 775, "terminal_total": 775 - remaining,
+                  "selected": 775, "terminal_total_outside_smoke": 775 - len(excluded) - remaining,
                   "remaining": remaining, "statuses_this_pass": dict(counts),
-                  "training_started": False}
-        save(OUTPUT / "state.json", result)
+                  "excluded_smoke_cases": len(excluded), "training_started": False}
+        save(state_path, result)
         return result
+
+
+def launch_parallel(concurrency: int) -> dict[str, Any]:
+    from dotenv import dotenv_values
+
+    if concurrency != 16:
+        raise ValueError("parallel handoff is frozen at 16 cross-case workers")
+    mode = serving_ready()
+    no_competing_eval()
+    previous = load(OUTPUT / "latest-process.json")
+    pid = int(previous["pid"])
+    cmdline = Path(f"/proc/{pid}/cmdline")
+    if not cmdline.exists() or b"run_psd_old1000_repair.py" not in cmdline.read_bytes():
+        raise RuntimeError("frozen smoke owner is not running")
+    current = OUTPUT / "parallel-process.json"
+    if current.exists() and Path(f"/proc/{int(load(current)['pid'])}/cmdline").exists():
+        raise RuntimeError("parallel repair owner already running")
+    excluded = parallel_exclusions()
+    binding = OUTPUT / "parallel-binding.json"
+    expected = {"schema_version": "ifv-old1000-disjoint-smoke-v1",
+                "smoke_pid": pid, "smoke_created_unix": previous["created_unix"],
+                "excluded_case_ids": excluded, "max_new_cases": 0, "concurrency": concurrency}
+    if binding.exists():
+        if load(binding) != expected:
+            raise ValueError("parallel repair binding differs from frozen smoke")
+    else:
+        save(binding, expected)
+    source = ROOT / "training-artifacts/psd-epoch3-20260916-v1/psd_epoch3_canary.py"
+    spec = importlib.util.spec_from_file_location("psd_service_owner", source)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("frozen service owner is unavailable")
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    env = owner.checked(load(SERVICE / "replica-0.json"))
+    env.update({key: value for key, value in dotenv_values(ROOT / "private/runtime.env").items()
+                if value is not None})
+    if not (env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY")):
+        raise RuntimeError("old-1000 Gemini review credential is missing")
+    env["IFV_PREFIX_CACHE_MODE"] = mode
+    code_root = Path(__file__).resolve().parents[2]
+    env["PYTHONPATH"] = worker_pythonpath(
+        code_root, os.environ.get("PYTHONPATH", ""), env.get("PYTHONPATH", ""))
+    command = [sys.executable, "-u", str(Path(__file__).resolve()),
+               "--parallel-remainder", "--max-new-cases", "0",
+               "--concurrency", str(concurrency)]
+    launches = OUTPUT / "launches-parallel"
+    launches.mkdir(parents=True, exist_ok=True)
+    launch_id = str(int(time.time()))
+    receipt = owner.spawn(command, env, launches / (launch_id + ".log"))
+    owner.save(launches / (launch_id + ".json"), receipt)
+    save(current, {"pid": receipt["pid"], "receipt": str(launches / (launch_id + ".json")),
+                   "binding": str(binding), "created_unix": time.time()})
+    return {"phase": "launched_parallel", "pid": receipt["pid"],
+            "excluded_smoke_cases": 16, "concurrency": concurrency}
 
 
 def launch(max_new_cases: int, concurrency: int) -> dict[str, Any]:
@@ -507,6 +600,7 @@ def launch(max_new_cases: int, concurrency: int) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--launch", action="store_true")
+    parser.add_argument("--parallel-remainder", action="store_true")
     parser.add_argument("--cache-probe", action="store_true")
     parser.add_argument("--reconcile-preflight-rejection", action="store_true")
     parser.add_argument("--reconcile-unusable-completions", action="store_true")
@@ -520,8 +614,10 @@ def main() -> None:
     elif args.cache_probe:
         result = asyncio.run(cache_probe(selected_index()[0]))
     else:
-        result = (launch(args.max_new_cases, args.concurrency) if args.launch
-                  else asyncio.run(worker(args.max_new_cases, args.concurrency)))
+        result = (launch_parallel(args.concurrency) if args.launch and args.parallel_remainder
+                  else launch(args.max_new_cases, args.concurrency) if args.launch
+                  else asyncio.run(worker(args.max_new_cases, args.concurrency,
+                                          parallel=args.parallel_remainder)))
     print(json.dumps(result, ensure_ascii=False))
 
 
