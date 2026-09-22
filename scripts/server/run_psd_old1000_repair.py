@@ -37,7 +37,8 @@ RUN = ROOT / "runs/psd-production1000x4-20260918-v1"
 SELECTED = RUN / "processing-lightweight-v1/task-source-selection-v1/selected_candidates.jsonl"
 PRECOMPUTE = RUN / "processing-lightweight-v1/slate-precompute-v1"
 INDEX = PRECOMPUTE / "selected-offset-index.json"
-OUTPUT = RUN / "processing-lightweight-v1/repair-search-v1"
+DEFAULT_OUTPUT = RUN / "processing-lightweight-v1/repair-search-v1"
+OUTPUT = Path(os.environ.get("IFV_OLD1000_REPAIR_OUTPUT", str(DEFAULT_OUTPUT)))
 SNAPSHOT = ROOT / "runs/psd-production400x8-20260917-v6/snapshot"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
 GOLD = ROOT / "data/psd-candidate-pool-4000-20260914-v3/train/evaluator_private/private_gold.jsonl"
@@ -536,6 +537,11 @@ def launch_parallel(concurrency: int) -> dict[str, Any]:
     if not (env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY")):
         raise RuntimeError("old-1000 Gemini review credential is missing")
     env["IFV_PREFIX_CACHE_MODE"] = mode
+    env["IFV_OLD1000_REPAIR_OUTPUT"] = str(OUTPUT)
+    env["IFV_PSD_GEMINI_REQUEST_RETRIES"] = os.environ.get(
+        "IFV_PSD_GEMINI_REQUEST_RETRIES", "3")
+    env["GEMINI_MAX_INFLIGHT_REQUESTS"] = os.environ.get(
+        "IFV_OLD1000_GEMINI_MAX_INFLIGHT", "16")
     code_root = Path(__file__).resolve().parents[2]
     env["PYTHONPATH"] = worker_pythonpath(
         code_root, os.environ.get("PYTHONPATH", ""), env.get("PYTHONPATH", ""))
@@ -576,6 +582,11 @@ def launch(max_new_cases: int, concurrency: int) -> dict[str, Any]:
     if not (env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY")):
         raise RuntimeError("old-1000 Gemini review credential is missing")
     env["IFV_PREFIX_CACHE_MODE"] = cache_mode
+    env["IFV_OLD1000_REPAIR_OUTPUT"] = str(OUTPUT)
+    env["IFV_PSD_GEMINI_REQUEST_RETRIES"] = os.environ.get(
+        "IFV_PSD_GEMINI_REQUEST_RETRIES", "3")
+    env["GEMINI_MAX_INFLIGHT_REQUESTS"] = os.environ.get(
+        "IFV_OLD1000_GEMINI_MAX_INFLIGHT", "16")
     code_root = Path(__file__).resolve().parents[2]
     # The serving replica predates this overlay and does not know the frozen
     # base code snapshot. Keep the launcher's explicit package path as well as

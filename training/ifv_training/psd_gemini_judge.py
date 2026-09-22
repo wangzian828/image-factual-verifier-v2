@@ -4,6 +4,7 @@ Outputs are admission evidence, never teacher token targets. A passing local
 review does not bypass complete-episode, strict-trace or checkpoint gates.
 """
 from __future__ import annotations
+import asyncio
 import base64
 import hashlib
 import io
@@ -16,6 +17,39 @@ from .io import load_json, load_jsonl, sha256_file, write_json
 from .psd_repair import _sha, SEMANTIC_FAILURE_CATEGORIES
 
 VERSION = "psd-task-review-v1"
+
+
+def _provider_request_retry_limit() -> int:
+    """Bounded retries for one Gemini logical request, not a whole PSD case."""
+    raw = os.getenv("IFV_PSD_GEMINI_REQUEST_RETRIES", "0")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as error:
+        raise ValueError("IFV_PSD_GEMINI_REQUEST_RETRIES must be an integer") from error
+    if not 0 <= value <= 5:
+        raise ValueError("IFV_PSD_GEMINI_REQUEST_RETRIES must be between 0 and 5")
+    return value
+
+
+def _retryable_provider_error(error: BaseException) -> bool:
+    """Retry only provider-side response/transport failures at request scope."""
+    import httpx
+    from src.integrations.gemini.interactions import (
+        GeminiInteractionsHTTPError, GeminiInteractionsResponseError,
+    )
+    if isinstance(error, httpx.TransportError):
+        return True
+    if isinstance(error, GeminiInteractionsHTTPError):
+        return error.status_code in {429, 500, 502, 503, 504}
+    if isinstance(error, GeminiInteractionsResponseError):
+        message = str(error).lower()
+        return any(marker in message for marker in (
+            "status=incomplete", "status=failed", "status=cancelled",
+            "status=canceled", "status=expired", "invalid json",
+            "non-object json", "did not include an interaction id",
+            "did not include a status",
+        ))
+    return False
 
 PROMPT = """You are the task verifier for privileged self-distillation (PSD).
 Review the failed source trajectory, the selected decision, a procedural hint,
@@ -204,17 +238,32 @@ async def _request(client, packet, *, prompt, schema, model, images=(), cache_di
         model, route = uncached_model(model, cache_dir)
         identity = {**identity, "model": model}
         cache = Path(cache_dir) / (_sha(identity) + ".json") if cache_dir else None
+    provider_retry_attempts = 0
     if cache and cache.exists():
         saved = load_json(cache)
         if saved.get("identity") != identity or saved.get("response_sha256") != _sha(saved.get("response")):
             raise ValueError("PSD judge cache was changed")
         response = saved["response"]
     else:
-        response = await client.create(
-            model=model, input=[{"type": "text", "text": prompt + "\nMATERIAL:\n" + text}, *images],
-            response_format={"type": "text", "mime_type": "application/json", "schema": schema},
-            generation_config={"thinking_level": "high", "max_output_tokens": 8192}, store=True,
-        )
+        retry_limit = _provider_request_retry_limit()
+        while True:
+            try:
+                response = await client.create(
+                    model=model, input=[{"type": "text", "text": prompt + "\nMATERIAL:\n" + text}, *images],
+                    response_format={"type": "text", "mime_type": "application/json", "schema": schema},
+                    generation_config={"thinking_level": "high", "max_output_tokens": 8192}, store=True,
+                )
+                break
+            except Exception as error:
+                if (provider_retry_attempts >= retry_limit
+                        or not _retryable_provider_error(error)):
+                    raise
+                # This is a new provider request for the same logical Gemini
+                # step. It must not rerun the Qwen episode or consume a PSD
+                # repair round. Keep the delay short and bounded because the
+                # client already handles ordinary HTTP retryable statuses.
+                await asyncio.sleep(min(1.0 * (2 ** provider_retry_attempts), 8.0))
+                provider_retry_attempts += 1
         # Save completed provider results before parsing. Invalid decisions are
         # not silently resampled until a favorable answer appears.
         if cache and response.get("status") == "completed":
@@ -226,6 +275,7 @@ async def _request(client, packet, *, prompt, schema, model, images=(), cache_di
     return json.loads(extract_text(response)), {
         "interaction_id": response.get("id"), "usage": response.get("usage"),
         "request_binding": identity, "response_sha256": _sha(response),
+        "provider_retry_attempts": provider_retry_attempts,
         **({"model_route": route} if route else {})}
 
 
