@@ -809,7 +809,7 @@ def launch_parallel(concurrency: int) -> dict[str, Any]:
             "excluded_smoke_cases": 16, "concurrency": concurrency}
 
 
-def launch(max_new_cases: int, concurrency: int) -> dict[str, Any]:
+def launch(max_new_cases: int, concurrency: int, gemini_model: str | None = None) -> dict[str, Any]:
     from dotenv import dotenv_values
 
     cache_mode = serving_ready()
@@ -845,7 +845,8 @@ def launch(max_new_cases: int, concurrency: int) -> dict[str, Any]:
     env["PYTHONPATH"] = worker_pythonpath(
         code_root, os.environ.get("PYTHONPATH", ""), env.get("PYTHONPATH", ""))
     command = [repair_python(), "-u", str(Path(__file__).resolve()),
-               "--max-new-cases", str(max_new_cases), "--concurrency", str(concurrency)]
+               "--max-new-cases", str(max_new_cases), "--concurrency", str(concurrency),
+               "--gemini-model", gemini_model or "gemini-3.7-flash"]
     launches = OUTPUT / "launches"
     launches.mkdir(parents=True, exist_ok=True)
     launch_id = str(int(time.time()))
@@ -867,7 +868,10 @@ def main() -> None:
     parser.add_argument("--reconcile-unusable-completions", action="store_true")
     parser.add_argument("--max-new-cases", type=int, default=0)
     parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--gemini-model")
     args = parser.parse_args()
+    if args.gemini_model:
+        os.environ["IFV_OLD1000_GEMINI_MODEL"] = args.gemini_model
     if args.reconcile_unusable_completions:
         result = reconcile_unusable_completions()
     elif args.reconcile_preflight_rejection:
@@ -876,7 +880,7 @@ def main() -> None:
         result = asyncio.run(cache_probe(selected_index()[0]))
     else:
         result = (launch_parallel(args.concurrency) if args.launch and args.parallel_remainder
-                  else launch(args.max_new_cases, args.concurrency) if args.launch
+                  else launch(args.max_new_cases, args.concurrency, args.gemini_model) if args.launch
                   else asyncio.run(worker(args.max_new_cases, args.concurrency,
                                           parallel=args.parallel_remainder)))
     print(json.dumps(result, ensure_ascii=False))
