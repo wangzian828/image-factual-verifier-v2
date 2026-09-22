@@ -28,7 +28,7 @@ NONFINITE_SERIALIZATION_MESSAGES = frozenset(
 UNUSABLE_CHAT_RESPONSE = re.compile(
     r"Chat Completions returned an unusable response: choices=1, "
     r"finish_reason=(?:tool_calls|stop|length), content_chars=0, "
-    r"reasoning_chars=\d+, reasoning_fallback_requested=False")
+    r"reasoning_chars=\d+, reasoning_fallback_requested=(?:True|False)")
 
 
 def unusable_chat_response_reason(error):
