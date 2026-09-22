@@ -389,6 +389,11 @@ def case_cli(entry: dict[str, Any], benchmark: dict[str, Any], gold: dict[str, A
             save(path, value)
     directory = OUTPUT / "repairs" / key
     profile = load(SNAPSHOT / "serving-profile.json")
+    # A model switch must not silently reuse a first-round cache produced by a
+    # different Gemini model.  The immutable run can opt into a fresh model
+    # while keeping the frozen candidate/source binding unchanged.
+    gemini_override = os.environ.get("IFV_OLD1000_GEMINI_MODEL")
+    gemini_model = gemini_override or proposal["model"]
     args = ["--trace", str(trace), "--candidate", str(SELECTED),
             "--candidate-offset", str(entry["offset"]),
             "--candidate-length", str(entry["length"]),
@@ -401,16 +406,20 @@ def case_cli(entry: dict[str, Any], benchmark: dict[str, Any], gold: dict[str, A
             "--policy-base-url", profile["base_url"],
             "--policy-serving-profile", str(SNAPSHOT / "serving-profile.json"),
             "--hint-constructor-provider", "gemini",
-            "--hint-constructor-model", proposal["model"],
+            "--hint-constructor-model", gemini_model,
             "--hint-constructor-wire-api", "interactions",
             "--round-start-checkpoint", profile["model_path"],
             "--round-start-checkpoint-manifest", str(SNAPSHOT / "checkpoint-manifest.json"),
             "--train-cases", str(RUN / "selection/train-cases.jsonl"),
             "--source-access-policy", str(RUN / "selection/runtime-release/evaluator_private/source_access_policy.json"),
-            "--judge-model", proposal["model"],
+            "--judge-model", gemini_model,
             "--search-mode", "slate", "--repair-attempts", "6",
-            "--proposal-rounds", "12",
-            "--precomputed-slate-cache", str(PRECOMPUTE / "cases" / case_id / "judge-cache")]
+            "--proposal-rounds", "12"]
+    # Existing first-round cache receipts are model-bound.  Keep using them
+    # for the original model, but never feed a 3.6 response to a 3.7 run.
+    if not gemini_override:
+        args.extend(["--precomputed-slate-cache",
+                     str(PRECOMPUTE / "cases" / case_id / "judge-cache")])
     if (directory / "run-inputs.json").exists():
         args.append("--resume")
     return args

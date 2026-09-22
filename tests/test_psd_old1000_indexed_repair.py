@@ -112,6 +112,45 @@ def test_case_retry_classifier_retries_gemini_incomplete_and_transport():
     assert old1000.retryable_case_error(TimeoutError("provider timeout"))
 
 
+def test_case_cli_model_override_does_not_reuse_old_gemini_cache(monkeypatch, tmp_path):
+    run = tmp_path / "run"
+    selected = tmp_path / "selected.jsonl"
+    precompute = tmp_path / "slate-precompute-v1"
+    snapshot = tmp_path / "snapshot"
+    case_id = "main-00001"
+    candidate = {"case_id": case_id, "candidate_id": "candidate-1",
+                 "episode_id": "episode-1", "source": {
+                     "source_trace_path": "traces/episode-1.json",
+                     "source_audit": {"path": str(tmp_path / "audit.json")}}}
+    raw = (json.dumps(candidate) + "\n").encode()
+    selected.write_bytes(raw)
+    (run / "episodes/traces").mkdir(parents=True)
+    (run / "episodes/traces/episode-1.json").write_text("{}")
+    (tmp_path / "audit.json").write_text("{}")
+    (run / "selection/runtime-release/runtime_input/assets").mkdir(parents=True)
+    (run / "selection/runtime-release/runtime_input/assets/image.jpg").write_bytes(b"x")
+    (precompute / "cases" / case_id).mkdir(parents=True)
+    (precompute / "cases" / case_id / "proposal.json").write_text(
+        json.dumps({"candidate_id": "candidate-1", "episode_id": "episode-1",
+                    "model": "gemini-3.6-flash"}))
+    snapshot.mkdir()
+    (snapshot / "serving-profile.json").write_text(json.dumps({
+        "profile_id": "sft3", "base_url": "http://127.0.0.1:19025/v1",
+        "model_path": "/frozen/sft3"}))
+    for name, value in (("RUN", run), ("SELECTED", selected),
+                        ("PRECOMPUTE", precompute), ("OUTPUT", tmp_path / "output"),
+                        ("SNAPSHOT", snapshot)):
+        monkeypatch.setattr(old1000, name, value)
+    monkeypatch.setenv("IFV_OLD1000_GEMINI_MODEL", "gemini-3.7-flash")
+    args = old1000.case_cli(
+        {"case_id": case_id, "offset": 0, "length": len(raw)},
+        {case_id: {"image_path": "assets/image.jpg"}},
+        {case_id: {"case_id": case_id}},
+    )
+    assert args[args.index("--hint-constructor-model") + 1] == "gemini-3.7-flash"
+    assert "--precomputed-slate-cache" not in args
+
+
 def test_repair_python_prefers_frozen_runtime(tmp_path, monkeypatch):
     frozen = tmp_path / "envs/h20-qwen35-128k/bin/python"
     frozen.parent.mkdir(parents=True)
