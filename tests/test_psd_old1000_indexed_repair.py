@@ -127,6 +127,20 @@ def test_orphan_backups_are_separated_by_round(tmp_path, monkeypatch):
     )
 
 
+def test_unresolved_legacy_runtime_error_is_retryable_without_result(tmp_path):
+    attempt = tmp_path / "attempt-001"
+    round_dir = tmp_path / "round"
+    repair = tmp_path / "repair"
+    last = {"status": "nonretryable_error", "error_type": "RuntimeError"}
+    assert old1000.unresolved_attempt_is_retryable(last, attempt, round_dir, repair)
+    (attempt / "result.json").parent.mkdir(parents=True)
+    (attempt / "result.json").write_text("{}", encoding="utf-8")
+    assert not old1000.unresolved_attempt_is_retryable(last, attempt, round_dir, repair)
+    assert not old1000.unresolved_attempt_is_retryable(
+        {"status": "nonretryable_error", "error_type": "ValueError"},
+        tmp_path / "other", round_dir, repair)
+
+
 def test_terminal_failures_are_selected_for_append_only_recovery(tmp_path, monkeypatch):
     output = tmp_path / "repair-search-v3"
     recovery = output / "recoveries" / "terminal-case-recovery-v2"

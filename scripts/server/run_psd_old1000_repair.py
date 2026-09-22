@@ -326,8 +326,24 @@ def orphan_backup_path(key: str, marker: Path) -> Path:
     """Return a collision-free immutable backup path for one retry round."""
     repair_root = OUTPUT / "repairs" / key
     relative_parent = marker.parent.relative_to(repair_root)
-    return (OUTPUT / "recoveries/orphaned-attempts-v3" / key /
+    return (OUTPUT / "recoveries/orphaned-attempts-v4" / key /
             relative_parent / "ledger-original.json")
+
+
+def unresolved_attempt_is_retryable(last: dict[str, Any], attempt_dir: Path,
+                                   round_dir: Path, repair: Path) -> bool:
+    """Recognize an old ledger stop only when no result can have been accepted."""
+    if last.get("status") == "running":
+        return True
+    if last.get("status") == "interrupted":
+        return True
+    # Older owners recorded a process handoff as a generic RuntimeError.  Do
+    # not revive arbitrary deterministic exceptions or any attempt with a
+    # persisted result/canonical artifact.
+    return (last.get("status") == "nonretryable_error"
+            and last.get("error_type") == "RuntimeError"
+            and not any(path.exists() for path in (
+                attempt_dir / "result.json", round_dir / "result.json", repair / "result.json")))
 
 
 def case_cli(entry: dict[str, Any], benchmark: dict[str, Any], gold: dict[str, Any]) -> list[str]:
@@ -445,7 +461,7 @@ def reconcile_orphaned_running_attempts(entries: list[dict[str, Any]]) -> dict[s
             identity = raw["identity"]
             payload = load_bound(marker, identity=identity)
             attempts = payload.get("attempts", [])
-            if not attempts or attempts[-1].get("status") != "running":
+            if not attempts:
                 continue
             last = attempts[-1]
             attempt_dir = Path(last.get("directory", ""))
@@ -456,6 +472,8 @@ def reconcile_orphaned_running_attempts(entries: list[dict[str, Any]]) -> dict[s
                 skipped.append({"case_id": entry["case_id"], "marker": str(marker),
                                 "reason": "result_exists_with_running_ledger"})
                 continue
+            if not unresolved_attempt_is_retryable(last, attempt_dir, round_dir, repair):
+                continue
             backup = orphan_backup_path(key, marker)
             backup.parent.mkdir(parents=True, exist_ok=True)
             original = marker.read_bytes()
@@ -464,19 +482,21 @@ def reconcile_orphaned_running_attempts(entries: list[dict[str, Any]]) -> dict[s
             if not backup.exists():
                 shutil.copy2(marker, backup)
             old = dict(last)
+            legacy_status = last.get("status")
             last.update({"status": "infrastructure_failed",
-                         "reason": "orphaned_running_attempt_recovered_at_owner_start",
-                         "legacy_status": "running", "error_type": "ProcessTerminated",
-                         "migration_version": "ifv-old1000-orphaned-attempt-v3",
+                         "reason": "orphaned_unresolved_attempt_recovered_at_owner_start",
+                         "legacy_status": legacy_status,
+                         "error_type": last.get("error_type") or "ProcessTerminated",
+                         "migration_version": "ifv-old1000-orphaned-attempt-v4",
                          "backup": str(backup)})
             save_bound(marker, identity=identity, payload=payload)
             migrated.append({"case_id": entry["case_id"], "marker": str(marker),
                              "attempt_index": old.get("index"), "backup": str(backup)})
-    summary = {"schema_version": "ifv-old1000-orphaned-attempt-v3",
+    summary = {"schema_version": "ifv-old1000-orphaned-attempt-v4",
                "migrated_count": len(migrated), "skipped_count": len(skipped),
                "migrated": migrated, "skipped": skipped,
                "budget_reset": False, "time": time.time()}
-    save(OUTPUT / "recoveries/orphaned-attempts-v3/summary.json", summary)
+    save(OUTPUT / "recoveries/orphaned-attempts-v4/summary.json", summary)
     return summary
 
 
