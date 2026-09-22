@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+from pathlib import PurePosixPath
 
 import pytest
 
@@ -80,3 +81,10 @@ def test_old1000_case_cli_keeps_candidate_indexed_and_gemini_model(tmp_path, mon
     assert cli[cli.index("--hint-constructor-model") + 1] == "gemini-3.7-flash"
     assert cli[cli.index("--precomputed-slate-cache") + 1].endswith("judge-cache")
     assert "--resume" not in cli
+
+
+def test_detached_worker_keeps_immutable_launch_base_code():
+    value = old1000.worker_pythonpath(PurePosixPath("/overlay"), "/frozen/base:/frozen/base/training",
+                                       "/old/service")
+    assert value.split(":") == ["/overlay", "/overlay/training",
+                                 "/frozen/base", "/frozen/base/training", "/old/service"]

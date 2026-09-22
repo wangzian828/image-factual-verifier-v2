@@ -125,6 +125,11 @@ def no_competing_eval() -> None:
             raise RuntimeError("three-weight GPU Agent owner is still running")
 
 
+def worker_pythonpath(code_root: Path, launcher: str, replica: str) -> str:
+    return ":".join(part for part in (
+        str(code_root), str(code_root / "training"), launcher, replica) if part)
+
+
 def case_cli(entry: dict[str, Any], benchmark: dict[str, Any], gold: dict[str, Any]) -> list[str]:
     case_id = entry["case_id"]
     candidate = read_indexed_row(SELECTED, entry)
@@ -312,7 +317,12 @@ def launch(max_new_cases: int, concurrency: int) -> dict[str, Any]:
     if not (env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY")):
         raise RuntimeError("old-1000 Gemini review credential is missing")
     code_root = Path(__file__).resolve().parents[2]
-    env["PYTHONPATH"] = str(code_root) + ":" + str(code_root / "training") + ":" + env.get("PYTHONPATH", "")
+    # The serving replica predates this overlay and does not know the frozen
+    # base code snapshot. Keep the launcher's explicit package path as well as
+    # the checked replica environment; never silently fall back to a mutable
+    # checkout when the detached worker imports unchanged modules.
+    env["PYTHONPATH"] = worker_pythonpath(
+        code_root, os.environ.get("PYTHONPATH", ""), env.get("PYTHONPATH", ""))
     command = [sys.executable, "-u", str(Path(__file__).resolve()),
                "--max-new-cases", str(max_new_cases), "--concurrency", str(concurrency)]
     launches = OUTPUT / "launches"
