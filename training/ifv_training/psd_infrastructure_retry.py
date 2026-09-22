@@ -10,6 +10,7 @@ import asyncio
 import json
 import math
 import os
+import re
 from pathlib import Path
 
 import httpx
@@ -23,6 +24,18 @@ MAX_ATTEMPTS = 3  # Initial attempt plus at most two complete reruns.
 NONFINITE_SERIALIZATION_MESSAGES = frozenset(
     "Out of range float values are not JSON compliant: " + value
     for value in ("nan", "inf", "-inf"))
+
+UNUSABLE_CHAT_RESPONSE = re.compile(
+    r"Chat Completions returned an unusable response: choices=1, "
+    r"finish_reason=(?:tool_calls|stop|length), content_chars=0, "
+    r"reasoning_chars=\d+, reasoning_fallback_requested=False")
+
+
+def unusable_chat_response_reason(error):
+    """Only a backend-reported empty choice, never a task answer or tool result."""
+    if type(error) is RuntimeError and UNUSABLE_CHAT_RESPONSE.fullmatch(str(error)):
+        return "model_unusable_http_choice"
+    return None
 
 
 def is_nonfinite_serialization_response(status, payload):
@@ -110,6 +123,9 @@ def _transport_reason(error):
             return "model_transport_failure"
         if type(error) is RuntimeError and str(error) == "Chat Completions returned an empty response body.":
             return "model_empty_http_body"
+        reason = unusable_chat_response_reason(error)
+        if reason is not None:
+            return reason
         error = error.__cause__
     return None
 

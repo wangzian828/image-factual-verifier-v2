@@ -158,3 +158,35 @@ def test_reconcile_rejects_any_generated_output(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="zero model output"):
         old1000.reconcile_preflight_rejection()
     assert load_bound(marker, identity=identity)["attempts"][0]["status"] == "nonretryable_error"
+
+
+def test_reconcile_unusable_choices_keeps_existing_attempt_counts(tmp_path, monkeypatch):
+    from hashlib import sha256
+
+    output = tmp_path / "repair-search-v1"
+    identity = {"version": "ifv-psd-infrastructure-retry-v2", "inputs": {}, "max_attempts": 3}
+    entries = [{"case_id": "main-02731"}, {"case_id": "main-02735"}]
+    candidates = {entry["case_id"]: {"candidate_id": entry["case_id"]} for entry in entries}
+    monkeypatch.setattr(old1000, "OUTPUT", output)
+    monkeypatch.setattr(old1000, "selected_index", lambda: entries)
+    monkeypatch.setattr(old1000, "read_indexed_row", lambda _path, entry: candidates[entry["case_id"]])
+    for case_id, index in (("main-02731", 3), ("main-02735", 1)):
+        key = sha256(case_id.encode()).hexdigest()[:16]
+        retry = output / "repairs" / key / "slate-rounds/00/infrastructure-attempts"
+        attempts = []
+        for number in range(1, index + 1):
+            directory = retry / f"attempt-{number:03d}"
+            attempts.append({"index": number, "directory": str(directory),
+                             "status": "infrastructure_failed" if number < index else "nonretryable_error",
+                             "error_type": "RuntimeError"})
+        save_bound(retry / "retry-state.json", identity=identity, payload={"attempts": attempts})
+        event_path = (retry / f"attempt-{index:03d}" / "runtime" / case_id /
+                      "slate-00/events.jsonl")
+        event_path.parent.mkdir(parents=True)
+        event_path.write_text(json.dumps({"event_type": "context_request_completed", "payload": {
+            "status": "error", "error": "RuntimeError: Chat Completions returned an unusable response: "
+            "choices=1, finish_reason=length, content_chars=0, reasoning_chars=514, "
+            "reasoning_fallback_requested=False"}}) + "\n", encoding="utf-8")
+    assert [item["attempts_charged"] for item in old1000.reconcile_unusable_completions()["cases"]] == [3, 1]
+    assert [item["status"] for item in old1000.reconcile_unusable_completions()["cases"]] == [
+        "already_reconciled", "already_reconciled"]

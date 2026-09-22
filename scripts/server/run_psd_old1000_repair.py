@@ -28,6 +28,8 @@ except ImportError:  # The worker runs on Linux; permit local Windows unit tests
 from scripts.run_psd_repair_driver import _parser as repair_parser, _run as repair_run
 from scripts.server.precompute_psd_slate_proposals import read_indexed_row
 from ifv_training.psd_repair_storage import load_bound, save_bound
+from ifv_training.psd_infrastructure_retry import (
+    InfrastructureRetriesExhausted, unusable_chat_response_reason)
 
 
 ROOT = Path("/volume/ybo/wza")
@@ -212,6 +214,74 @@ def reconcile_preflight_rejection() -> dict[str, Any]:
     return receipt
 
 
+def reconcile_unusable_completions() -> dict[str, Any]:
+    """Reclassify only two audited empty backend choices, charging both attempts."""
+    current = OUTPUT / "latest-process.json"
+    if current.exists():
+        pid = int(load(current)["pid"])
+        if (Path("/proc") / str(pid) / "cmdline").exists():
+            raise RuntimeError("cannot reconcile while old-1000 repair owner is active")
+    targets = {"main-02731": 3, "main-02735": 1}
+    entries = {entry["case_id"]: entry for entry in selected_index()}
+    reported = []
+    for case_id, index in targets.items():
+        candidate = read_indexed_row(SELECTED, entries[case_id])
+        key = hashlib.sha256(candidate["candidate_id"].encode()).hexdigest()[:16]
+        retry = OUTPUT / "repairs" / key / "slate-rounds/00/infrastructure-attempts"
+        marker = retry / "retry-state.json"
+        raw = load(marker)
+        identity = raw["identity"]
+        state = load_bound(marker, identity=identity)
+        attempts = state["attempts"]
+        if len(attempts) != index or attempts[-1].get("index") != index:
+            raise ValueError("unusable-response attempt history changed for " + case_id)
+        row = attempts[-1]
+        if (row.get("status") == "infrastructure_failed"
+                and row.get("migration_version") == "ifv-old1000-unusable-choice-v1"):
+            reported.append({"case_id": case_id, "status": "already_reconciled"})
+            continue
+        if row.get("status") != "nonretryable_error" or row.get("error_type") != "RuntimeError":
+            raise ValueError("unusable-response ledger is not the inspected RuntimeError")
+        attempt_dir = retry / f"attempt-{index:03d}"
+        if Path(row["directory"]).resolve() != attempt_dir.resolve():
+            raise ValueError("unusable-response attempt directory changed")
+        if (retry / "result.json").exists() or any(attempt_dir.rglob("result.json")):
+            raise RuntimeError("unusable-response attempt has a completed result")
+        events = list(attempt_dir.glob("runtime/*/*/events.jsonl"))
+        if len(events) != 1:
+            raise ValueError("unusable-response runtime stream is not unique")
+        runtime_rows = [json.loads(line) for line in events[0].read_text(encoding="utf-8").splitlines()]
+        last = runtime_rows[-1]
+        error_text = str(last.get("payload", {}).get("error") or "")
+        if (last.get("event_type") != "context_request_completed"
+                or last.get("payload", {}).get("status") != "error"
+                or not error_text.startswith("RuntimeError: ")
+                or unusable_chat_response_reason(RuntimeError(error_text.removeprefix("RuntimeError: ")))
+                   != "model_unusable_http_choice"):
+            raise ValueError("unusable-response runtime does not prove backend empty choice")
+        backup = (OUTPUT / "recoveries/unusable-backend-choice-v1" / case_id /
+                  "ledger-original.json")
+        original = marker.read_bytes()
+        if backup.exists():
+            if backup.read_bytes() != original:
+                raise ValueError("unusable-response ledger backup changed")
+        else:
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            backup.write_bytes(original)
+        row.update(status="infrastructure_failed", reason="model_unusable_http_choice",
+                   legacy_status="nonretryable_error",
+                   migration_version="ifv-old1000-unusable-choice-v1",
+                   evidence_events=str(events[0]))
+        save_bound(marker, identity=identity, payload=state)
+        receipt = {"case_id": case_id, "status": "reconciled", "attempts_charged": index,
+                   "ledger": str(marker), "original_sha256": hashlib.sha256(original).hexdigest(),
+                   "backup": str(backup), "evidence_events": str(events[0]), "time": time.time()}
+        save(backup.parent / "receipt.json", receipt)
+        reported.append(receipt)
+    return {"schema_version": "ifv-old1000-unusable-choice-v1", "cases": reported,
+            "budget_reset": False}
+
+
 def worker_pythonpath(code_root: Path, launcher: str, replica: str) -> str:
     return ":".join(part for part in (
         str(code_root), str(code_root / "training"), launcher, replica) if part)
@@ -357,6 +427,12 @@ async def worker(max_new_cases: int, concurrency: int) -> dict[str, Any]:
                         "manifest": str(args.output_dir / "manifest.json"),
                         "completed_unix": time.time()})
                     counts[status] += 1
+                except InfrastructureRetriesExhausted as error:
+                    save(OUTPUT / "case-receipts" / (case_id + ".json"), {
+                        "case_id": case_id, "status": "infrastructure_budget_exhausted",
+                        "reason": str(error),
+                        "manifest": None, "completed_unix": time.time()})
+                    counts["infrastructure_budget_exhausted"] += 1
                 except Exception as error:
                     error_receipt = {
                         "case_id": case_id, "error_type": type(error).__name__,
@@ -433,10 +509,13 @@ def main() -> None:
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--cache-probe", action="store_true")
     parser.add_argument("--reconcile-preflight-rejection", action="store_true")
+    parser.add_argument("--reconcile-unusable-completions", action="store_true")
     parser.add_argument("--max-new-cases", type=int, default=0)
     parser.add_argument("--concurrency", type=int, default=8)
     args = parser.parse_args()
-    if args.reconcile_preflight_rejection:
+    if args.reconcile_unusable_completions:
+        result = reconcile_unusable_completions()
+    elif args.reconcile_preflight_rejection:
         result = reconcile_preflight_rejection()
     elif args.cache_probe:
         result = asyncio.run(cache_probe(selected_index()[0]))
