@@ -44,6 +44,7 @@ SERVICE = ROOT / "inference/psd-sft3084-20260916"
 GOLD = ROOT / "data/psd-candidate-pool-4000-20260914-v3/train/evaluator_private/private_gold.jsonl"
 TERMINAL = {"converged", "passed_without_intervention", "attempt_budget_exhausted",
             "proposal_budget_exhausted", "infrastructure_budget_exhausted"}
+MAX_WORKER_CONCURRENCY = 28
 PREFLIGHT_REJECTION = ("HTTP 400 Bad Request for http://127.0.0.1:19025/v1/chat/completions: "
                        '{"detail":"case-isolated prefix caching requires an opaque 256-bit '
                        'ifv-case-v1- cache_salt"}')
@@ -415,7 +416,7 @@ def select_pending(entries: list[dict[str, Any]], excluded: set[str]) -> tuple[l
 
 
 async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False) -> dict[str, Any]:
-    if not 1 <= concurrency <= 16 or max_new_cases < 0:
+    if not 1 <= concurrency <= MAX_WORKER_CONCURRENCY or max_new_cases < 0:
         raise ValueError("invalid old-1000 repair worker bounds")
     if fcntl is None:
         raise RuntimeError("old-1000 repair owner requires Linux process locks")
@@ -541,7 +542,7 @@ def launch_parallel(concurrency: int) -> dict[str, Any]:
     env["IFV_PSD_GEMINI_REQUEST_RETRIES"] = os.environ.get(
         "IFV_PSD_GEMINI_REQUEST_RETRIES", "3")
     env["GEMINI_MAX_INFLIGHT_REQUESTS"] = os.environ.get(
-        "IFV_OLD1000_GEMINI_MAX_INFLIGHT", "16")
+        "IFV_OLD1000_GEMINI_MAX_INFLIGHT", str(concurrency))
     code_root = Path(__file__).resolve().parents[2]
     env["PYTHONPATH"] = worker_pythonpath(
         code_root, os.environ.get("PYTHONPATH", ""), env.get("PYTHONPATH", ""))
@@ -586,7 +587,7 @@ def launch(max_new_cases: int, concurrency: int) -> dict[str, Any]:
     env["IFV_PSD_GEMINI_REQUEST_RETRIES"] = os.environ.get(
         "IFV_PSD_GEMINI_REQUEST_RETRIES", "3")
     env["GEMINI_MAX_INFLIGHT_REQUESTS"] = os.environ.get(
-        "IFV_OLD1000_GEMINI_MAX_INFLIGHT", "16")
+        "IFV_OLD1000_GEMINI_MAX_INFLIGHT", str(concurrency))
     code_root = Path(__file__).resolve().parents[2]
     # The serving replica predates this overlay and does not know the frozen
     # base code snapshot. Keep the launcher's explicit package path as well as

@@ -91,6 +91,10 @@ def test_detached_worker_keeps_immutable_launch_base_code():
                                  "/frozen/base", "/frozen/base/training", "/old/service"]
 
 
+def test_main_worker_allows_requested_28_way_concurrency():
+    assert old1000.MAX_WORKER_CONCURRENCY == 28
+
+
 def test_parallel_handoff_excludes_exact_smoke_cases_after_some_finish(tmp_path, monkeypatch):
     output = tmp_path / "repair-search-v1"
     (output / "case-receipts").mkdir(parents=True)
