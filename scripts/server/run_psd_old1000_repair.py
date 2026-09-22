@@ -785,8 +785,11 @@ def launch_parallel(concurrency: int) -> dict[str, Any]:
     env["IFV_OLD1000_REPAIR_OUTPUT"] = str(OUTPUT)
     env["IFV_PSD_GEMINI_REQUEST_RETRIES"] = os.environ.get(
         "IFV_PSD_GEMINI_REQUEST_RETRIES", "3")
-    if os.environ.get("IFV_OLD1000_GEMINI_MODEL"):
-        env["IFV_OLD1000_GEMINI_MODEL"] = os.environ["IFV_OLD1000_GEMINI_MODEL"]
+    # The old service owner's checked environment is intentionally narrow and
+    # may omit launcher-only variables.  Bind the selected model explicitly in
+    # this immutable run so the worker cannot silently fall back to 3.6.
+    env["IFV_OLD1000_GEMINI_MODEL"] = os.environ.get(
+        "IFV_OLD1000_GEMINI_MODEL", "gemini-3.7-flash")
     env["GEMINI_MAX_INFLIGHT_REQUESTS"] = os.environ.get(
         "IFV_OLD1000_GEMINI_MAX_INFLIGHT", str(concurrency))
     code_root = Path(__file__).resolve().parents[2]
