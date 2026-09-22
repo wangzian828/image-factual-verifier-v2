@@ -109,6 +109,54 @@ def test_live_capture_keeps_json_rendering_tool_order_and_archived_images(monkey
         hydrate_live_snapshot(compact, '{"phase":"different"}')
 
 
+def test_capture_target_binds_accepted_protocol_correction_request(monkeypatch):
+    """A rejected JSON response must not make the later correction look stale."""
+    import src.orchestrator.runtime_events as events
+    from src.orchestrator.stage_runner import StageRunner
+
+    hint_text = "Re-check the visible label."
+    original_messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "image"},
+        {"role": "user", "content": hint_text},
+    ]
+    correction_messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "image"},
+        {"role": "assistant", "content": "not valid json"},
+        {"role": "user", "content": "Return one corrected complete JSON object."},
+        {"role": "user", "content": hint_text},
+    ]
+    archived = {"input_payload": copy.deepcopy(correction_messages), "tool_schema": []}
+    monkeypatch.setattr(events, "reconstruct_archived_request", lambda *_: copy.deepcopy(archived))
+    rejected = StageStep(action_type="output_rejected", metadata={
+        "policy_input": StageRunner._policy_input_snapshot(
+            system_instruction="system", input_payload=original_messages[1:], tools=[], response_format=None),
+    })
+    accepted = StageStep(action_type="output", metadata={
+        "context_request_id": "corrected-request",
+        "policy_input": StageRunner._policy_input_snapshot(
+            system_instruction="system", input_payload=correction_messages[1:], tools=[], response_format=None),
+        "policy_token_capture": {"status": "complete", "prompt_token_ids": [10, 11],
+            "completion_token_ids": [12]},
+    })
+    seen = []
+
+    async def tokenize(body):
+        seen.append(copy.deepcopy(body))
+        return [10, 11] if len(seen) == 1 else [10]
+
+    row = asyncio.run(capture_target(position=24, hint=hint(hint_text),
+        steps=[rejected, accepted], unhinted_prefix=[{"role": "user", "content": "old prefix"}],
+        runtime_store=SimpleNamespace(root="archive"), system_instruction="system",
+        tokenize=tokenize, model="frozen"))
+    assert row["hint_message_index"] == 4
+    assert row["teacher_request_kind"] == "accepted_protocol_correction_request"
+    assert row["student_prefix_kind"] == "corrected_hint_free_history"
+    assert seen[0]["messages"] == correction_messages
+    assert seen[1]["messages"] == correction_messages[:4]
+
+
 @pytest.mark.parametrize("initial_hint", [False, True])
 @pytest.mark.parametrize("plain_retry", [False, True])
 def test_two_position_runtime_uses_corrected_history_and_removes_each_hint(monkeypatch, initial_hint, plain_retry):

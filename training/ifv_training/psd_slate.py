@@ -149,11 +149,49 @@ async def capture_target(*, position, hint, steps, unhinted_prefix,
     # above; teacher token equality below remains mandatory and unchanged.
     actual_system = snapshot.get("system_instruction", system_instruction)
     prefix = [{"role": "system", "content": actual_system}, *copy.deepcopy(unhinted_prefix)]
+    hint_message = {"role": "user", "content": hint.text}
     hint_index = len(prefix)
-    if not isinstance(messages, list) or messages[:hint_index] != prefix:
-        raise ValueError("PSD slate actual teacher prefix differs from corrected history")
-    if len(messages) <= hint_index or messages[hint_index] != {"role": "user", "content": hint.text}:
-        raise ValueError("PSD slate hint is not at its bound request position")
+    correction_chain = any(
+        s.action_type in {"format_error", "output_rejected"}
+        and not s.metadata.get("deterministic_segment_boundary")
+        for s in steps
+    )
+    student_prefix_kind = "corrected_hint_free_history"
+    teacher_request_kind = "initial_hint_request"
+    if not isinstance(messages, list):
+        raise ValueError("PSD slate teacher request has no message history")
+    if not correction_chain:
+        if messages[:hint_index] != prefix:
+            raise ValueError("PSD slate actual teacher prefix differs from corrected history")
+        if len(messages) <= hint_index or messages[hint_index] != hint_message:
+            raise ValueError("PSD slate hint is not at its bound request position")
+    else:
+        # A rejected structured output is followed by a protocol-correction
+        # request.  That request is the actual prompt for the accepted action,
+        # but its history is intentionally rewritten by StageRunner (it may
+        # omit the image and move the injected hint away from the original
+        # tail position).  Comparing it with the pre-correction prefix makes a
+        # valid target look like a teacher-prefix mismatch.  Bind the target
+        # to the accepted request itself and remove exactly the injected hint,
+        # wherever it occurs in that correction history.
+        if not messages or messages[0] != {"role": "system", "content": actual_system}:
+            raise ValueError("PSD slate correction request has a different system prompt")
+        hint_indices = [i for i, message in enumerate(messages) if message == hint_message]
+        if len(hint_indices) != 1:
+            raise ValueError("PSD slate correction request does not contain exactly one bound hint")
+        # The hint must also have appeared in the preceding hint-bearing
+        # request; this prevents an unrelated user message in a correction
+        # history from being mistaken for the PSD injection point.
+        prior_hint_bound = False
+        for prior in steps:
+            prior_payload = prior.metadata.get("policy_input", {}).get("input_payload")
+            if isinstance(prior_payload, list) and any(message == hint_message for message in prior_payload):
+                prior_hint_bound = True
+                break
+        if not prior_hint_bound:
+            raise ValueError("PSD slate correction hint is not bound to an earlier hinted request")
+        hint_index = hint_indices[0]
+        teacher_request_kind = "accepted_protocol_correction_request"
     # Format-correction requests after the injected hint are retained, not
     # silently discarded. The target still uses exactly the accepted action.
     student_messages = messages[:hint_index] + messages[hint_index + 1:]
@@ -176,7 +214,8 @@ async def capture_target(*, position, hint, steps, unhinted_prefix,
         "context_request_id": request_id, "runtime_store_path": str(runtime_store.root),
         "hint_message_index": hint_index, "teacher_request_sha256": _sha(request),
         "student_messages_sha256": _sha(student_messages),
-        "student_prefix_kind": "corrected_hint_free_history", "row_weight": 1.0}
+        "student_prefix_kind": student_prefix_kind, "teacher_request_kind": teacher_request_kind,
+        "row_weight": 1.0}
 
 
 def validate_slate_revision(previous, proposed, *, passing_positions, failed_position,
