@@ -8,6 +8,7 @@ import pytest
 from scripts.run_psd_repair_driver import _candidate_seed
 import scripts.server.run_psd_old1000_repair as old1000
 from ifv_training.psd_gemini_judge import _request
+from ifv_training.psd_repair_storage import load_bound, save_bound
 
 
 def test_candidate_slice_reads_only_selected_row(tmp_path):
@@ -97,3 +98,63 @@ def test_cache_mode_requires_fail_closed_case_isolation():
     assert old1000.gateway_cache_mode(healthy) == "case_isolated"
     with pytest.raises(RuntimeError, match="fail-closed"):
         old1000.gateway_cache_mode({**healthy, "reject_corrupted_responses": False})
+
+
+def test_reconcile_only_exact_zero_output_gateway_rejection(tmp_path, monkeypatch):
+    from hashlib import sha256
+
+    candidate = {"candidate_id": "candidate-1"}
+    key = sha256(b"candidate-1").hexdigest()[:16]
+    output = tmp_path / "repair-search-v1"
+    retry = output / "repairs" / key / "slate-rounds/00/infrastructure-attempts"
+    attempt = retry / "attempt-001"
+    events = attempt / "runtime/main-02731/slate-00/events.jsonl"
+    events.parent.mkdir(parents=True)
+    identity = {"version": "ifv-psd-infrastructure-retry-v2", "inputs": {}, "max_attempts": 3}
+    marker = retry / "retry-state.json"
+    save_bound(marker, identity=identity, payload={"attempts": [{"index": 1,
+        "directory": str(attempt), "status": "nonretryable_error", "error_type": "RuntimeError"}]})
+    event = {"event_type": "context_request_completed", "payload": {
+        "status": "error", "error": "RuntimeError: " + old1000.PREFLIGHT_REJECTION,
+        "provider_output_tokens": None}}
+    events.write_text("\n".join(json.dumps(item) for item in (
+        {"event_type": "case_attempt_started"},
+        {"event_type": "context_request_started", "payload": {"provider_output_tokens": None}},
+        event)) + "\n", encoding="utf-8")
+    monkeypatch.setattr(old1000, "OUTPUT", output)
+    monkeypatch.setattr(old1000, "selected_index", lambda: [{"case_id": "main-02731"}])
+    monkeypatch.setattr(old1000, "read_indexed_row", lambda *args: candidate)
+    result = old1000.reconcile_preflight_rejection()
+    assert result["status"] == "reconciled"
+    assert result["attempts_charged"] == 1
+    assert load_bound(marker, identity=identity)["attempts"][0]["status"] == "infrastructure_failed"
+    assert old1000.reconcile_preflight_rejection()["status"] == "already_reconciled"
+
+
+def test_reconcile_rejects_any_generated_output(tmp_path, monkeypatch):
+    from hashlib import sha256
+
+    candidate = {"candidate_id": "candidate-1"}
+    key = sha256(b"candidate-1").hexdigest()[:16]
+    output = tmp_path / "repair-search-v1"
+    retry = output / "repairs" / key / "slate-rounds/00/infrastructure-attempts"
+    attempt = retry / "attempt-001"
+    events = attempt / "runtime/main-02731/slate-00/events.jsonl"
+    events.parent.mkdir(parents=True)
+    marker = retry / "retry-state.json"
+    identity = {"version": "ifv-psd-infrastructure-retry-v2", "inputs": {}, "max_attempts": 3}
+    save_bound(marker, identity=identity, payload={"attempts": [{"index": 1,
+        "directory": str(attempt), "status": "nonretryable_error", "error_type": "RuntimeError"}]})
+    event = {"event_type": "context_request_completed", "payload": {
+        "status": "error", "error": "RuntimeError: " + old1000.PREFLIGHT_REJECTION,
+        "provider_output_tokens": 1}}
+    events.write_text("\n".join(json.dumps(item) for item in (
+        {"event_type": "case_attempt_started"},
+        {"event_type": "context_request_started", "payload": {"provider_output_tokens": None}},
+        event)) + "\n", encoding="utf-8")
+    monkeypatch.setattr(old1000, "OUTPUT", output)
+    monkeypatch.setattr(old1000, "selected_index", lambda: [{"case_id": "main-02731"}])
+    monkeypatch.setattr(old1000, "read_indexed_row", lambda *args: candidate)
+    with pytest.raises(ValueError, match="zero model output"):
+        old1000.reconcile_preflight_rejection()
+    assert load_bound(marker, identity=identity)["attempts"][0]["status"] == "nonretryable_error"

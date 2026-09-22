@@ -27,6 +27,7 @@ except ImportError:  # The worker runs on Linux; permit local Windows unit tests
 
 from scripts.run_psd_repair_driver import _parser as repair_parser, _run as repair_run
 from scripts.server.precompute_psd_slate_proposals import read_indexed_row
+from ifv_training.psd_repair_storage import load_bound, save_bound
 
 
 ROOT = Path("/volume/ybo/wza")
@@ -40,6 +41,9 @@ SERVICE = ROOT / "inference/psd-sft3084-20260916"
 GOLD = ROOT / "data/psd-candidate-pool-4000-20260914-v3/train/evaluator_private/private_gold.jsonl"
 TERMINAL = {"converged", "passed_without_intervention", "attempt_budget_exhausted",
             "proposal_budget_exhausted", "infrastructure_budget_exhausted"}
+PREFLIGHT_REJECTION = ("HTTP 400 Bad Request for http://127.0.0.1:19025/v1/chat/completions: "
+                       '{"detail":"case-isolated prefix caching requires an opaque 256-bit '
+                       'ifv-case-v1- cache_salt"}')
 
 
 def load(path: Path) -> Any:
@@ -136,6 +140,76 @@ def no_competing_eval() -> None:
         if ("resume_corrected_agent_eval.py" in line
                 or "qwen35-base-agent-full1526-selfextract-20260921-v3" in line):
             raise RuntimeError("three-weight GPU Agent owner is still running")
+
+
+def reconcile_preflight_rejection() -> dict[str, Any]:
+    """Classify one proven gateway pre-admission rejection; keep its spent attempt.
+
+    This is intentionally not a generic 400 recovery. The runtime event must
+    prove that the first model request was rejected before token generation.
+    """
+    current = OUTPUT / "latest-process.json"
+    if current.exists():
+        pid = int(load(current)["pid"])
+        if (Path("/proc") / str(pid) / "cmdline").exists():
+            raise RuntimeError("cannot reconcile while old-1000 repair owner is active")
+    entries = selected_index()
+    entry = entries[0]
+    if entry["case_id"] != "main-02731":
+        raise ValueError("unexpected old-1000 preflight case")
+    candidate = read_indexed_row(SELECTED, entry)
+    key = hashlib.sha256(candidate["candidate_id"].encode()).hexdigest()[:16]
+    retry = OUTPUT / "repairs" / key / "slate-rounds/00/infrastructure-attempts"
+    marker = retry / "retry-state.json"
+    if not marker.is_file():
+        raise FileNotFoundError("old-1000 preflight retry ledger missing")
+    raw = load(marker)
+    identity = raw["identity"]
+    state = load_bound(marker, identity=identity)
+    attempts = state["attempts"]
+    if len(attempts) != 1 or attempts[0].get("index") != 1:
+        raise ValueError("preflight attempt history differs from audited one")
+    row = attempts[0]
+    if (row.get("status") == "infrastructure_failed"
+            and row.get("migration_version") == "ifv-old1000-gateway-preflight-v1"):
+        return {"case_id": entry["case_id"], "status": "already_reconciled",
+                "attempts_charged": 1}
+    if row.get("status") != "nonretryable_error" or row.get("error_type") != "RuntimeError":
+        raise ValueError("preflight ledger is not the inspected RuntimeError")
+    attempt_dir = retry / "attempt-001"
+    if Path(row["directory"]).resolve() != attempt_dir.resolve():
+        raise ValueError("preflight attempt path differs from ledger")
+    if (retry / "result.json").exists() or any(attempt_dir.rglob("result.json")):
+        raise RuntimeError("preflight may have completed a Qwen response")
+    events = list(attempt_dir.glob("runtime/*/*/events.jsonl"))
+    if len(events) != 1:
+        raise ValueError("expected exactly one preflight runtime event stream")
+    rows = [json.loads(line) for line in events[0].read_text(encoding="utf-8").splitlines()]
+    completed = [item for item in rows if item.get("event_type") == "context_request_completed"]
+    if ([item.get("event_type") for item in rows] != [
+            "case_attempt_started", "context_request_started", "context_request_completed"]
+            or len(completed) != 1 or completed[0].get("payload", {}).get("status") != "error"
+            or completed[0]["payload"].get("error") != "RuntimeError: " + PREFLIGHT_REJECTION
+            or completed[0]["payload"].get("provider_output_tokens") is not None
+            or rows[1].get("payload", {}).get("provider_output_tokens") is not None):
+        raise ValueError("preflight runtime does not prove zero model output")
+    backup = OUTPUT / "recoveries/gateway-cache-contract-preflight-v1/ledger-original.json"
+    original = marker.read_bytes()
+    if backup.exists():
+        if backup.read_bytes() != original:
+            raise ValueError("preflight backup differs from current ledger")
+    else:
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_bytes(original)
+    row.update(status="infrastructure_failed", reason="gateway rejected missing cache salt before model admission",
+               legacy_status="nonretryable_error", migration_version="ifv-old1000-gateway-preflight-v1",
+               evidence_events=str(events[0]))
+    save_bound(marker, identity=identity, payload=state)
+    receipt = {"case_id": entry["case_id"], "status": "reconciled", "attempts_charged": 1,
+               "ledger": str(marker), "original_sha256": hashlib.sha256(original).hexdigest(),
+               "backup": str(backup), "evidence_events": str(events[0]), "time": time.time()}
+    save(backup.parent / "receipt.json", receipt)
+    return receipt
 
 
 def worker_pythonpath(code_root: Path, launcher: str, replica: str) -> str:
@@ -284,9 +358,12 @@ async def worker(max_new_cases: int, concurrency: int) -> dict[str, Any]:
                         "completed_unix": time.time()})
                     counts[status] += 1
                 except Exception as error:
-                    save(OUTPUT / "case-errors" / (case_id + ".json"), {
+                    error_receipt = {
                         "case_id": case_id, "error_type": type(error).__name__,
-                        "message": str(error)[:500], "at_unix": time.time()})
+                        "message": str(error)[:500], "at_unix": time.time()}
+                    save(OUTPUT / "case-error-history" / case_id /
+                         (str(time.time_ns()) + ".json"), error_receipt)
+                    save(OUTPUT / "case-errors" / (case_id + ".json"), error_receipt)
                     counts["case_error"] += 1
                 finally:
                     queue.task_done()
@@ -355,10 +432,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--cache-probe", action="store_true")
+    parser.add_argument("--reconcile-preflight-rejection", action="store_true")
     parser.add_argument("--max-new-cases", type=int, default=0)
     parser.add_argument("--concurrency", type=int, default=8)
     args = parser.parse_args()
-    if args.cache_probe:
+    if args.reconcile_preflight_rejection:
+        result = reconcile_preflight_rejection()
+    elif args.cache_probe:
         result = asyncio.run(cache_probe(selected_index()[0]))
     else:
         result = (launch(args.max_new_cases, args.concurrency) if args.launch
