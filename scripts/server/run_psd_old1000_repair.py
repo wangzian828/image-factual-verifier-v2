@@ -298,6 +298,30 @@ def worker_pythonpath(code_root: Path, launcher: str, replica: str) -> str:
         str(code_root), str(code_root / "training"), launcher, replica) if part)
 
 
+def repair_python() -> str:
+    """Use the frozen Qwen3.5 runtime for repair workers.
+
+    The serving process and this worker do not share a Python executable.  The
+    system Python has an old Transformers build that silently loads the model
+    as a tokenizer-only processor (and can also fail importing through an old
+    protobuf/onnx stack).  Prefer an explicit override, then the immutable
+    H20 training environment, and only fall back to the current interpreter in
+    local/unit-test environments where the frozen environment is absent.
+    """
+    override = (os.environ.get("IFV_OLD1000_REPAIR_PYTHON") or
+                os.environ.get("IFV_BASE_PYTHON"))
+    if override:
+        candidate = Path(override).expanduser()
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise RuntimeError(f"configured PSD repair Python is unavailable: {candidate}")
+        return str(candidate)
+    data_root = Path(os.environ.get("IFV_DATA_ROOT", str(ROOT)))
+    candidate = data_root / "envs/h20-qwen35-128k/bin/python"
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return sys.executable
+
+
 def case_cli(entry: dict[str, Any], benchmark: dict[str, Any], gold: dict[str, Any]) -> list[str]:
     case_id = entry["case_id"]
     candidate = read_indexed_row(SELECTED, entry)
@@ -691,7 +715,7 @@ def launch_parallel(concurrency: int) -> dict[str, Any]:
     code_root = Path(__file__).resolve().parents[2]
     env["PYTHONPATH"] = worker_pythonpath(
         code_root, os.environ.get("PYTHONPATH", ""), env.get("PYTHONPATH", ""))
-    command = [sys.executable, "-u", str(Path(__file__).resolve()),
+    command = [repair_python(), "-u", str(Path(__file__).resolve()),
                "--parallel-remainder", "--max-new-cases", "0",
                "--concurrency", str(concurrency)]
     launches = OUTPUT / "launches-parallel"
@@ -740,7 +764,7 @@ def launch(max_new_cases: int, concurrency: int) -> dict[str, Any]:
     # checkout when the detached worker imports unchanged modules.
     env["PYTHONPATH"] = worker_pythonpath(
         code_root, os.environ.get("PYTHONPATH", ""), env.get("PYTHONPATH", ""))
-    command = [sys.executable, "-u", str(Path(__file__).resolve()),
+    command = [repair_python(), "-u", str(Path(__file__).resolve()),
                "--max-new-cases", str(max_new_cases), "--concurrency", str(concurrency)]
     launches = OUTPUT / "launches"
     launches.mkdir(parents=True, exist_ok=True)

@@ -95,6 +95,26 @@ def test_main_worker_allows_requested_28_way_concurrency():
     assert old1000.MAX_WORKER_CONCURRENCY == 28
 
 
+def test_repair_python_prefers_frozen_runtime(tmp_path, monkeypatch):
+    frozen = tmp_path / "envs/h20-qwen35-128k/bin/python"
+    frozen.parent.mkdir(parents=True)
+    frozen.write_bytes(b"#!/bin/sh\n")
+    frozen.chmod(0o755)
+    monkeypatch.setattr(old1000, "ROOT", tmp_path)
+    monkeypatch.delenv("IFV_OLD1000_REPAIR_PYTHON", raising=False)
+    monkeypatch.delenv("IFV_BASE_PYTHON", raising=False)
+    monkeypatch.setenv("IFV_DATA_ROOT", str(tmp_path))
+    assert old1000.repair_python() == str(frozen)
+
+
+def test_repair_python_honors_explicit_override(tmp_path, monkeypatch):
+    frozen = tmp_path / "python"
+    frozen.write_bytes(b"#!/bin/sh\n")
+    frozen.chmod(0o755)
+    monkeypatch.setenv("IFV_OLD1000_REPAIR_PYTHON", str(frozen))
+    assert old1000.repair_python() == str(frozen)
+
+
 def test_terminal_failures_are_selected_for_append_only_recovery(tmp_path, monkeypatch):
     output = tmp_path / "repair-search-v3"
     recovery = output / "recoveries" / "terminal-case-recovery-v2"
