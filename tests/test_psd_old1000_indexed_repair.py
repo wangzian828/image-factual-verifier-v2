@@ -95,6 +95,23 @@ def test_main_worker_allows_requested_28_way_concurrency():
     assert old1000.MAX_WORKER_CONCURRENCY == 28
 
 
+@pytest.mark.parametrize("error", [
+    RuntimeError("ordinary code error"),
+    RuntimeError("model returned a wrong answer"),
+])
+def test_case_retry_classifier_does_not_retry_semantic_or_code_errors(error):
+    assert not old1000.retryable_case_error(error)
+
+
+def test_case_retry_classifier_retries_gemini_incomplete_and_transport():
+    assert old1000.retryable_case_error(
+        RuntimeError("Gemini interaction ended with status=incomplete")) is False
+    error = type("GeminiInteractionsResponseError", (RuntimeError,), {})
+    assert old1000.retryable_case_error(
+        error("Gemini interaction ended with status=incomplete"))
+    assert old1000.retryable_case_error(TimeoutError("provider timeout"))
+
+
 def test_repair_python_prefers_frozen_runtime(tmp_path, monkeypatch):
     frozen = tmp_path / "envs/h20-qwen35-128k/bin/python"
     frozen.parent.mkdir(parents=True)

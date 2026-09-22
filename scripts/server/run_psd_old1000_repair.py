@@ -66,6 +66,25 @@ def save(path: Path, value: Any) -> None:
     os.replace(temporary, path)
 
 
+def retryable_case_error(error: BaseException) -> bool:
+    """Identify provider/incomplete outcomes that must return to the queue.
+
+    A case-level queue retry is deliberately bounded by the worker.  It is a
+    recovery of an unfinished case, not a reset of the six repair rounds or
+    the per-request Gemini retry budget.
+    """
+    name = type(error).__name__
+    message = str(error).lower()
+    if name == "GeminiInteractionsResponseError":
+        return any(marker in message for marker in (
+            "status=incomplete", "status=failed", "status=cancelled",
+            "status=canceled", "status=expired", "invalid json",
+        ))
+    return name in {"ReadTimeout", "ConnectTimeout", "TimeoutError",
+                    "ConnectError", "ReadError", "WriteError",
+                    "RemoteProtocolError"}
+
+
 def by_case(path: Path) -> dict[str, dict[str, Any]]:
     result = {}
     with path.open(encoding="utf-8") as stream:
@@ -617,6 +636,11 @@ async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False
         for row in recovery_rows:
             queue.put_nowait((entry_by_case[row["case_id"]], True))
 
+        # Shared across all workers: a case may be put back on the queue and
+        # picked up by a different worker.  Keeping this counter per worker
+        # would accidentally allow one retry per worker.
+        case_requeues = Counter()
+
         async def one() -> None:
             while not queue.empty():
                 try:
@@ -631,6 +655,11 @@ async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False
                     result = await repair_run(args)
                     status = result.get("status")
                     if status not in TERMINAL:
+                        if status == "unresolved_infrastructure" and case_requeues[case_id] < 1:
+                            case_requeues[case_id] += 1
+                            queue.put_nowait((entry, is_recovery))
+                            counts["case_requeued"] += 1
+                            continue
                         raise RuntimeError("repair case did not reach a terminal manifest")
                     receipt_root = RECOVERY_OUTPUT if is_recovery else OUTPUT
                     receipt = {
@@ -645,6 +674,11 @@ async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False
                     counts[status] += 1
                     counts["recovery_terminal" if is_recovery else "regular_terminal"] += 1
                 except InfrastructureRetriesExhausted as error:
+                    if case_requeues[case_id] < 1:
+                        case_requeues[case_id] += 1
+                        queue.put_nowait((entry, is_recovery))
+                        counts["case_requeued"] += 1
+                        continue
                     receipt_root = RECOVERY_OUTPUT if is_recovery else OUTPUT
                     receipt = {
                         "case_id": case_id, "status": "infrastructure_budget_exhausted",
@@ -660,10 +694,15 @@ async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False
                     error_receipt = {
                         "case_id": case_id, "error_type": type(error).__name__,
                         "message": str(error)[:500], "at_unix": time.time()}
-                    save(error_root / "case-error-history" / case_id /
-                         (str(time.time_ns()) + ".json"), error_receipt)
-                    save(error_root / "case-errors" / (case_id + ".json"), error_receipt)
-                    counts["case_error"] += 1
+                    history_path = error_root / "case-error-history" / case_id / (str(time.time_ns()) + ".json")
+                    save(history_path, error_receipt)
+                    if retryable_case_error(error) and case_requeues[case_id] < 1:
+                        case_requeues[case_id] += 1
+                        queue.put_nowait((entry, is_recovery))
+                        counts["case_requeued"] += 1
+                    else:
+                        save(error_root / "case-errors" / (case_id + ".json"), error_receipt)
+                        counts["case_error"] += 1
                 finally:
                     queue.task_done()
                     regular_remaining = len(pending) - counts["regular_terminal"]
