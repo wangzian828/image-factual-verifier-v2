@@ -87,6 +87,27 @@ def test_cached_review_is_not_resampled_and_binds_model_packet_images(tmp_path):
     assert client.calls[0]["input"][-1]["text"] == "image-sha"
 
 
+def test_incomplete_gemini_response_retries_same_logical_request(tmp_path, monkeypatch):
+    from src.integrations.gemini.interactions import GeminiInteractionsResponseError
+
+    class RetryClient:
+        def __init__(self):
+            self.calls = []
+
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) < 3:
+                raise GeminiInteractionsResponseError(
+                    'Gemini interaction x ended with status=incomplete')
+            return {"id": "interaction-retry", "status": "completed",
+                    "outputs": [{"type": "text", "text": json.dumps(review())}]}
+
+    monkeypatch.setenv("IFV_PSD_GEMINI_REQUEST_RETRIES", "2")
+    client = RetryClient()
+    result = asyncio.run(judge.judge_repair(client, packet(), cache_dir=tmp_path))
+    assert result["passed"] and len(client.calls) == 3
+
+
 @pytest.mark.parametrize("field,value", [("grounded_episode", "true"),
     ("earliest_error_step", True), ("explanation", ""), ("evidence", {})])
 def test_strict_schema_rejects_wrong_types(field, value):

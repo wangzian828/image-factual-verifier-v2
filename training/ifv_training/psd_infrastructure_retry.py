@@ -123,6 +123,15 @@ def _transport_reason(error):
             return "model_transport_failure"
         if type(error) is RuntimeError and str(error) == "Chat Completions returned an empty response body.":
             return "model_empty_http_body"
+        # A native Qwen continuation can return control to the repair driver
+        # without producing the required final Judgment.  This is an
+        # infrastructure/episode failure, not a semantic result and must use
+        # the existing per-episode retry budget.
+        if type(error) is RuntimeError and str(error).strip() in {
+            "teacher continuation did not reach final Judgment",
+            "student continuation did not reach final Judgment",
+        }:
+            return "model_missing_final_judgment"
         reason = unusable_chat_response_reason(error)
         if reason is not None:
             return reason

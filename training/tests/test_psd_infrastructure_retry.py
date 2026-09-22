@@ -192,6 +192,22 @@ def test_unusable_backend_choice_consumes_bounded_attempt_not_new_budget(tmp_pat
         ('infrastructure_failed', 'model_unusable_http_choice'), ('completed', None)]
 
 
+def test_missing_final_judgment_uses_episode_retry_budget(tmp_path):
+    calls = []
+    async def generate(directory):
+        calls.append(directory)
+        if len(calls) == 1:
+            raise RuntimeError('teacher continuation did not reach final Judgment')
+        return {'termination': 'success'}
+
+    result = asyncio.run(retry_episode(root=tmp_path, identity={}, generate=generate,
+                                       sleep=no_sleep))
+    assert result == {'termination': 'success'} and len(calls) == 2
+    attempts = json.loads((tmp_path/'retry-state.json').read_text())['payload']['attempts']
+    assert [(row['status'], row.get('reason')) for row in attempts] == [
+        ('infrastructure_failed', 'model_missing_final_judgment'), ('completed', None)]
+
+
 def test_parallel_same_slot_cannot_double_dispatch(tmp_path):
     async def exercise():
         entered, release = asyncio.Event(), asyncio.Event()

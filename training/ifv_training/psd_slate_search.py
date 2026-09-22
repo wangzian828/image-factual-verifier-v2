@@ -83,6 +83,15 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
     identity = {"version": "slate-search-v3-observed-positions", "inputs": _sha(config), 'proposal_budget':proposal_budget}
     state = load_slate_state(marker, identity=identity) if marker.exists() else {
         "rounds": [], "elapsed_seconds": 0.0, "status": "repairing"}
+    # An infrastructure-only round has no semantic failure record.  It must
+    # stay resumable instead of being treated as a case terminal.  Keep the
+    # accepted Gemini proposal and use a fresh Qwen episode directory on the
+    # next owner pass; the original ledger remains immutable evidence.
+    if state["status"] in {"infrastructure_budget_exhausted", "unresolved_infrastructure"} \
+            and not state["rounds"]:
+        state["status"] = "repairing"
+        state.pop("output_files", None)
+        save_bound(marker, identity=identity, payload=state)
     for row in state["rounds"]:
         for raw, digest in row["files"].items():
             path = Path(raw).resolve()
@@ -210,7 +219,15 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
             if hints is None:
                 state['status']='proposal_budget_exhausted'
                 break
-            directory = root / "slate-rounds" / f"{number:02d}"
+            # ``number`` is the semantic rerun count.  An infrastructure-only
+            # retry must not consume that count, so its filesystem slot has a
+            # separate monotone cursor and can never reopen an old ledger.
+            slot = int(state.get("next_round_slot", len(state["rounds"])))
+            directory = root / "slate-rounds" / f"{slot:02d}"
+            state["next_round_slot"] = slot + 1
+            # Commit the slot before creating any provider/episode artifact so
+            # an owner crash cannot reopen the same filesystem ledger.
+            save_bound(marker, identity=identity, payload=state)
             directory.mkdir(parents=True, exist_ok=True)
             retry_inputs = {"inputs": _sha(config),
                 "hints": {str(k): h.text for k, h in hints.items()}}
@@ -242,12 +259,12 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                 from .psd_infrastructure_retry import InfrastructureRetriesExhausted
                 if not isinstance(error, InfrastructureRetriesExhausted):
                     raise
-                # This slot consumed its separately persisted infrastructure
-                # budget.  It is a terminal non-training outcome, not a reason
-                # for the outer controller to redispatch the same exhausted
-                # ledger forever or to reset that budget.
-                state["status"] = "infrastructure_budget_exhausted"
-                state.pop("pending_proposal", None)
+                # No complete repair round was produced.  Preserve the
+                # exhausted episode ledger, but leave the case resumable so
+                # the outer worker never writes a false terminal receipt.
+                # The next owner pass reuses the same proposal and allocates
+                # a fresh round directory; it does not mutate this evidence.
+                state["status"] = "unresolved_infrastructure"
                 save_bound(marker, identity=identity, payload=state)
                 break
             # Persist the retry layer's complete binding (including its fixed

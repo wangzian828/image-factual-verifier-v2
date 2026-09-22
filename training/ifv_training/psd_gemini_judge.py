@@ -49,6 +49,19 @@ def _retryable_provider_error(error: BaseException) -> bool:
             "non-object json", "did not include an interaction id",
             "did not include a status",
         ))
+    # Keep the retry contract robust when an immutable deployment imports the
+    # same integration package through two module roots.  The class identity
+    # can then differ even though the provider error is the same trusted
+    # response type.  Restrict this fallback to the exact class name and the
+    # same status markers; never classify arbitrary model text as retryable.
+    if type(error).__name__ == "GeminiInteractionsResponseError":
+        message = str(error).lower()
+        return any(marker in message for marker in (
+            "status=incomplete", "status=failed", "status=cancelled",
+            "status=canceled", "status=expired", "invalid json",
+            "non-object json", "did not include an interaction id",
+            "did not include a status",
+        ))
     return False
 
 PROMPT = """You are the task verifier for privileged self-distillation (PSD).
