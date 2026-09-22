@@ -24,7 +24,7 @@ SERVICE = ROOT / "inference/psd-sft3084-20260916"
 RUN = ROOT / "runs/psd-production1000x4-20260918-v1"
 OUTPUT = RUN / "processing-lightweight-v1/repair-search-v1"
 SOURCE = ROOT / "training-artifacts/prefix-cache-hybrid-gate-20260921-v127"
-DEPLOY = ROOT / "training-artifacts/psd-old1000-cache-off-recovery-run-20260922-v160"
+DEPLOY = ROOT / "training-artifacts/psd-old1000-cache-off-recovery-run-20260922-v161"
 MODEL = ROOT / "exports/h20-sft-merged4872-3epoch-step3084-20260915/model"
 GATEWAY_ALIAS = "ifv-qwen3.5-9b-sft-3084"
 BACKEND_ALIAS = "ifv-psd-sft3084"
@@ -60,8 +60,9 @@ def cache_on_from_original(command: list[str]) -> list[str]:
             or Path(command[3]).resolve() != MODEL.resolve()):
         raise ValueError("frozen cache-off SFT3 reference differs from expected model")
     result = list(command)
-    result[result.index("--no-enable-prefix-caching")] = "--enable-prefix-caching"
+    result.remove("--no-enable-prefix-caching")
     result[result.index("--mamba-cache-mode") + 1] = "align"
+    result.append("--enable-prefix-caching")
     return result
 
 
