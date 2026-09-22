@@ -88,3 +88,12 @@ def test_detached_worker_keeps_immutable_launch_base_code():
                                        "/old/service")
     assert value.split(":") == ["/overlay", "/overlay/training",
                                  "/frozen/base", "/frozen/base/training", "/old/service"]
+
+
+def test_cache_mode_requires_fail_closed_case_isolation():
+    healthy = {"prefix_cache_policy": "case_isolated",
+               "reject_corrupted_responses": True,
+               "cache_corruption_metric_failures": 0}
+    assert old1000.gateway_cache_mode(healthy) == "case_isolated"
+    with pytest.raises(RuntimeError, match="fail-closed"):
+        old1000.gateway_cache_mode({**healthy, "reject_corrupted_responses": False})

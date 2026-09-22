@@ -97,7 +97,19 @@ def selected_index() -> list[dict[str, Any]]:
     return entries
 
 
-def serving_ready() -> None:
+def gateway_cache_mode(health: dict[str, Any]) -> str:
+    mode = health.get("prefix_cache_policy")
+    if mode not in {"case_isolated", "request_isolated"}:
+        raise RuntimeError("SFT3 gateway has an unknown prefix-cache protocol")
+    if mode == "case_isolated" and (
+        health.get("reject_corrupted_responses") is not True
+        or health.get("cache_corruption_metric_failures") != 0
+    ):
+        raise RuntimeError("case-isolated Qwen gateway lacks fail-closed cache admission")
+    return mode
+
+
+def serving_ready() -> str:
     profile = load(SNAPSHOT / "serving-profile.json")
     expected = Path(profile["model_path"]).resolve()
     alias = profile["profile_id"]
@@ -114,6 +126,7 @@ def serving_ready() -> None:
         row.get("healthy") is True for row in health["replicas"]
     ):
         raise RuntimeError("SFT3 gateway is not four-card healthy")
+    return gateway_cache_mode(health)
 
 
 def no_competing_eval() -> None:
@@ -297,7 +310,7 @@ async def worker(max_new_cases: int, concurrency: int) -> dict[str, Any]:
 def launch(max_new_cases: int, concurrency: int) -> dict[str, Any]:
     from dotenv import dotenv_values
 
-    serving_ready()
+    cache_mode = serving_ready()
     no_competing_eval()
     selected_index()
     current = OUTPUT / "latest-process.json"
@@ -316,6 +329,7 @@ def launch(max_new_cases: int, concurrency: int) -> dict[str, Any]:
                 if value is not None})
     if not (env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY")):
         raise RuntimeError("old-1000 Gemini review credential is missing")
+    env["IFV_PREFIX_CACHE_MODE"] = cache_mode
     code_root = Path(__file__).resolve().parents[2]
     # The serving replica predates this overlay and does not know the frozen
     # base code snapshot. Keep the launcher's explicit package path as well as
