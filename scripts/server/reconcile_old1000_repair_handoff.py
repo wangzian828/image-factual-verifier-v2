@@ -94,20 +94,84 @@ def reconcile_marker(marker: Path, *, output: Path, recovery: Path,
             "after_sha256": hashlib.sha256(marker.read_bytes()).hexdigest()}
 
 
+def migrate_known_pre_fix_target_error(marker: Path, *, output: Path,
+                                       recovery: Path, evidence: Path) -> dict:
+    """Reopen one proven pre-fix target-binding error without resetting budget."""
+    original = marker.read_bytes()
+    raw = json.loads(original)
+    identity = raw["identity"]
+    state = load_bound(marker, identity=identity)
+    attempts = state.get("attempts")
+    if (not isinstance(attempts, list) or not attempts
+            or attempts[-1].get("status") != "nonretryable_error"):
+        raise ValueError("known pre-fix marker is not an unresolved nonretryable ledger")
+    error = load(evidence)
+    if (error.get("error_type") != "ValueError"
+            or error.get("message") != "PSD slate actual teacher prefix differs from corrected history"):
+        raise ValueError("evidence is not the frozen pre-fix PSD target-binding error")
+    if (marker.parent / "result.json").exists():
+        raise RuntimeError("cannot migrate a completed Qwen retry result")
+    latest = attempts[-1]
+    attempt_dir = marker.parent / f"attempt-{len(attempts):03d}"
+    if Path(latest["directory"]).resolve() != attempt_dir.resolve():
+        raise ValueError("known pre-fix attempt directory changed")
+    if not attempt_dir.is_dir() or any(attempt_dir.rglob("result.json")):
+        raise RuntimeError("known pre-fix attempt contains a completed result")
+    relative = marker.relative_to(output)
+    backup = recovery / relative / "ledger-original.json"
+    if backup.exists():
+        if backup.read_bytes() != original:
+            raise ValueError("known pre-fix ledger backup differs")
+    else:
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_bytes(original)
+    latest.update(status="infrastructure_failed",
+                  reason="pre_fix_psd_target_binding_error",
+                  legacy_status="nonretryable_error",
+                  migration_version="ifv-old1000-pre-fix-target-binding-v1",
+                  evidence_path=str(evidence),
+                  evidence_sha256=hashlib.sha256(evidence.read_bytes()).hexdigest())
+    save_bound(marker, identity=identity, payload=state)
+    return {"marker": str(relative), "backup": str(backup.relative_to(output)),
+            "attempts_charged": len(attempts), "evidence": str(evidence),
+            "before_sha256": hashlib.sha256(original).hexdigest(),
+            "after_sha256": hashlib.sha256(marker.read_bytes()).hexdigest()}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--source-pid", type=int, action="append", required=True)
+    parser.add_argument("--known-prefix-marker", type=Path, action="append")
+    parser.add_argument("--known-prefix-evidence", type=Path, action="append")
     args = parser.parse_args()
     output = args.output.resolve()
     recovery = output / "recoveries/owner-handoff-v1"
     if not output.is_dir():
         raise FileNotFoundError(output)
-    if (recovery / "receipt.json").exists():
-        raise RuntimeError("repair handoff reconciliation already recorded")
     owners = active_repair_owners(self_pid=os.getpid())
     if owners:
         raise RuntimeError("repair owner is still active: " + repr(owners))
+    known_markers = args.known_prefix_marker or []
+    known_evidence = args.known_prefix_evidence or []
+    if len(known_markers) != len(known_evidence):
+        raise ValueError("known pre-fix markers and evidence must be paired")
+    if known_markers:
+        known_recovery = output / "recoveries/pre-fix-target-binding-v1"
+        receipt_path = known_recovery / "receipt.json"
+        if receipt_path.exists():
+            raise RuntimeError("pre-fix target-binding migration already recorded")
+        records = [migrate_known_pre_fix_target_error(marker.resolve(), output=output,
+                                                       recovery=known_recovery,
+                                                       evidence=evidence.resolve())
+                   for marker, evidence in zip(known_markers, known_evidence)]
+        save(receipt_path, {"schema_version": "ifv-old1000-pre-fix-target-binding-v1",
+                            "count": len(records), "budget_reset": False,
+                            "records": records, "time": time.time()})
+        print(json.dumps({"migrated": len(records), "budget_reset": False}))
+        return
+    if (recovery / "receipt.json").exists():
+        raise RuntimeError("repair handoff reconciliation already recorded")
     markers = []
     for marker in output.glob("repairs/*/slate-rounds/*/infrastructure-attempts/retry-state.json"):
         raw = load(marker)
