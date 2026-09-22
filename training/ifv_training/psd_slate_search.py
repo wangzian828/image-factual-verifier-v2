@@ -109,8 +109,14 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
         audit_slate_search(root)
         return load_json(root / "manifest.json")
     initial_state, _ = adapter._initial_runtime_state(base_trace=trace, failure_site=site)
+    precomputed_cache = getattr(args, "precomputed_slate_cache", None)
+    if precomputed_cache is not None and not precomputed_cache.is_dir():
+        raise FileNotFoundError("frozen first-round PSD Gemini cache is missing")
+    # Precomputation used the source review alone. Preserve that exact public
+    # first-round packet so the already-paid response is consumed verbatim.
     source_feedback = checker_feedback(source_task_review, trace,
-        source_failure=source_failure, withhold_invalid_citations=True)
+        source_failure=None if precomputed_cache is not None else source_failure,
+        withhold_invalid_citations=True)
     initial = (diagnostic_position(source_feedback, trace) if source_task_review else
                24 if site.stage == "unified_judgment" else initial_state.action_count)
     state["active_feedback_policy"] = POLICY
@@ -125,7 +131,11 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
     candidates_path = _case_ledger(root, "repair_candidates")
     records = load_jsonl(attempts_path) if attempts_path.exists() else []
     candidates = load_jsonl(candidates_path) if candidates_path.exists() else []
-    source_hash = sha256_file(args.trace)
+    source_hash = (candidate.get("source", {}).get("source_trace_sha256")
+                   if getattr(args, "candidate_offset", None) is not None
+                   else sha256_file(args.trace))
+    if not isinstance(source_hash, str) or len(source_hash) != 64:
+        raise ValueError("indexed PSD source trace digest is missing")
     token_url = str(profile["base_url"]).rstrip("/").removesuffix("/v1") + "/tokenize"
     key = adapter.policy_llm.api_key
     headers = {"Authorization": "Bearer " + key} if key else {}
@@ -192,7 +202,10 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
             hints, provenance = await propose_with_budget(state=state,round_index=number,
                 budget=proposal_budget,persist=lambda:save_bound(marker,identity=identity,payload=state),judge=judge,
                 kwargs=dict(public_context=public, previous=previous, passing_positions=passing,
-                    failed_position=failed, model=args.hint_constructor_model,cache_dir=root / "judge-cache",
+                    failed_position=failed, model=args.hint_constructor_model,
+                    cache_dir=precomputed_cache if number == 0 and precomputed_cache is not None
+                    else root / "judge-cache",
+                    cache_only=number == 0 and precomputed_cache is not None,
                     private_context=private_context,images=images))
             if hints is None:
                 state['status']='proposal_budget_exhausted'

@@ -228,7 +228,7 @@ def _parse_slate(value, *, packet, previous, passing_positions, failed_position,
 
 async def propose_slate(client, *, public_context, previous, passing_positions,
                         failed_position, model, cache_dir, private_context=None, images=(),
-                        proposal_feedback=None):
+                        proposal_feedback=None, cache_only=False):
     from .psd_gemini_judge import _request
     from .psd_repair import _assert_public_context, build_hint_proposal
     _assert_public_context(public_context)
@@ -250,7 +250,7 @@ async def propose_slate(client, *, public_context, previous, passing_positions,
             raise ValueError("invalid public proposal feedback")
         packet["proposal_feedback"] = dict(proposal_feedback)
     value, provenance = await _request(client, packet, prompt=prompt, schema=schema,
-        model=model, images=images, cache_dir=cache_dir)
+        model=model, images=images, cache_dir=cache_dir, cache_only=cache_only)
     try:
         result = _parse_slate(value, packet=packet, previous=previous, passing_positions=passing_positions,
             failed_position=failed_position,

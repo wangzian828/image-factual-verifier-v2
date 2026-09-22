@@ -181,7 +181,8 @@ def _atomic_json(path, value):
     os.replace(temporary, path)
 
 
-async def _request(client, packet, *, prompt, schema, model, images=(), cache_dir=None):
+async def _request(client, packet, *, prompt, schema, model, images=(), cache_dir=None,
+                   cache_only=False):
     from src.integrations.gemini import extract_text
     if not model.strip():
         raise ValueError("PSD judge model is missing")
@@ -196,6 +197,8 @@ async def _request(client, packet, *, prompt, schema, model, images=(), cache_di
     # A completed historical result (including a rejection) always wins.
     # Preserve run/continuation identities, but bind every NEW response to the
     # actual externally requested model instead of relabeling the old cache.
+    if cache_only and (not cache or not cache.exists()):
+        raise FileNotFoundError("frozen PSD Gemini cache misses the exact first-round request")
     if not cache or not cache.exists():
         from .psd_model_route import uncached_model
         model, route = uncached_model(model, cache_dir)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import hashlib
 import json
 import sys
 import uuid
@@ -183,6 +184,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--trace", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, required=True,
                         help="One repair seed JSON from the training candidate bank")
+    parser.add_argument("--candidate-offset", type=int)
+    parser.add_argument("--candidate-length", type=int)
     parser.add_argument("--audit", type=Path, required=True)
     parser.add_argument("--semantic-verification", type=Path)
     parser.add_argument("--image", type=Path, required=True)
@@ -233,7 +236,28 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--search-seconds", type=int, default=1800,
                         help="Soft budget checked between rounds, never cancels an in-flight provider call")
     parser.add_argument("--search-media", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--precomputed-slate-cache", type=Path,
+                        help="Immutable first-round Gemini cache; a miss is an error")
     return parser
+
+
+def _candidate_seed(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Read one indexed candidate without copying or hashing the whole bank."""
+    offset, length = args.candidate_offset, args.candidate_length
+    if offset is None and length is None:
+        return load_json(args.candidate), None
+    if type(offset) is not int or type(length) is not int or offset < 0 or length <= 0:
+        raise ValueError("candidate offset and length must be positive integers")
+    with args.candidate.open("rb") as source:
+        source.seek(offset)
+        raw = source.read(length)
+    if len(raw) != length or not raw.endswith(b"\n"):
+        raise ValueError("indexed PSD candidate row is incomplete")
+    seed = json.loads(raw)
+    if not isinstance(seed, dict) or not seed.get("candidate_id"):
+        raise ValueError("indexed PSD candidate is invalid")
+    return seed, {"path": str(args.candidate.resolve()), "offset": offset,
+                  "length": length, "sha256": hashlib.sha256(raw).hexdigest()}
 
 
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
@@ -309,7 +333,15 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
         else None
     )
     gold = load_json(args.gold)
-    seed = load_json(args.candidate)
+    seed, candidate_slice = _candidate_seed(args)
+    source_trace_sha256 = (
+        str(seed.get("source", {}).get("source_trace_sha256") or "")
+        if candidate_slice else sha256_file(args.trace)
+    )
+    if len(source_trace_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in source_trace_sha256
+    ):
+        raise ValueError("indexed PSD source trace lacks its frozen digest")
     if seed.get("source", {}).get("source_access_policy_sha256") != sha256_file(args.source_access_policy):
         raise ValueError("PSD repair source-access policy differs from original rollout")
     public_context = load_json(args.public_context)
@@ -348,7 +380,10 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
                 "semantic_verification", "verification_bundle", "source_access_policy", "search_media"):
         value = getattr(args, key)
         if value is not None:
-            config[key] = {"path": str(value.resolve()), "sha256": sha256_file(value)}
+            config[key] = (candidate_slice if key == "candidate" and candidate_slice
+                           else {"path": str(value.resolve()), "sha256": (
+                               source_trace_sha256 if key == "trace" and candidate_slice
+                               else sha256_file(value))})
     config_path = output_dir / "run-inputs.json"
     if args.resume:
         load_bound(config_path, identity=config)
@@ -384,10 +419,9 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     if semantic_verification is not None:
         write_json(output_dir / "semantic-localization.json", semantic_verification)
     verification_rows = _load_verification_bundle(args.verification_bundle)
-    source_trace_sha256 = sha256_file(args.trace)
     from ifv_training.psd_candidate_binding import bind_localized_candidate
     candidate, site = bind_localized_candidate(
-        load_json(args.candidate), trace, site, source_trace_sha256=source_trace_sha256)
+        seed, trace, site, source_trace_sha256=source_trace_sha256)
     if args.search_mode != "slate":
         write_jsonl(output_dir / "repair_candidates.jsonl", [candidate])
     runtime_store = CaseRuntimeStore(
