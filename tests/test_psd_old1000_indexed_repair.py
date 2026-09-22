@@ -115,6 +115,18 @@ def test_repair_python_honors_explicit_override(tmp_path, monkeypatch):
     assert old1000.repair_python() == str(frozen)
 
 
+def test_orphan_backups_are_separated_by_round(tmp_path, monkeypatch):
+    output = tmp_path / "repair-search-v3"
+    monkeypatch.setattr(old1000, "OUTPUT", output)
+    key = "candidate-key"
+    first = output / "repairs" / key / "slate-rounds/00/infrastructure-attempts/retry-state.json"
+    second = output / "repairs" / key / "slate-rounds/01/infrastructure-attempts/retry-state.json"
+    assert old1000.orphan_backup_path(key, first) != old1000.orphan_backup_path(key, second)
+    assert old1000.orphan_backup_path(key, first).as_posix().endswith(
+        "/candidate-key/slate-rounds/00/infrastructure-attempts/ledger-original.json"
+    )
+
+
 def test_terminal_failures_are_selected_for_append_only_recovery(tmp_path, monkeypatch):
     output = tmp_path / "repair-search-v3"
     recovery = output / "recoveries" / "terminal-case-recovery-v2"

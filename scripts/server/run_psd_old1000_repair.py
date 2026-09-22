@@ -322,6 +322,14 @@ def repair_python() -> str:
     return sys.executable
 
 
+def orphan_backup_path(key: str, marker: Path) -> Path:
+    """Return a collision-free immutable backup path for one retry round."""
+    repair_root = OUTPUT / "repairs" / key
+    relative_parent = marker.parent.relative_to(repair_root)
+    return (OUTPUT / "recoveries/orphaned-attempts-v3" / key /
+            relative_parent / "ledger-original.json")
+
+
 def case_cli(entry: dict[str, Any], benchmark: dict[str, Any], gold: dict[str, Any]) -> list[str]:
     case_id = entry["case_id"]
     candidate = read_indexed_row(SELECTED, entry)
@@ -448,8 +456,7 @@ def reconcile_orphaned_running_attempts(entries: list[dict[str, Any]]) -> dict[s
                 skipped.append({"case_id": entry["case_id"], "marker": str(marker),
                                 "reason": "result_exists_with_running_ledger"})
                 continue
-            backup = (OUTPUT / "recoveries/orphaned-attempts-v2" /
-                      key / marker.parent.name / "ledger-original.json")
+            backup = orphan_backup_path(key, marker)
             backup.parent.mkdir(parents=True, exist_ok=True)
             original = marker.read_bytes()
             if backup.exists() and backup.read_bytes() != original:
@@ -460,16 +467,16 @@ def reconcile_orphaned_running_attempts(entries: list[dict[str, Any]]) -> dict[s
             last.update({"status": "infrastructure_failed",
                          "reason": "orphaned_running_attempt_recovered_at_owner_start",
                          "legacy_status": "running", "error_type": "ProcessTerminated",
-                         "migration_version": "ifv-old1000-orphaned-attempt-v2",
+                         "migration_version": "ifv-old1000-orphaned-attempt-v3",
                          "backup": str(backup)})
             save_bound(marker, identity=identity, payload=payload)
             migrated.append({"case_id": entry["case_id"], "marker": str(marker),
                              "attempt_index": old.get("index"), "backup": str(backup)})
-    summary = {"schema_version": "ifv-old1000-orphaned-attempt-v2",
+    summary = {"schema_version": "ifv-old1000-orphaned-attempt-v3",
                "migrated_count": len(migrated), "skipped_count": len(skipped),
                "migrated": migrated, "skipped": skipped,
                "budget_reset": False, "time": time.time()}
-    save(OUTPUT / "recoveries/orphaned-attempts-v2/summary.json", summary)
+    save(OUTPUT / "recoveries/orphaned-attempts-v3/summary.json", summary)
     return summary
 
 
