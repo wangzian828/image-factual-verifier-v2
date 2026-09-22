@@ -95,6 +95,38 @@ def test_main_worker_allows_requested_28_way_concurrency():
     assert old1000.MAX_WORKER_CONCURRENCY == 28
 
 
+def test_terminal_failures_are_selected_for_append_only_recovery(tmp_path, monkeypatch):
+    output = tmp_path / "repair-search-v3"
+    recovery = output / "recoveries" / "terminal-case-recovery-v2"
+    receipts = output / "case-receipts"
+    receipts.mkdir(parents=True)
+    (receipts / "main-00001.json").write_text(json.dumps({
+        "case_id": "main-00001", "status": "converged", "accepted_count": 1}),
+        encoding="utf-8")
+    failed = receipts / "main-00002.json"
+    failed.write_text(json.dumps({
+        "case_id": "main-00002", "status": "infrastructure_budget_exhausted",
+        "accepted_count": 0}), encoding="utf-8")
+    monkeypatch.setattr(old1000, "OUTPUT", output)
+    monkeypatch.setattr(old1000, "RECOVERY_OUTPUT", recovery)
+    rows = old1000.terminal_recovery_candidates([
+        {"case_id": "main-00001"}, {"case_id": "main-00002"}])
+    assert [row["case_id"] for row in rows] == ["main-00002"]
+    assert json.loads((recovery / "selection.json").read_text())["original_budget_unchanged"] is True
+
+
+def test_recovery_case_cli_uses_separate_append_only_root(tmp_path, monkeypatch):
+    output = tmp_path / "repair-search-v3"
+    recovery = output / "recoveries" / "terminal-case-recovery-v2"
+    monkeypatch.setattr(old1000, "OUTPUT", output)
+    monkeypatch.setattr(old1000, "RECOVERY_OUTPUT", recovery)
+    monkeypatch.setattr(old1000, "case_cli", lambda *args: [
+        "--output-dir", str(output / "repairs" / "abc"), "--resume"])
+    args = old1000.recovery_case_cli({"case_id": "main-00001"}, {}, {})
+    assert args[args.index("--output-dir") + 1] == str(recovery / "repairs" / "abc")
+    assert "--resume" not in args
+
+
 def test_judge_only_recheck_does_not_block_old1000_handoff(monkeypatch):
     class Result:
         stdout = "\\n".join([

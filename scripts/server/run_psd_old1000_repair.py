@@ -39,11 +39,14 @@ PRECOMPUTE = RUN / "processing-lightweight-v1/slate-precompute-v1"
 INDEX = PRECOMPUTE / "selected-offset-index.json"
 DEFAULT_OUTPUT = RUN / "processing-lightweight-v1/repair-search-v1"
 OUTPUT = Path(os.environ.get("IFV_OLD1000_REPAIR_OUTPUT", str(DEFAULT_OUTPUT)))
+RECOVERY_OUTPUT = OUTPUT / "recoveries/terminal-case-recovery-v2"
 SNAPSHOT = ROOT / "runs/psd-production400x8-20260917-v6/snapshot"
 SERVICE = ROOT / "inference/psd-sft3084-20260916"
 GOLD = ROOT / "data/psd-candidate-pool-4000-20260914-v3/train/evaluator_private/private_gold.jsonl"
 TERMINAL = {"converged", "passed_without_intervention", "attempt_budget_exhausted",
             "proposal_budget_exhausted", "infrastructure_budget_exhausted"}
+SUCCESS_STATUSES = {"converged", "passed_without_intervention"}
+RECOVERY_STATUSES = TERMINAL - SUCCESS_STATUSES
 MAX_WORKER_CONCURRENCY = 28
 PREFLIGHT_REJECTION = ("HTTP 400 Bad Request for http://127.0.0.1:19025/v1/chat/completions: "
                        '{"detail":"case-isolated prefix caching requires an opaque 256-bit '
@@ -345,6 +348,51 @@ def case_cli(entry: dict[str, Any], benchmark: dict[str, Any], gold: dict[str, A
     return args
 
 
+def terminal_recovery_candidates(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Select non-success cases for an append-only extra recovery budget.
+
+    The normal receipt remains authoritative and is never rewritten. A fresh
+    recovery output gives exhausted cases a new six-round search while keeping
+    the original attempts and their budget accounting intact.
+    """
+    entry_by_case = {entry["case_id"]: entry for entry in entries}
+    recovery_receipts = RECOVERY_OUTPUT / "case-receipts"
+    rows = []
+    for path in sorted((OUTPUT / "case-receipts").glob("*.json")):
+        row = load(path)
+        case_id, status = row.get("case_id"), row.get("status")
+        if status not in RECOVERY_STATUSES or row.get("accepted_count", 0):
+            continue
+        if case_id not in entry_by_case:
+            raise ValueError(f"terminal receipt is not in frozen selection: {case_id}")
+        if (recovery_receipts / f"{case_id}.json").exists():
+            continue
+        rows.append({"case_id": case_id, "status": status,
+                     "original_receipt": str(path),
+                     "original_receipt_sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+    save(RECOVERY_OUTPUT / "selection.json", {
+        "schema_version": "ifv-old1000-terminal-recovery-v2",
+        "original_budget_unchanged": True,
+        "additional_recovery_budget": "fresh six-round search per selected case",
+        "cases": rows})
+    return rows
+
+
+def recovery_case_cli(entry: dict[str, Any], benchmark: dict[str, dict[str, Any]],
+                      gold: dict[str, dict[str, Any]]) -> list[str]:
+    """Build a fresh append-only output root for one previously failed case."""
+    args = case_cli(entry, benchmark, gold)
+    output_index = args.index("--output-dir") + 1
+    original = Path(args[output_index])
+    target = RECOVERY_OUTPUT / "repairs" / original.name
+    while "--resume" in args:
+        args.remove("--resume")
+    if (target / "run-inputs.json").exists():
+        args.append("--resume")
+    args[output_index] = str(target)
+    return args
+
+
 async def cache_probe(entry: dict[str, Any]) -> dict[str, Any]:
     """Prove the precomputed first proposal is an exact cache hit, offline."""
     from ifv_training.psd_gemini_judge import review_images, trace_steps
@@ -438,69 +486,100 @@ async def worker(max_new_cases: int, concurrency: int, *, parallel: bool = False
         benchmark = by_case(RUN / "selection/runtime-release/runtime_input/cases.jsonl")
         gold = by_case(GOLD)
         pending, terminal_carried = select_pending(entries, excluded)
+        recovery_rows = [] if parallel or max_new_cases else terminal_recovery_candidates(entries)
+        entry_by_case = {entry["case_id"]: entry for entry in entries}
+        recovery_by_case = {row["case_id"]: row for row in recovery_rows}
         counts = Counter()
         counts["terminal_carried"] = terminal_carried
         pending_before_limit = len(pending)
         if max_new_cases:
             pending = pending[:max_new_cases]
+        scheduled_total = len(pending) + len(recovery_rows)
         save(state_path, {"phase": "repairing", "selected": 775,
             "terminal_carried": counts["terminal_carried"],
             "pending_at_start": pending_before_limit, "scheduled": len(pending),
+            "recovery_scheduled": len(recovery_rows),
             "concurrency": concurrency, "excluded_smoke_cases": len(excluded),
             "training_started": False})
         queue = asyncio.Queue()
         for entry in pending:
-            queue.put_nowait(entry)
+            queue.put_nowait((entry, False))
+        for row in recovery_rows:
+            queue.put_nowait((entry_by_case[row["case_id"]], True))
 
         async def one() -> None:
             while not queue.empty():
                 try:
-                    entry = queue.get_nowait()
+                    entry, is_recovery = queue.get_nowait()
                 except asyncio.QueueEmpty:
                     return
                 case_id = entry["case_id"]
                 try:
-                    args = repair_parser().parse_args(case_cli(entry, benchmark, gold))
+                    args = repair_parser().parse_args(
+                        recovery_case_cli(entry, benchmark, gold) if is_recovery
+                        else case_cli(entry, benchmark, gold))
                     result = await repair_run(args)
                     status = result.get("status")
                     if status not in TERMINAL:
                         raise RuntimeError("repair case did not reach a terminal manifest")
-                    save(OUTPUT / "case-receipts" / (case_id + ".json"), {
+                    receipt_root = RECOVERY_OUTPUT if is_recovery else OUTPUT
+                    receipt = {
                         "case_id": case_id, "status": status,
                         "complete_reruns": result.get("complete_reruns"),
                         "accepted_count": result.get("accepted_count"),
                         "manifest": str(args.output_dir / "manifest.json"),
-                        "completed_unix": time.time()})
+                        "completed_unix": time.time()}
+                    if is_recovery:
+                        receipt["source_receipt_sha256"] = recovery_by_case[case_id]["original_receipt_sha256"]
+                    save(receipt_root / "case-receipts" / (case_id + ".json"), receipt)
                     counts[status] += 1
+                    counts["recovery_terminal" if is_recovery else "regular_terminal"] += 1
                 except InfrastructureRetriesExhausted as error:
-                    save(OUTPUT / "case-receipts" / (case_id + ".json"), {
+                    receipt_root = RECOVERY_OUTPUT if is_recovery else OUTPUT
+                    receipt = {
                         "case_id": case_id, "status": "infrastructure_budget_exhausted",
                         "reason": str(error),
-                        "manifest": None, "completed_unix": time.time()})
+                        "manifest": None, "completed_unix": time.time()}
+                    if is_recovery:
+                        receipt["source_receipt_sha256"] = recovery_by_case[case_id]["original_receipt_sha256"]
+                    save(receipt_root / "case-receipts" / (case_id + ".json"), receipt)
                     counts["infrastructure_budget_exhausted"] += 1
+                    counts["recovery_terminal" if is_recovery else "regular_terminal"] += 1
                 except Exception as error:
+                    error_root = RECOVERY_OUTPUT if is_recovery else OUTPUT
                     error_receipt = {
                         "case_id": case_id, "error_type": type(error).__name__,
                         "message": str(error)[:500], "at_unix": time.time()}
-                    save(OUTPUT / "case-error-history" / case_id /
+                    save(error_root / "case-error-history" / case_id /
                          (str(time.time_ns()) + ".json"), error_receipt)
-                    save(OUTPUT / "case-errors" / (case_id + ".json"), error_receipt)
+                    save(error_root / "case-errors" / (case_id + ".json"), error_receipt)
                     counts["case_error"] += 1
                 finally:
                     queue.task_done()
+                    regular_remaining = len(pending) - counts["regular_terminal"]
+                    recovery_remaining = len(recovery_rows) - counts["recovery_terminal"]
                     save(state_path, {"phase": "repairing", "selected": 775,
                         "terminal_carried": counts["terminal_carried"],
-                        "pending_at_start": pending_before_limit, "scheduled": len(pending),
-                        "completed_this_pass": sum(counts[s] for s in TERMINAL),
+                        "pending_at_start": pending_before_limit, "scheduled": scheduled_total,
+                        "recovery_scheduled": len(recovery_rows),
+                        "completed_this_pass": counts["regular_terminal"],
+                        "recovery_completed": counts["recovery_terminal"],
+                        "regular_remaining": regular_remaining,
+                        "recovery_remaining": recovery_remaining,
                         "case_errors_this_pass": counts["case_error"],
                         "concurrency": concurrency, "excluded_smoke_cases": len(excluded),
                         "training_started": False})
 
         await asyncio.gather(*(one() for _ in range(concurrency)))
-        remaining = pending_before_limit - sum(counts[s] for s in TERMINAL)
+        regular_remaining = len(pending) - counts["regular_terminal"]
+        recovery_remaining = len(recovery_rows) - counts["recovery_terminal"]
+        remaining = regular_remaining + recovery_remaining
         result = {"phase": "repair_search_complete" if remaining == 0 else "needs_resume",
                   "selected": 775, "terminal_total_outside_smoke": 775 - len(excluded) - remaining,
-                  "remaining": remaining, "statuses_this_pass": dict(counts),
+                  "remaining": remaining, "regular_remaining": regular_remaining,
+                  "recovery_remaining": recovery_remaining,
+                  "recovery_scheduled": len(recovery_rows),
+                  "statuses_this_pass": dict(counts),
                   "excluded_smoke_cases": len(excluded), "training_started": False}
         save(state_path, result)
         return result
