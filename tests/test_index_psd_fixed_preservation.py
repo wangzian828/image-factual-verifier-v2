@@ -79,6 +79,21 @@ def test_freezes_complete_first_successes_as_offsets_only(tmp_path):
                                    candidate_manifest=manifest, output=output)
 
 
+def test_keeps_rejected_judgment_before_accepted_final_judgment(tmp_path):
+    candidates, reviews, manifest, rows = _fixture(tmp_path)
+    rejected = dict(rows[0]["preservation_steps"][-1])
+    rejected["step_id"] = "a1:judgment:2"
+    rejected["action_type"] = "output_rejected"
+    rejected["protocol_rejected"] = True
+    rows[0]["preservation_steps"].insert(-1, rejected)
+    rows[0]["preservation_steps"][-1]["step_id"] = "a1:judgment:3"
+    candidates.write_text("".join(json.dumps(x) + "\n" for x in rows))
+    result = MODULE.freeze_preservation(candidates=candidates, reviews=reviews,
+                                        candidate_manifest=manifest, output=tmp_path / "fixed")
+    assert result["counts"]["preservation_steps"] == 5
+    assert result["counts"]["recovered_judgment_rejection_steps"] == 1
+
+
 @pytest.mark.parametrize("change", ["wrong_episode", "wrong_review", "missing_judgment",
                                     "unverified", "duplicate_case", "duplicate_candidate"])
 def test_rejects_bad_preservation_without_final_manifest(tmp_path, change):

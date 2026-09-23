@@ -82,6 +82,7 @@ def freeze_preservation(
     lengths: list[int] = []
     prompt_tokens = completion_tokens = 0
     recovered_protocol_rejections = 0
+    recovered_judgment_rejections = 0
     with candidates.open("rb") as source, (output / "episodes.jsonl").open("x", encoding="utf-8") as index:
         while True:
             offset = source.tell()
@@ -141,8 +142,17 @@ def freeze_preservation(
                 if isinstance(tool, str) and tool:
                     tools.append(tool)
                     tool_counts[tool] += 1
-            if sum(":judgment:" in sid for sid in step_ids) != 1:
-                raise ValueError(f"preservation episode needs exactly one judgment for {cid}")
+            accepted_judgments = sum(
+                ":judgment:" in sid and step.get("protocol_rejected") is not True
+                for sid, step in zip(step_ids, steps)
+            )
+            recovered_judgment_rejections += sum(
+                ":judgment:" in sid and step.get("protocol_rejected") is True
+                for sid, step in zip(step_ids, steps)
+            )
+            if (accepted_judgments != 1 or ":judgment:" not in step_ids[-1]
+                    or steps[-1].get("protocol_rejected") is True):
+                raise ValueError(f"preservation episode needs one accepted final judgment for {cid}")
             lengths.append(len(steps))
             record = {
                 "case_id": cid, "episode_id": episode_id,
@@ -174,6 +184,7 @@ def freeze_preservation(
             "preservation_steps": sum(lengths),
             "prompt_token_ids": prompt_tokens, "completion_token_ids": completion_tokens,
             "recovered_protocol_rejection_steps": recovered_protocol_rejections,
+            "recovered_judgment_rejection_steps": recovered_judgment_rejections,
             "min_steps_per_episode": min(lengths),
             "median_steps_per_episode": statistics.median(lengths),
             "max_steps_per_episode": max(lengths),
