@@ -11,6 +11,13 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def _sample_positions(size: int, count: int = 16) -> list[int]:
+    if size < 1:
+        return []
+    n = min(count, size)
+    return [0] if n == 1 else [i * (size - 1) // (n - 1) for i in range(n)]
+
+
 def _summary(value):
     import torch
 
@@ -24,8 +31,10 @@ def _summary(value):
         return {"shape": list(local.shape), "dtype": str(local.dtype), "size": 0}
     # A bounded strided sample catches gross input/state mismatches without
     # copying or hashing the full tensor (especially image and model tensors).
-    positions = torch.linspace(0, flat.numel() - 1, min(16, flat.numel()),
-                               device=flat.device).long()
+    # torch.linspace uses fp32 by default; above 2**24 it can round the
+    # endpoint *up* to size, turning a diagnostic into a CUDA device assert.
+    positions = torch.tensor(_sample_positions(flat.numel()),
+                             device=flat.device, dtype=torch.long)
     sampled = flat[positions].float()
     return {"shape": list(local.shape), "dtype": str(local.dtype),
             "size": flat.numel(), "sample_sum": float(sampled.sum().item()),
