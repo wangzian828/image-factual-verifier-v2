@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from functools import partial
 from pathlib import Path
+import os
 import time
 import uuid
 
@@ -235,7 +236,8 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
                 import copy
                 from .psd_infrastructure_retry import retry_episode, guard_policy_backend
                 from .psd_repair_storage import continuation_payload, continuation_from_payload
-                guard_policy_backend(adapter.policy_llm)
+                guard_policy_backend(adapter.policy_llm, max_request_retries=int(
+                    os.environ.get("IFV_PSD_POLICY_REQUEST_RETRIES", "0")))
                 async def generate_attempt(attempt_directory):
                     fresh = copy.copy(adapter)
                     fresh.runtime_store = CaseRuntimeStore(attempt_directory, case_id=candidate["case_id"],

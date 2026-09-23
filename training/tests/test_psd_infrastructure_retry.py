@@ -113,6 +113,85 @@ def test_boundary_guard_is_idempotent_and_does_not_change_request():
         guard_policy_backend(SimpleNamespace(get_response=call, max_retries=2))
 
 
+def test_request_local_retry_preserves_messages_and_does_not_restart_episode(monkeypatch):
+    calls = []
+    async def call(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise PolicyInfrastructureFailure('model_http_400_nonfinite_serialization')
+        return response()
+    async def no_sleep(_):
+        pass
+    monkeypatch.setattr('ifv_training.psd_infrastructure_retry.asyncio.sleep', no_sleep)
+    backend = SimpleNamespace(get_response=call, max_retries=0)
+    guard_policy_backend(backend, max_request_retries=2)
+    result = asyncio.run(backend.get_response(['same-prefix'], seed=23))
+    assert result is not None
+    assert calls == [((['same-prefix'],), {'seed': 23})] * 2
+    guard_policy_backend(backend, max_request_retries=2)
+    with pytest.raises(ValueError, match='policy changed'):
+        guard_policy_backend(backend, max_request_retries=1)
+
+
+def test_request_local_retry_catches_exact_http_nan_before_native_parser(monkeypatch):
+    calls = []
+    request = httpx.Request('POST', 'http://policy/v1/chat/completions')
+    async def post(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            return httpx.Response(400, json=nan_error(), request=request)
+        return httpx.Response(200, json=response().raw, request=request)
+    async def call(*args, **kwargs):
+        reply = await backend._get_shared_client().post('http://policy/v1/chat/completions')
+        reply.raise_for_status()
+        return SimpleNamespace(raw=reply.json())
+    async def no_sleep(_):
+        pass
+    monkeypatch.setattr('ifv_training.psd_infrastructure_retry.asyncio.sleep', no_sleep)
+    backend = SimpleNamespace(get_response=call, max_retries=0,
+        _get_shared_client=lambda: SimpleNamespace(post=post))
+    guard_policy_backend(backend, max_request_retries=2)
+    assert asyncio.run(backend.get_response(['same-prefix'])).raw == response().raw
+    assert len(calls) == 2 and calls[0] == calls[1]
+
+
+def test_request_local_retry_exhausts_without_accepting_invalid_output(monkeypatch):
+    calls = []
+    async def call(*args, **kwargs):
+        calls.append(1)
+        return response(value=float('nan'))
+    async def no_sleep(_):
+        pass
+    monkeypatch.setattr('ifv_training.psd_infrastructure_retry.asyncio.sleep', no_sleep)
+    backend = SimpleNamespace(get_response=call, max_retries=0)
+    guard_policy_backend(backend, max_request_retries=2)
+    with pytest.raises(PolicyInfrastructureFailure, match='model_nonfinite_selected_logprob'):
+        asyncio.run(backend.get_response([]))
+    assert len(calls) == 3
+
+
+def test_request_local_retry_does_not_retry_non_infrastructure_error(monkeypatch):
+    calls = []
+    async def call(*args, **kwargs):
+        calls.append(1)
+        raise ValueError('bad bound prefix')
+    async def no_sleep(_):
+        raise AssertionError('must not sleep')
+    monkeypatch.setattr('ifv_training.psd_infrastructure_retry.asyncio.sleep', no_sleep)
+    backend = SimpleNamespace(get_response=call, max_retries=0)
+    guard_policy_backend(backend, max_request_retries=2)
+    with pytest.raises(ValueError, match='bad bound prefix'):
+        asyncio.run(backend.get_response([]))
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('limit', [-1, 3, True, 1.5])
+def test_request_local_retry_limit_is_bounded(limit):
+    backend = SimpleNamespace(get_response=lambda: None, max_retries=0)
+    with pytest.raises(ValueError, match='0..2'):
+        guard_policy_backend(backend, max_request_retries=limit)
+
+
 def test_retry_uses_fresh_directories_and_keeps_ordinary_wrong_answer(tmp_path):
     calls, delays = [], []
     async def generate(directory):

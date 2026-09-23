@@ -162,9 +162,30 @@ def validate_generated_probabilities(payload):
                 raise PolicyInfrastructureFailure("model_nonfinite_selected_logprob")
 
 
-def guard_policy_backend(backend):
-    """Instance-only wrapper: identify failures BEFORE actions execute."""
+REQUEST_RETRY_REASONS = frozenset({
+    "model_http_400_nonfinite_serialization",
+    "model_nonfinite_selected_logprob",
+    "model_nonfinite_candidate_logprob",
+    "model_unusable_http_choice",
+    "model_empty_http_body",
+    "model_http_408", "model_http_429", "model_http_500",
+    "model_http_502", "model_http_503", "model_http_504",
+    "model_request_timeout", "model_transport_failure",
+})
+
+
+def guard_policy_backend(backend, *, max_request_retries=0):
+    """Instance-only wrapper: retry only a failed model request before actions execute.
+
+    An accepted model response is returned exactly once. No tool action or
+    checker decision is replayed by this layer; the full-episode budget remains
+    the separate fallback for an exhausted request or an incomplete episode.
+    """
+    if type(max_request_retries) is not int or not 0 <= max_request_retries <= 2:
+        raise ValueError("PSD model request retries must be 0..2")
     if getattr(backend, "_psd_infrastructure_guard", False):
+        if backend._psd_infrastructure_guard_retries != max_request_retries:
+            raise ValueError("PSD model request retry policy changed on a live backend")
         return
     # Retrying the entire Agent must not multiply hidden per-request retries.
     if getattr(backend, "max_retries", 0) != 0:
@@ -214,23 +235,34 @@ def guard_policy_backend(backend):
         backend._get_shared_client = lambda: PolicyClient(get_client())
 
     async def guarded(*args, **kwargs):
-        try:
-            response = await original(*args, **kwargs)
-        except Exception as error:
-            reason = _transport_reason(error)
-            if reason is None:
-                raise
-            raise PolicyInfrastructureFailure(reason) from error
-        payload = response.raw if isinstance(response.raw, dict) else {}
-        try:
-            validate_generated_probabilities(payload)
-        except PolicyInfrastructureFailure:
-            quarantine(payload)
-            raise
-        return response
+        from src.orchestrator.runtime_events import current_case_runtime_store
+        for attempt in range(max_request_retries + 1):
+            try:
+                response = await original(*args, **kwargs)
+                payload = response.raw if isinstance(response.raw, dict) else {}
+                try:
+                    validate_generated_probabilities(payload)
+                except PolicyInfrastructureFailure:
+                    quarantine(payload)
+                    raise
+                return response
+            except Exception as error:
+                reason = (str(error) if isinstance(error, PolicyInfrastructureFailure)
+                          else _transport_reason(error))
+                if reason is None:
+                    raise
+                if attempt == max_request_retries or reason not in REQUEST_RETRY_REASONS:
+                    raise PolicyInfrastructureFailure(reason) from error
+                runtime = current_case_runtime_store()
+                if runtime is not None:
+                    runtime.append_event("psd_policy_request_retry", {
+                        "reason": reason, "retry_index": attempt + 1,
+                        "max_request_retries": max_request_retries})
+                await asyncio.sleep(min(0.5 * (2 ** attempt), 2.0))
 
     backend.get_response = guarded
     backend._psd_infrastructure_guard = True
+    backend._psd_infrastructure_guard_retries = max_request_retries
 
 
 async def retry_episode(*, root, identity, generate, max_attempts=MAX_ATTEMPTS,
