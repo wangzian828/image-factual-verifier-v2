@@ -30,7 +30,7 @@ def test_resume_fingerprint_is_bounded_and_does_not_change_loss(monkeypatch, cap
     module.Seq2SeqTrainer = Trainer
     monkeypatch.setitem(sys.modules, "swift.trainers.seq2seq_trainer", module)
     monkeypatch.setenv("IFV_PSD_RESUME_FINGERPRINT", "1")
-    monkeypatch.setattr(psd_resume_fingerprint, "_summary", lambda value: {"summary": value})
+    monkeypatch.setattr(psd_resume_fingerprint, "_summary", lambda value, **_: {"summary": value})
     psd_resume_fingerprint.install_resume_fingerprint()
     psd_resume_fingerprint.install_resume_fingerprint()
     trainer = Trainer()
