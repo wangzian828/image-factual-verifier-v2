@@ -9,6 +9,7 @@ import runpy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 
 def main() -> None:
@@ -65,7 +66,10 @@ def main() -> None:
             raise RuntimeError("PSD template violates ms-swift's lengths contract")
         if with_lengths != value:
             raise RuntimeError("PSD length probing changes the encoded datum")
-    length_row = AddLengthPreprocessor(template).preprocess(dict(raw_rows[0]))
+    if not getattr(AddLengthPreprocessor, '_ifv_psd_fast_length_installed', False):
+        raise RuntimeError('PSD fast length preprocessor is missing')
+    with patch.object(template_cls, 'encode', side_effect=AssertionError('length pass decoded a full datum')):
+        length_row = AddLengthPreprocessor(template).preprocess(dict(raw_rows[0]))
     if length_row.get("lengths") != [len(raw_rows[0]["input_ids"])]:
         raise RuntimeError("ms-swift AddLengthPreprocessor rejected PSD lengths")
     from ifv_training.psd_datums import compact_datum
@@ -150,6 +154,7 @@ def main() -> None:
         "registered_loss": PSD_MS_SWIFT_LOSS,
         "registered_template": PSD_MS_SWIFT_TEMPLATE,
         "return_length_contract": True,
+        "fast_length_without_full_encode": True,
         "compact_and_legacy_template_equivalent": True,
         "batch_shapes": {
             name: list(value.shape)
