@@ -5,56 +5,81 @@ import pytest
 from ifv_training.psd_target_balance import balance_psd_targets
 
 
-def _write(source, repairs, preserve_by_case):
-    with source.open("w", encoding="utf-8") as handle:
-        for index in range(repairs):
-            handle.write(json.dumps({"target_id": f"r{index}", "kind": "repair",
-                                     "case_id": f"repair-{index}", "row_weight": 1.0}) + "\n")
-        for case_id, count in preserve_by_case.items():
-            for index in range(count):
-                handle.write(json.dumps({"target_id": f"p{case_id}-{index}",
-                                         "kind": "preserve", "case_id": case_id,
-                                         "row_weight": 1.0, "step_index": index}) + "\n")
+def _write_fixture(tmp_path, *, repairs=12, counts=None, truncate=None):
+    counts = counts or {f"case-{i}": n for i, n in enumerate([4, 5, 6, 7, 8, 9, 10, 11])}
+    source = tmp_path / "targets.jsonl"
+    assembled = tmp_path / "assembled.jsonl"
+    with source.open("w", encoding="utf-8") as targets, assembled.open("w", encoding="utf-8") as episodes:
+        for i in range(repairs):
+            targets.write(json.dumps({"target_id": f"r{i}", "kind": "repair", "case_id": f"r{i}"}) + "\n")
+        for case_id, count in counts.items():
+            episode_id = f"{case_id}-episode"
+            steps = [{"step_id": f"{episode_id}:react:{i}"} for i in range(count - 1)]
+            steps.append({"step_id": f"{episode_id}:judgment:{count - 1}"})
+            episodes.write(json.dumps({"case_id": case_id, "episode_id": episode_id,
+                                       "verified_full_task": True, "strict_trace_audit_pass": True,
+                                       "preservation_steps": steps}) + "\n")
+            for i, step in enumerate(steps):
+                if truncate == (case_id, i):
+                    continue
+                targets.write(json.dumps({"target_id": f"p-{case_id}-{i}", "kind": "preserve",
+                                          "case_id": case_id, "episode_id": episode_id,
+                                          "repair_site": {"step_id": step["step_id"]},
+                                          "verification": {"local_pass": True, "full_episode_pass": True,
+                                                           "strict_trace_audit_pass": True},
+                                          "step_index": i}) + "\n")
+    return source, assembled
 
 
 def _rows(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def test_count_balance_keeps_all_repairs_and_spreads_preservation(tmp_path):
-    source = tmp_path / "source.jsonl"
-    _write(source, 6, {"a": 8, "b": 8, "c": 8})
-    result = balance_psd_targets(source=source, output_dir=tmp_path / "balanced")
-    rows = _rows(tmp_path / "balanced" / "targets.jsonl")
-    assert result["counts"] == {
-        "repair_targets": 6, "source_preservation_targets": 24,
-        "source_preservation_cases": 3, "selected_preservation_targets": 6,
-        "selected_targets": 12, "excluded_preservation_targets": 18}
-    assert {row["target_id"] for row in rows if row["kind"] == "repair"} == {
-        f"r{index}" for index in range(6)}
-    groups = {case_id: [row["step_index"] for row in rows
-                        if row["kind"] == "preserve" and row["case_id"] == case_id]
-              for case_id in ("a", "b", "c")}
-    assert groups == {"a": [2, 6], "b": [2, 6], "c": [2, 6]}
-    assert all(row["row_weight"] == 1 for row in rows)
-    assert result["per_target_weights_unchanged"] is True
+def test_selects_only_complete_episodes_and_all_repairs(tmp_path):
+    source, assembled = _write_fixture(tmp_path)
+    output = tmp_path / "selected"
+    result = balance_psd_targets(source=source, preservation_episodes_source=assembled,
+                                 output_dir=output)
+    rows = _rows(output / "targets.jsonl")
+    assert sum(row["kind"] == "repair" for row in rows) == 12
+    selected = {row["case_id"] for row in rows if row["kind"] == "preserve"}
+    for case_id in selected:
+        source_ids = [row["target_id"] for row in _rows(source)
+                      if row["kind"] == "preserve" and row["case_id"] == case_id]
+        chosen_ids = [row["target_id"] for row in rows
+                      if row["kind"] == "preserve" and row["case_id"] == case_id]
+        assert chosen_ids == source_ids
+        assert any(":judgment:" in row["repair_site"]["step_id"] for row in rows
+                   if row["kind"] == "preserve" and row["case_id"] == case_id)
+    assert result["counts"]["selected_preservation_cases"] == len(selected)
+    assert result["status"] == "prepared_for_audit_not_authorized_to_train"
     assert result["provider_calls"] == 0
     with pytest.raises(FileExistsError):
-        balance_psd_targets(source=source, output_dir=tmp_path / "balanced")
+        balance_psd_targets(source=source, preservation_episodes_source=assembled,
+                            output_dir=output)
 
 
-def test_real_bank_shape_assigns_two_or_three_steps_per_case(tmp_path):
-    source = tmp_path / "source.jsonl"
-    _write(source, 626, {f"case-{index:03d}": 14 for index in range(246)})
-    result = balance_psd_targets(source=source, output_dir=tmp_path / "balanced")
-    assert result["counts"]["selected_targets"] == 1252
-    assert result["counts"]["selected_preservation_targets"] == 626
-    assert result["preservation_targets_per_case"] == {2: 112, 3: 134}
+def test_deterministic_seed_and_no_step_level_partial_episode(tmp_path):
+    source, assembled = _write_fixture(tmp_path, repairs=20)
+    a = balance_psd_targets(source=source, preservation_episodes_source=assembled,
+                            output_dir=tmp_path / "a", seed="fixed")
+    b = balance_psd_targets(source=source, preservation_episodes_source=assembled,
+                            output_dir=tmp_path / "b", seed="fixed")
+    assert a["selected_episode_ids"] == b["selected_episode_ids"]
+    assert (tmp_path / "a" / "targets.jsonl").read_bytes() == (tmp_path / "b" / "targets.jsonl").read_bytes()
 
 
-def test_preservation_shortage_fails_without_creating_output(tmp_path):
-    source = tmp_path / "source.jsonl"
-    _write(source, 3, {"a": 2})
+def test_missing_step_fails_before_creating_output(tmp_path):
+    source, assembled = _write_fixture(tmp_path, truncate=("case-3", 2))
+    with pytest.raises(ValueError, match="incomplete or out of order"):
+        balance_psd_targets(source=source, preservation_episodes_source=assembled,
+                            output_dir=tmp_path / "selected")
+    assert not (tmp_path / "selected").exists()
+
+
+def test_preservation_shortage_fails_before_creating_output(tmp_path):
+    source, assembled = _write_fixture(tmp_path, repairs=100)
     with pytest.raises(ValueError, match="preservation cap"):
-        balance_psd_targets(source=source, output_dir=tmp_path / "balanced")
-    assert not (tmp_path / "balanced").exists()
+        balance_psd_targets(source=source, preservation_episodes_source=assembled,
+                            output_dir=tmp_path / "selected")
+    assert not (tmp_path / "selected").exists()

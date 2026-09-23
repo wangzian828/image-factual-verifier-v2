@@ -1,4 +1,4 @@
-"""Build an immutable count-balanced PSD target subset before teacher scoring."""
+"""Build a smaller PSD bank by retaining whole preservation episodes."""
 from __future__ import annotations
 
 import argparse
@@ -13,12 +13,16 @@ from ifv_training.psd_target_balance import balance_psd_targets
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--preservation-episodes-source", type=Path, required=True,
+                        help="Assembled preservation JSONL; verifies no selected episode is truncated")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--preserve-target-cap", type=int,
-                        help="Default: number of repair targets (1:1 target counts)")
-    parser.add_argument("--seed", default="psd-target-balance-v1")
+                        help="Approximate target step count; whole episodes are never split")
+    parser.add_argument("--seed", default="psd-whole-episode-v2")
     args = parser.parse_args()
-    result = balance_psd_targets(source=args.source, output_dir=args.output_dir,
+    result = balance_psd_targets(source=args.source,
+                                 preservation_episodes_source=args.preservation_episodes_source,
+                                 output_dir=args.output_dir,
                                  preserve_target_cap=args.preserve_target_cap,
                                  seed=args.seed)
     print(json.dumps(result["counts"], ensure_ascii=False, sort_keys=True))
