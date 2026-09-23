@@ -73,7 +73,7 @@ def install_resume_fingerprint() -> None:
             seen += 1
             fields = {name: _summary(inputs.get(name),
                                     exact_small=name != "pixel_values",
-                                    image_moments=name == "pixel_values" and seen == 3) for name in
+                                    image_moments=name == "pixel_values") for name in
                       ("input_ids", "pixel_values", "image_grid_thw",
                        "psd_target_tokens", "psd_weights")}
             lora = [(name, parameter) for name, parameter in model.named_parameters()
