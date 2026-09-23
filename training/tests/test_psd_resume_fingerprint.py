@@ -33,3 +33,20 @@ def test_resume_fingerprint_is_bounded_and_does_not_change_loss(monkeypatch, cap
     assert caplog.text.count("IFV PSD resume fingerprint") == 4
     assert caplog.text.count("IFV PSD resume loss") == 4
     assert "lora_A" in caplog.text
+
+
+def test_resume_fingerprint_skips_preflight_without_trainer_state(monkeypatch):
+    class Trainer:
+        def compute_loss(self, model, inputs):
+            return 3
+
+    for name in ("swift", "swift.trainers"):
+        module = ModuleType(name)
+        module.__path__ = []
+        monkeypatch.setitem(sys.modules, name, module)
+    module = ModuleType("swift.trainers.seq2seq_trainer")
+    module.Seq2SeqTrainer = Trainer
+    monkeypatch.setitem(sys.modules, "swift.trainers.seq2seq_trainer", module)
+    monkeypatch.setenv("IFV_PSD_RESUME_FINGERPRINT", "1")
+    psd_resume_fingerprint.install_resume_fingerprint()
+    assert Trainer().compute_loss(None, {}) == 3

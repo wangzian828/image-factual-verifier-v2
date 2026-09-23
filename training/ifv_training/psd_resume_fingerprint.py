@@ -44,7 +44,7 @@ def install_resume_fingerprint() -> None:
 
     def traced(self, model, inputs, *args, **kwargs):
         nonlocal seen
-        capture = getattr(self.state, "global_step", None) == 1 and seen < 4
+        capture = getattr(getattr(self, "state", None), "global_step", None) == 1 and seen < 4
         if capture:
             seen += 1
             fields = {name: _summary(inputs.get(name)) for name in
