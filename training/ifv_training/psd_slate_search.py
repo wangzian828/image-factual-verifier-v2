@@ -88,8 +88,7 @@ async def run_slate_search(*, args, adapter, site, candidate, trace, gold, priva
     # stay resumable instead of being treated as a case terminal.  Keep the
     # accepted Gemini proposal and use a fresh Qwen episode directory on the
     # next owner pass; the original ledger remains immutable evidence.
-    if state["status"] in {"infrastructure_budget_exhausted", "unresolved_infrastructure"} \
-            and not state["rounds"]:
+    if state["status"] in {"infrastructure_budget_exhausted", "unresolved_infrastructure"}:
         state["status"] = "repairing"
         state.pop("output_files", None)
         save_bound(marker, identity=identity, payload=state)

@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,46 @@ from ifv_training.psd_slate import (validate_slate_review, assemble_slate_attemp
     validate_prefix_lineage, propose_slate, review_slate, SlateReviewRejected)
 from ifv_training.psd_repairs import _validate_attempt
 from test_psd_repairs import _repair_candidate, _attempt
+
+
+@pytest.mark.parametrize('paused_status', ['unresolved_infrastructure',
+                                           'infrastructure_budget_exhausted'])
+def test_slate_reopens_infrastructure_pause_after_completed_rounds(
+        monkeypatch, tmp_path, paused_status):
+    import ifv_training.psd_slate_search as search
+    from ifv_training.psd_repair_storage import save_bound
+
+    identity = {'version': 'slate-search-v3-observed-positions',
+                'inputs': _sha({}), 'proposal_budget': 12}
+    completed = {'files': {}, 'review': {'decision': {'status': 'fail'}}}
+    pending = {'round_index': 1, 'hints': {'2': {'text': 'Inspect the label.'}},
+               'provenance': {'model': 'gemini-3.7-flash'}}
+    save_bound(tmp_path / 'slate-state.json', identity=identity, payload={
+        'status': paused_status, 'rounds': [completed],
+        'pending_proposal': pending, 'next_round_slot': 2,
+        'proposals': [{'round_index': 1, 'status': 'accepted'}],
+        'output_files': {'manifest': 'old-paused-state'}})
+    (tmp_path / 'manifest.json').write_text(json.dumps({'status': paused_status}))
+    monkeypatch.setattr(search, 'audit_slate_search', lambda *_: {'passed': True})
+
+    def resumed(**_):
+        raise RuntimeError('resumed completed-round case')
+
+    args = SimpleNamespace(max_suffix_actions=None, run_student_diagnostic=False,
+                           repair_attempts=6, proposal_rounds=12, output_dir=tmp_path)
+    with pytest.raises(RuntimeError, match='resumed completed-round case'):
+        asyncio.run(search.run_slate_search(
+            args=args, adapter=SimpleNamespace(_initial_runtime_state=resumed),
+            site=SimpleNamespace(stage='unified_react'), candidate={}, trace={},
+            gold={}, private_context={}, source_task_review=None,
+            source_audit=None, source_policy=None, roles=None, profile={}, config={}))
+    state = search.load_slate_state(tmp_path / 'slate-state.json', identity=identity)
+    assert state['status'] == 'repairing'
+    assert state['rounds'] == [completed]
+    assert state['pending_proposal'] == pending
+    assert state['next_round_slot'] == 2
+    assert len(state['proposals']) == 1
+    assert 'output_files' not in state
 
 
 def test_slate_review_requires_observed_support_for_every_position():
