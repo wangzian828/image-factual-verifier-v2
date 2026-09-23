@@ -386,6 +386,22 @@ def finalize(args):
     checkpoint_record["base_model_binding"] = frozen_base_binding(
         load_json(Path(ready["checkpoint_manifest"])), ready["model"])
     write_json(checkpoint_manifest, checkpoint_record)
+    if ready.get("schema_version") == "ifv-psd-combined-sft3-ready-v1":
+        from scripts.psd_combined_ready import complete
+        completion = complete(ready=ready, profile_path=args.training_profile,
+            checkpoint_manifest_path=checkpoint_manifest,
+            initialization_gate_path=args.initialization_gate,
+            output=output / "completion.json")
+        if not completion["passed"]:
+            raise ValueError("combined PSD completion gate failed")
+        next_round = {"source_banks": ready["source_manifests"],
+            "previous_round_completion": str(output / "completion.json"),
+            "checkpoint_manifest": str(checkpoint_manifest), "model": ready["model"],
+            "adapter": str(args.checkpoint.resolve()), "requires_fresh_training_rollout": True,
+            "optimizer_state_for_new_round": "fresh", "heldout_improvement_measured": False}
+        write_json(output / "next-round.json", next_round)
+        return {"status": "combined_training_completed", "completion":
+            str(output / "completion.json"), "next_round": next_round}
     completion = complete_psd_round(rollout_gate_path=Path(ready["rollout_gate"]),
         training_profile_path=args.training_profile, output_checkpoint_manifest_path=checkpoint_manifest,
         initialization_gate_path=args.initialization_gate, output=output / "completion.json")

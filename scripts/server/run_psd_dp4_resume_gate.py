@@ -32,7 +32,22 @@ def ready_inputs(path, *, root, load_ready):
     path.relative_to(root/'runs')
     ready = load_ready(path)
     fields = {}
-    for name in ('datums', 'datum_manifest', 'serving_profile', 'checkpoint_manifest', 'rollout_gate'):
+    names = ('datums', 'datum_manifest', 'serving_profile', 'checkpoint_manifest')
+    if ready.get('schema_version') == 'ifv-psd-combined-sft3-ready-v1':
+        sources = ready.get('source_manifests')
+        if not isinstance(sources, list) or len(sources) != 2:
+            raise ValueError('Combined ready must bind exactly two source manifests')
+        for source in sources:
+            source_path = Path(source).resolve()
+            source_path.relative_to(root)
+            if not source_path.is_file():
+                raise ValueError('Combined source manifest is missing')
+        expected_result = path.parent/'dp4-resume-gate-combined-v1/result.json'
+        if Path(ready.get('native_resume_result', '')).resolve() != expected_result:
+            raise ValueError('Combined native resume result path differs from ready binding')
+    else:
+        names += ('rollout_gate',)
+    for name in names:
         fields[name] = Path(ready[name]).resolve()
         fields[name].relative_to(root)
         if not fields[name].is_file():
