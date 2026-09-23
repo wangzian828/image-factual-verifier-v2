@@ -60,6 +60,23 @@ def test_audits_metadata_only_and_keeps_gemini_provenance(tmp_path):
     assert "completion_ids" not in target and "image_paths" not in target
 
 
+def test_text_only_step_needs_no_media_archive(tmp_path):
+    row = _sample()
+    row["psd_media"] = None
+    index, run = _input(tmp_path, row)
+    result = _audit(index, run, tmp_path / "audit")
+    assert result["accepted_targets"] == 1
+
+
+def test_image_step_must_bind_pixels(tmp_path):
+    row = _sample()
+    row["teacher_prompt_ids"] = [248056, 1]
+    row["psd_media"] = None
+    index, run = _input(tmp_path, row)
+    with pytest.raises(ValueError, match="image-bearing"):
+        _audit(index, run, tmp_path / "audit")
+
+
 @pytest.mark.parametrize("mutation", [
     lambda r: r["verification"].update(hinted_recorded_verdict="fake"),
     lambda r: r["model_roles"]["trainable_student"].update(checkpoint_manifest_sha256="e" * 64),

@@ -64,8 +64,12 @@ def _strict(row: dict[str, Any]) -> None:
         if not isinstance(ids, list) or not ids or any(type(value) is not int for value in ids):
             raise ValueError(f"accepted target has invalid {key}")
     media = row.get("psd_media")
-    if not isinstance(media, dict) or not isinstance(media.get("image_paths"), list):
-        raise ValueError("accepted target lacks exact media binding")
+    has_image_token = 248056 in row["teacher_prompt_ids"] or 248056 in row["student_prompt_ids"]
+    if has_image_token:
+        if not isinstance(media, dict) or not isinstance(media.get("image_paths"), list) or not media["image_paths"]:
+            raise ValueError("image-bearing accepted target lacks exact media binding")
+    elif media is not None and (not isinstance(media, dict) or not isinstance(media.get("image_paths"), list)):
+        raise ValueError("text-only accepted target has malformed media binding")
 
 
 def audit_frozen_repairs(*, frozen_index: Path, output_dir: Path, run_root: Path,
@@ -110,7 +114,7 @@ def audit_frozen_repairs(*, frozen_index: Path, output_dir: Path, run_root: Path
                                    "gemini_hint_model": source_model,
                                    "completion_tokens": len(row["completion_ids"]),
                                    "prompt_tokens": len(row["student_prompt_ids"]),
-                                   "image_count": len(row["psd_media"]["image_paths"]),
+                                   "image_count": len((row.get("psd_media") or {}).get("image_paths", [])),
                                    "verification": "strict_complete_pass",
                                    "checkpoint_manifest_sha256": checkpoint_sha})
             if _stat(path) != case["attempts_identity"]:
