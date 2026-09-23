@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts import psd_combined_ready as combined
 from scripts.server.run_psd_dp4_resume_gate import ready_inputs
+from scripts.server import run_psd_combined_training as formal
 from ifv_training.io import write_json
 
 
@@ -136,3 +137,31 @@ def test_native_dp4_gate_accepts_two_bound_sources_without_synthetic_rollout(tmp
     ready["native_resume_result"] = str(run / "wrong/result.json")
     with pytest.raises(ValueError, match="native resume"):
         ready_inputs(ready_file, root=root, load_ready=lambda _: ready)
+
+
+def test_combined_formal_owner_refuses_unpassed_resume_gate(tmp_path, monkeypatch):
+    root = tmp_path
+    model = root / "exports/h20-sft-merged4872-3epoch-step3084-20260915/model"
+    model.mkdir(parents=True)
+    snapshot = root / "snapshot"
+    snapshot.mkdir()
+    run = root / "runs/combined"
+    run.mkdir(parents=True)
+    gate_path = run / "dp4-resume-gate-combined-v1/result.json"
+    gate_path.parent.mkdir()
+    write_json(gate_path, {"passed": False, "adapter_bitwise_equal": False,
+        "formal_training": False})
+    monkeypatch.setattr(formal, "ROOT", root)
+    monkeypatch.setattr(formal, "RUN", run)
+    monkeypatch.setattr(formal, "READY", run / "ready.json")
+    monkeypatch.setattr(formal, "GATE", gate_path)
+    monkeypatch.setattr(formal, "OUTPUT", root / "formal")
+    monkeypatch.setattr(formal, "SNAPSHOT", snapshot)
+    from scripts import run_psd_round
+    monkeypatch.setattr(run_psd_round, "load_ready", lambda _: {
+        "schema_version": combined.SCHEMA, "native_resume_result": str(gate_path),
+        "target_counts": {"repair": 1598, "preserve": 1598},
+        "adapter": None, "model": str(model),
+        "serving_profile": str(snapshot / "serving-profile.json")})
+    with pytest.raises(ValueError, match="native DP4"):
+        formal.preflight()

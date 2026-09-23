@@ -204,18 +204,34 @@ def main():
         raise
     finally:
         restore_errors = []
-        try:
-            for i in sorted(stopped):
-                try:
-                    receipt = owner.spawn(backends[i]['command'], environments[i], out / f'restored-backend-{i}.log')
-                    owner.save(SERVICE / f'replica-{i}.json', receipt)
-                except Exception as error:
-                    restore_errors.append({'gpu': i, 'error_type': type(error).__name__})
-        finally:
-            os.kill(guard['pid'], signal.SIGCONT)
+        for i in sorted(stopped):
+            try:
+                receipt = owner.spawn(backends[i]['command'], environments[i], out / f'restored-backend-{i}.log')
+                owner.save(SERVICE / f'replica-{i}.json', receipt)
+            except Exception as error:
+                restore_errors.append({'gpu': i, 'error_type': type(error).__name__})
         if restore_errors:
             owner.save(out / 'restore-errors.json', restore_errors)
             raise RuntimeError('An owned backend needs recovery; see restore-errors.json')
+        deadline = time.monotonic() + 600
+        last_error = 'service unavailable'
+        while time.monotonic() < deadline:
+            try:
+                for port in range(19002, 19006):
+                    with urllib.request.urlopen(f'http://127.0.0.1:{port}/v1/models', timeout=5) as response:
+                        models = json.load(response)['data']
+                    if not any(row.get('root') == str(MODEL) for row in models):
+                        raise RuntimeError(f'port {port} serves wrong model')
+                health = owner.http('http://127.0.0.1:19025/health')
+                if len(health.get('replicas', [])) != 4 or health.get('reject_corrupted_responses') is not True:
+                    raise RuntimeError('isolating gateway is unhealthy')
+                break
+            except Exception as error:
+                last_error = f'{type(error).__name__}: {error}'
+                time.sleep(5)
+        else:
+            raise RuntimeError(f'Owned inference recovery failed; guard remains stopped: {last_error}')
+        os.kill(guard['pid'], signal.SIGCONT)
 
 
 if __name__ == '__main__':

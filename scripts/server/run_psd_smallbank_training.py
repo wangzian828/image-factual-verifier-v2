@@ -45,6 +45,29 @@ def wait_for_idle_serving(timeout_seconds: int = 600) -> list[dict]:
     raise RuntimeError(f"owned serving did not become idle: {last_error}")
 
 
+def wait_for_restored_sft3(timeout_seconds: int = 600) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "frozen SFT3 serving unavailable"
+    while time.monotonic() < deadline:
+        try:
+            for port in range(19002, 19006):
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=5) as response:
+                    models = json.loads(response.read())["data"]
+                if not any(row.get("root") == str(MODEL) for row in models):
+                    raise RuntimeError(f"port {port} serves wrong model")
+            with urllib.request.urlopen("http://127.0.0.1:19025/health", timeout=5) as response:
+                health = json.loads(response.read())
+            if (len(health.get("replicas", [])) != 4
+                    or health.get("reject_corrupted_responses") is not True):
+                raise RuntimeError("isolating gateway is not healthy")
+            return
+        except (OSError, urllib.error.HTTPError, urllib.error.URLError, KeyError,
+                TypeError, ValueError, RuntimeError) as error:
+            last_error = f"{type(error).__name__}: {error}"
+            time.sleep(5)
+    raise RuntimeError(f"frozen SFT3 service restoration failed: {last_error}")
+
+
 def owner_module():
     path = ROOT / "training-artifacts/psd-epoch3-20260916-v1/psd_epoch3_canary.py"
     spec = importlib.util.spec_from_file_location("psd_owner", path)
@@ -160,10 +183,11 @@ def execute(ready_path: Path, gate_path: Path, output: Path) -> None:
                 owner.save(SERVICE / f"replica-{index}.json", receipt)
             except Exception as error:
                 restore_errors.append({"gpu": index, "error_type": type(error).__name__})
-        os.kill(guard["pid"], signal.SIGCONT)
         if restore_errors:
             atomic_json(output / "restore-errors.json", restore_errors)
             raise RuntimeError("owned serving restore failed")
+        wait_for_restored_sft3()
+        os.kill(guard["pid"], signal.SIGCONT)
 
 
 def main() -> None:
