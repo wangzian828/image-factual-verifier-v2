@@ -156,8 +156,10 @@ def main():
             'TORCH_EXTENSIONS_DIR': str(ROOT / 'cache/psd-gpu-probe/extensions'),
             'FLASHINFER_WORKSPACE_BASE': str(ROOT / 'cache/psd-flashinfer'),
             'XDG_CACHE_HOME': str(ROOT / 'cache/psd-gpu-probe'), 'WANDB_DISABLED': 'true', 'MASTER_PORT': '29546'}
-        base_id = f'psd-{args.output_name}-baseline'
-        resume_id = f'psd-{args.output_name}-resumed'
+        # A failed immutable gate keeps its checkpoint evidence. A corrected
+        # deployment must never reuse those checkpoint output directories.
+        base_id = f'psd-{args.output_name}-{args.deployment}-baseline'
+        resume_id = f'psd-{args.output_name}-{args.deployment}-resumed'
         def train(experiment, checkpoint=None):
             command = ['bash', str(CODE / 'training/scripts/train/run_psd_topk.sh'),
                 str(CODE / 'training/configs/models/qwen3.5-9b.env'),
