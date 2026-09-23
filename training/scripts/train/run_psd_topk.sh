@@ -266,6 +266,7 @@ args=(
   --save_only_model false
   --max_grad_norm "${IFV_MAX_GRAD_NORM:-1.0}"
   --seed "${IFV_SEED:-0}"
+  --full_determinism "${IFV_FULL_DETERMINISM:-false}"
   --gradient_checkpointing "${IFV_GRADIENT_CHECKPOINTING:-true}"
   --logging_steps "$IFV_LOGGING_STEPS"
   --output_dir "$OUTPUT_DIR"
