@@ -1,6 +1,6 @@
-"""Replay the same length-grouped PSD batches after a native Trainer resume.
+"""Replay the same PSD batches after a native Trainer resume.
 
-Transformers' LengthGroupedSampler defaults to the process-global torch RNG.
+Transformers' grouped and random samplers default to the process-global RNG.
 Trainer restores the checkpoint RNG *after* constructing/skipping the resumed
 dataloader, so a resumed model can otherwise choose a different permutation.
 The sampler needs its own seed, derived only from the dataset seed and epoch.
@@ -26,6 +26,7 @@ def checkpoint_epoch(checkpoint):
 
 def install_deterministic_psd_sampler():
     import torch
+    from torch.utils.data import RandomSampler
     from transformers import Trainer
     from transformers.trainer_pt_utils import LengthGroupedSampler, get_length_grouped_indices
 
@@ -50,18 +51,39 @@ def install_deterministic_psd_sampler():
                            self.epoch, self.seed, digest)
             return iter(indices)
 
+    class EpochRandomSampler(RandomSampler):
+        def __init__(self, sampler, *, seed, epoch):
+            super().__init__(sampler.data_source, replacement=sampler.replacement,
+                             num_samples=sampler.num_samples)
+            self.seed = seed
+            self.epoch = epoch
+
+        def set_epoch(self, epoch):
+            self.epoch = int(epoch)
+
+        def __iter__(self):
+            self.generator = torch.Generator().manual_seed(self.seed + self.epoch)
+            indices = list(super().__iter__())
+            digest = hashlib.sha256(','.join(map(str, indices)).encode()).hexdigest()[:16]
+            logger.warning('IFV PSD random sampler epoch=%d seed=%d order=%s',
+                           self.epoch, self.seed, digest)
+            return iter(indices)
+
     original = Trainer._get_train_sampler
 
     def get_train_sampler(self, train_dataset=None):
         sampler = original(self, train_dataset)
-        if not isinstance(sampler, LengthGroupedSampler):
+        if not isinstance(sampler, (LengthGroupedSampler, RandomSampler)):
             return sampler
         seed = self.args.data_seed if self.args.data_seed is not None else self.args.seed
         if not isinstance(seed, int):
-            raise ValueError('PSD grouped sampler requires an integer data seed')
-        return EpochLengthGroupedSampler(
-            lengths=sampler.lengths, batch_size=sampler.batch_size, seed=seed,
-            epoch=checkpoint_epoch(self.args.resume_from_checkpoint))
+            raise ValueError('PSD sampler requires an integer data seed')
+        epoch = checkpoint_epoch(self.args.resume_from_checkpoint)
+        if isinstance(sampler, LengthGroupedSampler):
+            return EpochLengthGroupedSampler(
+                lengths=sampler.lengths, batch_size=sampler.batch_size, seed=seed,
+                epoch=epoch)
+        return EpochRandomSampler(sampler, seed=seed, epoch=epoch)
 
     Trainer._get_train_sampler = get_train_sampler
     Trainer._ifv_psd_deterministic_sampler = True
