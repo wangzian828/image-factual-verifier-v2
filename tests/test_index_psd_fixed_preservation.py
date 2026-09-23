@@ -40,7 +40,7 @@ def _fixture(tmp_path):
                        "source_trace_path": f"traces/{episode}.json"},
             "preservation_steps": [
                 {"step_id": f"{episode}:react:1", "stage": "unified_react",
-                 "action_type": "tool_call", "protocol_rejected": False,
+                 "action_type": "tool_call", "protocol_rejected": True,
                  "observed_policy_action": {"name": "search_web"},
                  "rollout_token_capture": {"status": "complete", "prompt_token_ids": [1, 2],
                                            "completion_token_ids": [3]}},
@@ -64,6 +64,7 @@ def test_freezes_complete_first_successes_as_offsets_only(tmp_path):
     assert result["counts"]["preservation_cases"] == 2
     assert result["counts"]["preservation_steps"] == 4
     assert result["counts"]["completion_token_ids"] == 6
+    assert result["counts"]["recovered_protocol_rejection_steps"] == 2
     assert result["tool_counts"] == {"search_web": 2}
     index = [json.loads(x) for x in (output / "episodes.jsonl").read_text().splitlines()]
     assert len(index) == 2

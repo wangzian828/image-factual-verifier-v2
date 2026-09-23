@@ -81,6 +81,7 @@ def freeze_preservation(
     tool_counts: Counter[str] = Counter()
     lengths: list[int] = []
     prompt_tokens = completion_tokens = 0
+    recovered_protocol_rejections = 0
     with candidates.open("rb") as source, (output / "episodes.jsonl").open("x", encoding="utf-8") as index:
         while True:
             offset = source.tell()
@@ -119,8 +120,10 @@ def freeze_preservation(
                 if not isinstance(sid, str) or not sid or sid in step_ids:
                     raise ValueError(f"missing or duplicate preservation step for {cid}")
                 step_ids.append(sid)
-                if step.get("protocol_rejected"):
-                    raise ValueError(f"protocol-rejected preservation step for {cid}")
+                # A strictly verified *complete* success may include a format
+                # rejection that the agent recovered from.  It is part of the
+                # observed trajectory, so retain it and expose its count.
+                recovered_protocol_rejections += step.get("protocol_rejected") is True
                 capture = step.get("rollout_token_capture") or {}
                 prompt = capture.get("prompt_token_ids")
                 completion = capture.get("completion_token_ids")
@@ -170,6 +173,7 @@ def freeze_preservation(
             "preservation_cases": len(seen), "preservation_episodes": len(lengths),
             "preservation_steps": sum(lengths),
             "prompt_token_ids": prompt_tokens, "completion_token_ids": completion_tokens,
+            "recovered_protocol_rejection_steps": recovered_protocol_rejections,
             "min_steps_per_episode": min(lengths),
             "median_steps_per_episode": statistics.median(lengths),
             "max_steps_per_episode": max(lengths),
