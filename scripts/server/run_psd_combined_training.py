@@ -15,7 +15,7 @@ import sys
 
 ROOT = Path("/volume/ybo/wza")
 CODE = Path(__file__).resolve().parents[2]
-RUN = ROOT / "runs/psd-combined-smallbank-old1000-sft3-20260923-v1/attested-v6"
+RUN = ROOT / "runs/psd-combined-smallbank-old1000-sft3-20260923-v1/attested-v7"
 READY = RUN / "ready.json"
 GATE = RUN / "dp4-resume-gate-combined-v1/result.json"
 LAUNCH = RUN / "formal-training-launch-v1"
