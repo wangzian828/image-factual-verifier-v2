@@ -58,3 +58,17 @@ def test_read_rejects_unverified_and_incomplete(tmp_path):
     path.write_text(json.dumps(row) + "\n")
     with pytest.raises(ValueError, match="step IDs"):
         module._read(path, "old1000")
+
+
+def test_quarantines_ambiguous_old_judgment_without_dropping_other_cases(tmp_path):
+    first, second = _rows("old1000")[:2]
+    first["step_ids"][-2] = f"{first['episode_id']}:judgment:4"
+    path = tmp_path / "old.jsonl"
+    path.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n")
+    excluded = []
+    kept = module._read(path, "old1000", excluded)
+    assert [r["case_id"] for r in kept] == [second["case_id"]]
+    assert excluded == [{"source": "old1000", "case_id": first["case_id"],
+                         "episode_id": first["episode_id"],
+                         "reason": "ambiguous_judgment_steps", "judgment_steps": 2,
+                         "preservation_steps": first["step_count"]}]

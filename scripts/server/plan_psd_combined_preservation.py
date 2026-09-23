@@ -14,11 +14,12 @@ import numpy as np
 from scipy.optimize import Bounds, LinearConstraint, milp
 
 
-def _read(path: Path, source: str) -> list[dict[str, Any]]:
+def _read(path: Path, source: str, excluded: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     rows = [json.loads(line) for line in path.open(encoding="utf-8")]
     if not rows:
         raise ValueError(f"empty {source} preservation index")
     seen: set[str] = set()
+    kept: list[dict[str, Any]] = []
     for row in rows:
         case, episode = row.get("case_id"), row.get("episode_id")
         if not isinstance(case, str) or not case or case in seen:
@@ -42,10 +43,20 @@ def _read(path: Path, source: str) -> list[dict[str, Any]]:
             ids = row.get("step_ids")
             if not isinstance(ids, list) or len(ids) != row["step_count"] or len(set(ids)) != len(ids):
                 raise ValueError("old1000 fixed episode step IDs invalid")
-            if sum(":judgment:" in sid for sid in ids) != 1:
-                raise ValueError("old1000 fixed episode has no unique judgment")
+            judgment_count = sum(":judgment:" in sid for sid in ids)
+            if judgment_count != 1:
+                if excluded is None:
+                    raise ValueError("old1000 fixed episode has no unique judgment")
+                excluded.append({"source": source, "case_id": case, "episode_id": episode,
+                                 "reason": "ambiguous_judgment_steps",
+                                 "judgment_steps": judgment_count,
+                                 "preservation_steps": row["step_count"]})
+                continue
         row["selection_source"] = source
-    return rows
+        kept.append(row)
+    if not kept:
+        raise ValueError(f"no eligible {source} preservation episodes")
+    return kept
 
 
 def _quartile(values: list[int]) -> list[int]:
@@ -173,7 +184,8 @@ def main() -> None:
     parser.add_argument("--old-steps", type=int, required=True)
     args = parser.parse_args()
     small = _read(args.small_index, "smallbank")
-    old = _read(args.old_index, "old1000")
+    excluded: list[dict[str, Any]] = []
+    old = _read(args.old_index, "old1000", excluded)
     result = propose(small, old, {"smallbank": args.small_steps, "old1000": args.old_steps})
     if args.output_dir.exists():
         raise FileExistsError(args.output_dir)
@@ -188,6 +200,7 @@ def main() -> None:
                    "selection_policy": "all_eligible_repairs_plus_milp_whole_episode_source_length_context_tool_image_balance",
                    "uses_gold_or_teacher_score": False, "reads_image_pixels": False,
                    "copies_target_payload": False, "formal_training_started": False})
+    result["excluded_ambiguous_episodes"] = excluded
     (args.output_dir / "manifest.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"metadata_coverage_gate_pass": result["metadata_coverage_gate_pass"],
