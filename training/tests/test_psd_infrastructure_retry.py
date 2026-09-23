@@ -8,7 +8,7 @@ import pytest
 from ifv_training.psd_infrastructure_retry import (
     InfrastructureRetriesExhausted, PolicyInfrastructureFailure, guard_policy_backend,
     retry_episode, retry_episode_compact, validate_generated_probabilities,
-    is_nonfinite_serialization_response)
+    is_nonfinite_serialization_response, unusable_chat_response_reason)
 
 
 def response(value=-.5, candidate=-1.):
@@ -183,6 +183,26 @@ def test_request_local_retry_does_not_retry_non_infrastructure_error(monkeypatch
     with pytest.raises(ValueError, match='bad bound prefix'):
         asyncio.run(backend.get_response([]))
     assert len(calls) == 1
+
+
+def test_aborted_empty_choice_is_infrastructure_not_a_completed_action(monkeypatch):
+    message = ('Chat Completions returned an unusable response: choices=1, '
+        'finish_reason=abort, content_chars=0, reasoning_chars=0, '
+        'reasoning_fallback_requested=False')
+    assert unusable_chat_response_reason(RuntimeError(message)) == 'model_unusable_http_choice'
+    calls = []
+    async def call(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError(message)
+        return response()
+    async def no_sleep(_):
+        pass
+    monkeypatch.setattr('ifv_training.psd_infrastructure_retry.asyncio.sleep', no_sleep)
+    backend = SimpleNamespace(get_response=call, max_retries=0)
+    guard_policy_backend(backend, max_request_retries=2)
+    assert asyncio.run(backend.get_response([])).raw == response().raw
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize('limit', [-1, 3, True, 1.5])
