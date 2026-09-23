@@ -21,7 +21,7 @@ def test_checkpoint_epoch_rejects_missing_or_invalid_state(tmp_path):
     assert checkpoint_epoch(tmp_path) == 2
 
 
-def test_grouped_batches_replay_independently_of_process_rng(monkeypatch, tmp_path):
+def test_grouped_batches_replay_independently_of_process_rng(monkeypatch, tmp_path, caplog):
     class Generator:
         def manual_seed(self, seed):
             self.seed = seed
@@ -49,6 +49,17 @@ def test_grouped_batches_replay_independently_of_process_rng(monkeypatch, tmp_pa
                 return RandomSampler(self.train_dataset)
             return LengthGroupedSampler(lengths=list(range(20)), batch_size=4)
 
+    class BatchSamplerShard:
+        rank = 0
+        curr_seed = 42
+
+        def __iter__(self):
+            return iter(([1, 3], [5, 7]))
+
+    class DataLoaderMixin:
+        def get_train_dataloader(self, skip_batches=0):
+            return skip_batches
+
     def grouped(lengths, batch_size, generator):
         indices = list(range(len(lengths)))
         random.Random(generator.seed).shuffle(indices)
@@ -64,13 +75,34 @@ def test_grouped_batches_replay_independently_of_process_rng(monkeypatch, tmp_pa
     pt_utils = ModuleType('transformers.trainer_pt_utils')
     pt_utils.LengthGroupedSampler = LengthGroupedSampler
     pt_utils.get_length_grouped_indices = grouped
+    swift = ModuleType('swift')
+    swift.__path__ = []
+    swift_dataloader = ModuleType('swift.dataloader')
+    swift_dataloader.__path__ = []
+    swift_shard = ModuleType('swift.dataloader.shard')
+    swift_shard.BatchSamplerShard = BatchSamplerShard
+    swift_trainers = ModuleType('swift.trainers')
+    swift_trainers.__path__ = []
+    swift_mixin = ModuleType('swift.trainers.mixin')
+    swift_mixin.DataLoaderMixin = DataLoaderMixin
     monkeypatch.setitem(sys.modules, 'torch', torch)
     monkeypatch.setitem(sys.modules, 'torch.utils', torch.utils)
     monkeypatch.setitem(sys.modules, 'torch.utils.data', torch.utils.data)
     monkeypatch.setitem(sys.modules, 'transformers', transformers)
     monkeypatch.setitem(sys.modules, 'transformers.trainer_pt_utils', pt_utils)
+    for name, module in [('swift', swift), ('swift.dataloader', swift_dataloader),
+                         ('swift.dataloader.shard', swift_shard), ('swift.trainers', swift_trainers),
+                         ('swift.trainers.mixin', swift_mixin)]:
+        monkeypatch.setitem(sys.modules, name, module)
     install_deterministic_psd_sampler()
     install_deterministic_psd_sampler()  # patch must be idempotent
+
+    assert list(BatchSamplerShard()) == [[1, 3], [5, 7]]
+    assert 'batch=1 indices=[5, 7]' in caplog.text
+    swift_trainer = DataLoaderMixin()
+    swift_trainer.args = SimpleNamespace(process_index=0, data_seed=42)
+    assert swift_trainer.get_train_dataloader(skip_batches=1) == 1
+    assert 'skip_batches=1' in caplog.text
 
     args = SimpleNamespace(data_seed=42, seed=0, resume_from_checkpoint=None,
                            train_sampling_strategy='group_by_length')

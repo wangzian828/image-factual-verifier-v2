@@ -30,6 +30,37 @@ def install_deterministic_psd_sampler():
     from transformers import Trainer
     from transformers.trainer_pt_utils import LengthGroupedSampler, get_length_grouped_indices
 
+    # SwiftTrainer owns the real PSD dataloader and bypasses Trainer's sampler.
+    # Trace only small integer batch indices; this never reads or logs payloads.
+    try:
+        from swift.dataloader.shard import BatchSamplerShard
+        from swift.trainers.mixin import DataLoaderMixin
+    except ImportError:
+        BatchSamplerShard = None
+        DataLoaderMixin = None
+    if BatchSamplerShard is not None and not getattr(BatchSamplerShard, '_ifv_psd_order_trace', False):
+        original_iter = BatchSamplerShard.__iter__
+
+        def traced_iter(self):
+            for number, batch in enumerate(original_iter(self)):
+                if number < 16:
+                    logger.warning('IFV PSD Swift batch rank=%d epoch_seed=%d batch=%d indices=%s',
+                                   self.rank, self.curr_seed, number, list(batch))
+                yield batch
+
+        BatchSamplerShard.__iter__ = traced_iter
+        BatchSamplerShard._ifv_psd_order_trace = True
+    if DataLoaderMixin is not None and not getattr(DataLoaderMixin, '_ifv_psd_skip_trace', False):
+        original_dataloader = DataLoaderMixin.get_train_dataloader
+
+        def traced_dataloader(self, skip_batches=0):
+            logger.warning('IFV PSD Swift dataloader rank=%d skip_batches=%d data_seed=%s',
+                           self.args.process_index, skip_batches, self.args.data_seed)
+            return original_dataloader(self, skip_batches=skip_batches)
+
+        DataLoaderMixin.get_train_dataloader = traced_dataloader
+        DataLoaderMixin._ifv_psd_skip_trace = True
+
     if getattr(Trainer, '_ifv_psd_deterministic_sampler', False):
         return
 
