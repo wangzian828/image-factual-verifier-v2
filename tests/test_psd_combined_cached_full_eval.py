@@ -134,3 +134,46 @@ def test_ablation_flags_reach_frozen_case_runner(monkeypatch, tmp_path):
     )
     assert "--disable-web-search" in commands[0]
     assert commands[0][commands[0].index("--case-list") + 1].endswith("smoke-0-cases.txt")
+
+
+def test_case_isolated_runtime_opt_in_overrides_default_and_private_env(monkeypatch, tmp_path):
+    for key in (
+        "SERPER_API_KEY", "JINA_API_KEY", "GEMINI_API_KEY",
+        "BAIDU_OCR_API_KEY", "BAIDU_OCR_SECRET_KEY",
+    ):
+        monkeypatch.setenv(key, "test-key")
+    monkeypatch.setenv("IFV_PREFIX_CACHE_MODE", "request_isolated")
+    environment = flow.agent.runtime_environment(
+        tmp_path, flow.PROFILE_MODEL, prefix_cache_mode="case_isolated",
+    )
+    assert environment["IFV_PREFIX_CACHE_MODE"] == "case_isolated"
+    assert environment["QWEN35_LOCAL_MODEL"] == flow.PROFILE_MODEL
+    with pytest.raises(ValueError, match="only opts into case-isolated"):
+        flow.agent.runtime_environment(
+            tmp_path, flow.PROFILE_MODEL, prefix_cache_mode="request_isolated",
+        )
+
+
+def test_existing_merged_model_requires_source_receipt_before_reuse(monkeypatch, tmp_path):
+    sft = tmp_path / "sft"
+    adapter = tmp_path / "adapter"
+    merged = tmp_path / "merged"
+    deploy = tmp_path / "deploy"
+    for directory in (sft, adapter, merged, deploy):
+        directory.mkdir()
+    (sft / "config.json").write_text("{}")
+    (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+    (merged / "config.json").write_text("{}")
+    monkeypatch.setattr(flow, "SFT_ROOT", sft)
+    monkeypatch.setattr(flow, "MERGED_ROOT", merged)
+    with pytest.raises(RuntimeError, match="no source receipt"):
+        flow.merge_model(adapter, deploy)
+    (merged / "merge-export.json").write_text(json.dumps({
+        "passed": True, "large_payload_hashing": False,
+        "source": {"base_model": str(sft), "adapter": str(adapter)},
+        "adapter_parameter_count": 1,
+    }))
+    monkeypatch.setattr(flow.subprocess, "run", lambda *a, **k: pytest.fail("merge reran"))
+    flow.merge_model(adapter, deploy)
+    assert (deploy / "merge-reuse.json").is_file()
+    assert (deploy / "merge-binding.json").is_file()

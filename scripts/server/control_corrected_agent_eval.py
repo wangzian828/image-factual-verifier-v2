@@ -423,7 +423,9 @@ class ServiceSession:
             raise RuntimeError("original SFT service restoration failed")
 
 
-def runtime_environment(source_code: Path, profile_model: str) -> dict[str, str]:
+def runtime_environment(
+    source_code: Path, profile_model: str, *, prefix_cache_mode: str | None = None,
+) -> dict[str, str]:
     from dotenv import dotenv_values
 
     env = {
@@ -468,6 +470,10 @@ def runtime_environment(source_code: Path, profile_model: str) -> dict[str, str]
         PYTHONPATH=str(source_code) + ":" + str(source_code / "training"),
         TMPDIR=str(ROOT / "tmp"),
     )
+    if prefix_cache_mode is not None:
+        if prefix_cache_mode != "case_isolated":
+            raise ValueError("corrected Agent evaluation only opts into case-isolated caching")
+        env["IFV_PREFIX_CACHE_MODE"] = prefix_cache_mode
     return env
 
 
@@ -751,6 +757,7 @@ def evaluate_model(
     profile_model: str,
     model_root: Path,
     output: Path,
+    prefix_cache_mode: str | None = None,
 ) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=False)
     benchmark_rows = rows(BENCHMARK)
@@ -763,6 +770,7 @@ def evaluate_model(
         "schema_version": "ifv-corrected-self-extract-agent-eval-v1",
         "key": key,
         "profile_model": profile_model,
+        "prefix_cache_mode": prefix_cache_mode,
         "served_model_root": stat_identity(model_root / "config.json"),
         "benchmark": stat_identity(BENCHMARK),
         "manifest": stat_identity(MANIFEST),
@@ -784,7 +792,9 @@ def evaluate_model(
     (output / "protocol-smoke-cases.txt").write_text(
         "".join(case + "\n" for case in SMOKE_CASES), encoding="utf-8"
     )
-    environment = runtime_environment(source_code, profile_model)
+    environment = runtime_environment(
+        source_code, profile_model, prefix_cache_mode=prefix_cache_mode,
+    )
     launch_judge(
         deploy=deploy,
         source_code=source_code,

@@ -36,9 +36,9 @@ TRAIN_OWNER = (
 )
 SFT_ROOT = ROOT / "exports/h20-sft-merged4872-3epoch-step3084-20260915/model"
 MERGED_ROOT = ROOT / "exports/qwen35-psd-combined-merged-20260924-v1/model"
-DEPLOY = ROOT / "training-artifacts/psd-combined-cached-full-eval-20260924-v1"
-LAUNCH = ROOT / "training-artifacts/psd-combined-cached-full-eval-launch-20260924-v1"
-EVAL_OUTPUT = ROOT / "evaluation/qwen35-psd-combined-agent-full1526-selfextract-20260924-v1"
+DEPLOY = ROOT / "training-artifacts/psd-combined-cached-full-eval-20260924-v2"
+LAUNCH = ROOT / "training-artifacts/psd-combined-cached-full-eval-launch-20260924-v2"
+EVAL_OUTPUT = ROOT / "evaluation/qwen35-psd-combined-agent-full1526-selfextract-20260924-v2"
 GATEWAY_CODE = ROOT / "training-artifacts/corrected-threeway-cache-guarded-20260921-v137/code"
 PROFILE_MODEL = "ifv-qwen3.5-9b-sft3084-psd-combined-selfextract"
 ABLATIONS = (
@@ -218,6 +218,7 @@ def evaluate_ablation(
         "schema_version": "ifv-corrected-self-extract-tool-ablation-v1",
         "variant": name, "tool_families": config.to_manifest(),
         "profile_model": PROFILE_MODEL,
+        "prefix_cache_mode": "case_isolated",
         "served_model_root": agent.stat_identity(MERGED_ROOT / "config.json"),
         "benchmark": agent.stat_identity(agent.BENCHMARK),
         "manifest": agent.stat_identity(agent.MANIFEST),
@@ -231,7 +232,9 @@ def evaluate_ablation(
     (output / "protocol-smoke-cases.txt").write_text(
         "".join(case + "\n" for case in agent.SMOKE_CASES), encoding="utf-8"
     )
-    environment = agent.runtime_environment(CODE, PROFILE_MODEL)
+    environment = agent.runtime_environment(
+        CODE, PROFILE_MODEL, prefix_cache_mode="case_isolated",
+    )
     agent.launch_judge(
         deploy=deploy, source_code=CODE, output=output,
         source_model=PROFILE_MODEL, environment=environment,
@@ -293,9 +296,19 @@ def merge_model(adapter: Path, deploy: Path) -> None:
         sys.executable, str(script), "--base-model", str(SFT_ROOT),
         "--adapter", str(adapter), "--output", str(MERGED_ROOT), "--no-large-hashes",
     ]
-    with (deploy / "merge.log").open("xb") as log:
-        subprocess.run(command, cwd=CODE, stdin=subprocess.DEVNULL, stdout=log,
-                       stderr=subprocess.STDOUT, check=True)
+    if MERGED_ROOT.exists():
+        # Reuse only after checking the immutable source receipt below.  The
+        # prior smoke failed at gateway admission before any model inference.
+        if not (MERGED_ROOT / "merge-export.json").is_file():
+            raise RuntimeError("existing merged model has no source receipt")
+        agent.atomic_json(deploy / "merge-reuse.json", {
+            "source": str(MERGED_ROOT / "merge-export.json"),
+            "reason": "prior gateway rejected unsalted requests before inference",
+        })
+    else:
+        with (deploy / "merge.log").open("xb") as log:
+            subprocess.run(command, cwd=CODE, stdin=subprocess.DEVNULL, stdout=log,
+                           stderr=subprocess.STDOUT, check=True)
     record = agent.load(MERGED_ROOT / "merge-export.json")
     if (
         record.get("passed") is not True
@@ -426,6 +439,7 @@ def execute() -> None:
         inference = agent.evaluate_model(
             deploy=DEPLOY, source_code=CODE, key="sft3-psd-combined",
             profile_model=PROFILE_MODEL, model_root=MERGED_ROOT, output=EVAL_OUTPUT,
+            prefix_cache_mode="case_isolated",
         )
         ablations: dict[str, dict[str, Any]] = {}
         for name, flag, config in ABLATIONS:
