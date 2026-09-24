@@ -1,9 +1,9 @@
-"""Retry explicitly terminal streaming-judge failures exactly once.
+"""Retry explicitly rejected streaming-judge requests exactly once.
 
 The original attempt receipts remain immutable.  This helper only creates an
 ``attempt-02`` intent/result pair for case directories that have an explicit
-``failed.json`` receipt, no accepted ``result.json``, and a retryable provider
-failure.  Existing successful judge results are never submitted again.
+``failed.json`` receipt, no accepted ``result.json``, and an explicit HTTP 429
+or 503 provider rejection. Existing successful judge results are never sent again.
 """
 from __future__ import annotations
 
@@ -27,6 +27,14 @@ from src.integrations.gemini import GeminiInteractionsClient
 
 
 RETRYABLE_ERROR_TYPES = {"GeminiInteractionsHTTPError"}
+RETRYABLE_REJECTIONS = ("HTTP 429", "HTTP 503")
+
+
+def explicitly_rejected(failure: dict[str, Any]) -> bool:
+    return (
+        failure.get("error_type") in RETRYABLE_ERROR_TYPES
+        and any(code in str(failure.get("error") or "") for code in RETRYABLE_REJECTIONS)
+    )
 
 
 def retryable_failure(directory: Path) -> dict[str, Any]:
@@ -43,10 +51,8 @@ def retryable_failure(directory: Path) -> dict[str, Any]:
     failure = json.loads((directory / "failed.json").read_text(encoding="utf-8"))
     if failure.get("state") != "judge_attempt_failed":
         raise ValueError(f"unexpected failure state: {directory}")
-    if failure.get("error_type") not in RETRYABLE_ERROR_TYPES:
-        raise ValueError(f"non-retryable judge failure: {directory}")
-    if "HTTP 503" not in str(failure.get("error") or ""):
-        raise ValueError(f"only diagnosed HTTP 503 failures may be retried: {directory}")
+    if not explicitly_rejected(failure):
+        raise ValueError(f"only explicit HTTP 429/503 rejections may be retried: {directory}")
     return failure
 
 
@@ -61,15 +67,12 @@ def unresolved_failed_directories(judge: StreamingJudge) -> list[Path]:
     )
 
 
-def retryable_503_directories(directories: list[Path]) -> list[Path]:
-    """Select only confirmed provider rejections; timeouts may be ambiguous."""
+def retryable_rejection_directories(directories: list[Path]) -> list[Path]:
+    """Select confirmed 429/503 rejections; timeouts may be ambiguous."""
     result: list[Path] = []
     for directory in directories:
         failure = json.loads((directory / "failed.json").read_text(encoding="utf-8"))
-        if (
-            failure.get("error_type") == "GeminiInteractionsHTTPError"
-            and "HTTP 503" in str(failure.get("error") or "")
-        ):
+        if explicitly_rejected(failure):
             result.append(directory)
     return result
 
@@ -96,7 +99,7 @@ class TailRepair:
             raise ValueError(
                 f"expected {args.expected_total_failures} total judge failures, found {len(self.all_failures)}"
             )
-        self.failures = retryable_503_directories(self.all_failures)
+        self.failures = retryable_rejection_directories(self.all_failures)
         if len(self.failures) != args.expected_failures:
             raise ValueError(
                 f"expected {args.expected_failures} unresolved judge failures, found {len(self.failures)}"
@@ -124,7 +127,7 @@ class TailRepair:
             "expected_failures": args.expected_failures,
             "expected_agent_successes": expected_agent_successes,
             "expected_total_failures": args.expected_total_failures,
-            "excluded_non_503_failures": len(self.all_failures) - len(self.failures),
+            "excluded_ambiguous_or_other_failures": len(self.all_failures) - len(self.failures),
             "case_ids": sorted(self.failure_rows),
             "large_payload_hashing": False,
         }
@@ -236,7 +239,7 @@ class TailRepair:
             "final_records": len(records),
             "agent_missing_or_failed": len(self.judge.expected) - len(self.judge.success_rows),
             "historical_failed_attempts_preserved": len(self.failures),
-            "non_503_prior_failures_preserved": len(self.all_failures) - len(self.failures),
+            "ambiguous_or_other_prior_failures_preserved": len(self.all_failures) - len(self.failures),
             "tail_retry_outcomes": outcomes,
             "large_payload_hashing": False,
         }

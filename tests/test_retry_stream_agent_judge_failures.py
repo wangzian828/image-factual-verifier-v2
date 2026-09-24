@@ -5,7 +5,7 @@ import pytest
 
 from scripts.server.retry_stream_agent_judge_failures import (
     retryable_failure,
-    retryable_503_directories,
+    retryable_rejection_directories,
     unresolved_failed_directories,
 )
 
@@ -34,9 +34,14 @@ def test_retryable_failure_accepts_explicit_503(tmp_path: Path) -> None:
     assert retryable_failure(tmp_path)["case_id"] == "case-1"
 
 
-def test_retryable_failure_rejects_non_503(tmp_path: Path) -> None:
+def test_retryable_failure_accepts_explicit_429(tmp_path: Path) -> None:
     make_failed(tmp_path, error="HTTP 429")
-    with pytest.raises(ValueError, match="HTTP 503"):
+    assert retryable_failure(tmp_path)["case_id"] == "case-1"
+
+
+def test_retryable_failure_rejects_ambiguous_timeout(tmp_path: Path) -> None:
+    make_failed(tmp_path, error_type="ReadTimeout", error="")
+    with pytest.raises(ValueError, match="HTTP 429/503"):
         retryable_failure(tmp_path)
 
 
@@ -60,8 +65,12 @@ def test_unresolved_failures_excludes_repaired_cases(tmp_path: Path) -> None:
 
 
 def test_retryable_subset_excludes_ambiguous_timeout(tmp_path: Path) -> None:
-    rejected = tmp_path / "rejected"
+    rejected = tmp_path / "rejected503"
+    rate_limited = tmp_path / "rejected429"
     timeout = tmp_path / "timeout"
     make_failed(rejected)
+    make_failed(rate_limited, error="HTTP 429")
     make_failed(timeout, error_type="ReadTimeout", error="")
-    assert retryable_503_directories([rejected, timeout]) == [rejected]
+    assert retryable_rejection_directories([rejected, rate_limited, timeout]) == [
+        rejected, rate_limited
+    ]
