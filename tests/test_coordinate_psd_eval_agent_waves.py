@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.server import coordinate_psd_eval_agent_waves as gate
 from scripts.server.coordinate_psd_eval_agent_waves import wave_decision
 
 
@@ -63,3 +64,43 @@ def test_smoke_requires_exact_frozen_ids(tmp_path: Path) -> None:
         smoke_ids={"case-0", "case-1", "case-2", "case-4"},
     )
     assert decision["advance"] is False
+
+
+def test_new_ablation_judge_is_paused_without_touching_agent(tmp_path: Path, monkeypatch) -> None:
+    full = tmp_path / "full"
+    output = tmp_path / "full-no-web-search"
+    deploy = tmp_path / "deploy"
+    judge_path = deploy / "no-web-search" / f"judge-{gate.PROFILE_MODEL}.json"
+    write = lambda path, value: (path.parent.mkdir(parents=True, exist_ok=True), path.write_text(json.dumps(value)))
+    write(judge_path, {"pid": 123, "output": str(output / "judge-gemini37-stream-v1")})
+    monkeypatch.setattr(gate, "DEPLOY_ROOT", deploy)
+    current = ["S"]
+    marker = "stream_agent_judges.py\x00--rollout-root\x00" + str(output)
+    monkeypatch.setattr(gate, "process", lambda pid: (current[0], 100, 999, marker))
+    signals = []
+
+    def kill(pid, sig):
+        signals.append((pid, sig))
+        current[0] = "T"
+
+    monkeypatch.setattr(gate.os, "kill", kill)
+    gate.pause_new_ablation_judges(100, full, tmp_path / "gate")
+    assert len(signals) == 1
+    result = json.loads((tmp_path / "gate/judge-pauses/no-web-search.json").read_text())
+    assert result["phase"] == "judge_paused"
+    gate.pause_new_ablation_judges(100, full, tmp_path / "gate")
+    assert len(signals) == 1
+
+
+def test_new_ablation_judge_wrong_parent_fails_closed(tmp_path: Path, monkeypatch) -> None:
+    full = tmp_path / "full"
+    output = tmp_path / "full-no-web-search"
+    deploy = tmp_path / "deploy"
+    receipt = deploy / "no-web-search" / f"judge-{gate.PROFILE_MODEL}.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(json.dumps({"pid": 123, "output": str(output / "judge-gemini37-stream-v1")}))
+    monkeypatch.setattr(gate, "DEPLOY_ROOT", deploy)
+    marker = "stream_agent_judges.py\x00--rollout-root\x00" + str(output)
+    monkeypatch.setattr(gate, "process", lambda pid: ("S", 999, 777, marker))
+    with pytest.raises(RuntimeError, match="identity mismatch"):
+        gate.pause_new_ablation_judges(100, full, tmp_path / "gate")
