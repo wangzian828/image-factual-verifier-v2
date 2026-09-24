@@ -134,6 +134,11 @@ class StreamingJudge:
         self.manifest_root = args.manifest.resolve().parent
         self.tail = LedgerTail()
         self.queued: set[str] = set()
+        # Discovery may outrun the provider.  Keep undispatched cases in
+        # memory so their paid-request intents are written only when a worker
+        # slot is actually available.  A restart reconstructs this queue from
+        # the durable Agent ledgers.
+        self.pending: dict[str, tuple[dict[str, Any], Path]] = {}
         self.success_rows: dict[str, tuple[dict[str, Any], Path]] = {}
         self.tasks: set[asyncio.Task[None]] = set()
         self.semaphore = asyncio.Semaphore(args.concurrency)
@@ -291,6 +296,7 @@ class StreamingJudge:
             "judge_failed": len(failures),
             "judge_ambiguous": len(ambiguous),
             "active": len(self.tasks),
+            "pending_dispatch": len(self.pending),
             "expected_runnable": len(self.expected),
             "formal_denominator": self.args.formal_denominator,
             "large_payload_hashing": False,
@@ -323,32 +329,39 @@ class StreamingJudge:
         state["agent_missing_or_failed"] = len(self.expected) - len(self.success_rows)
         atomic_json(self.output / "summary.json", state)
 
+    def remember_discovered(
+        self,
+        discovered: list[tuple[str, dict[str, Any], Path]],
+        completed: set[str],
+    ) -> None:
+        for case_id, row, run_dir in discovered:
+            if case_id not in completed and case_id not in self.queued:
+                self.pending[case_id] = (row, run_dir)
+
+    def dispatch_ready(self, client: GeminiInteractionsClient) -> None:
+        while self.pending and len(self.tasks) < self.args.concurrency:
+            case_id = next(iter(self.pending))
+            row, run_dir = self.pending.pop(case_id)
+            self.queued.add(case_id)
+            self.tasks.add(asyncio.create_task(self.judge_one(client, case_id, row, run_dir)))
+
     async def run(self) -> None:
         completed = self.completed_ids()
         async with GeminiInteractionsClient(timeout=240, max_retries=2) as client:
             while True:
-                for case_id, row, run_dir in self.discover():
-                    if case_id in completed or case_id in self.queued:
-                        continue
-                    self.queued.add(case_id)
-                    task = asyncio.create_task(self.judge_one(client, case_id, row, run_dir))
-                    self.tasks.add(task)
+                self.remember_discovered(self.discover(), completed)
                 finished = {task for task in self.tasks if task.done()}
                 for task in finished:
                     self.tasks.remove(task)
                     task.result()
+                self.dispatch_ready(client)
                 atomic_json(self.output / "state.json", self.status(phase="streaming"))
-                if self.inference_done() and not self.tasks:
+                if self.inference_done() and not self.tasks and not self.pending:
                     # One final tail pass closes the race between the inference
                     # summary rename and the last run-results flush.
-                    final = self.discover()
-                    for case_id, row, run_dir in final:
-                        if case_id in completed or case_id in self.queued:
-                            continue
-                        self.queued.add(case_id)
-                        task = asyncio.create_task(self.judge_one(client, case_id, row, run_dir))
-                        self.tasks.add(task)
-                    if not self.tasks:
+                    self.remember_discovered(self.discover(), completed)
+                    self.dispatch_ready(client)
+                    if not self.tasks and not self.pending:
                         break
                 await asyncio.sleep(self.args.poll_seconds)
         self.write_final()

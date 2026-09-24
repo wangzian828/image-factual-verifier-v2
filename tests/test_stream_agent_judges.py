@@ -1,5 +1,6 @@
 import asyncio
 import json
+from argparse import Namespace
 
 from scripts.server.stream_agent_judges import (
     LedgerTail,
@@ -73,3 +74,32 @@ def test_existing_failed_response_is_not_replayed(tmp_path):
             tmp_path,
         )
     )
+
+
+def test_undispatched_cases_do_not_create_intents(tmp_path):
+    async def exercise():
+        judge = StreamingJudge.__new__(StreamingJudge)
+        judge.args = Namespace(concurrency=2)
+        judge.pending = {}
+        judge.queued = set()
+        judge.tasks = set()
+        release = asyncio.Event()
+        started = []
+
+        async def fake_judge_one(_client, case_id, _row, _run_dir):
+            started.append(case_id)
+            (tmp_path / (case_id + ".intent")).write_text("dispatched")
+            await release.wait()
+
+        judge.judge_one = fake_judge_one
+        discovered = [(str(i), {}, tmp_path) for i in range(5)]
+        judge.remember_discovered(discovered, set())
+        judge.dispatch_ready(None)
+        await asyncio.sleep(0)
+        assert started == ["0", "1"]
+        assert len(judge.pending) == 3
+        assert sorted(path.name for path in tmp_path.glob("*.intent")) == ["0.intent", "1.intent"]
+        release.set()
+        await asyncio.gather(*judge.tasks)
+
+    asyncio.run(exercise())
