@@ -54,6 +54,15 @@ def test_accepts_exact_model_image_and_schema() -> None:
     assert result[0]["quality_bucket"] == "usable"
 
 
+def test_structured_verdict_excludes_separate_thought_part() -> None:
+    payload = succeeded()
+    parts = payload["response"]["inlinedResponses"]["inlinedResponses"][0]["response"]["candidates"][0]["content"]["parts"]
+    parts.insert(0, {"thought": True, "text": "Thinking through the evidence; this is not JSON."})
+    result = collect.validate_response(payload, [expected()], "batches/example")
+    assert result[0]["status"] == "completed"
+    assert result[0]["judge_output"] == GOOD
+
+
 @pytest.mark.parametrize("value,reason", [
     (succeeded(image_tokens=0), "no image tokens"),
     (succeeded(output={**GOOD, "quality_bucket": "unknown"}), "invalid quality_bucket"),
@@ -101,4 +110,5 @@ def test_collector_is_restartable_and_never_recreates_batch(tmp_path: Path, monk
     assert first["counts"] == second["counts"] == {"completed": 1, "error": 0}
     assert calls == ["batches/example"]
     assert (shard / "batch-response.json").is_file()
-    assert len(json.loads((shard / "records.json").read_text())) == 1
+    assert len(json.loads((shard / "records-v2.json").read_text())) == 1
+    assert (tmp_path / "collection-status-v2.json").is_file()

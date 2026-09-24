@@ -91,7 +91,10 @@ def validate_response(payload: dict[str, Any], expected: list[dict[str, Any]], j
         if not problems:
             try:
                 parts = candidates[0]["content"]["parts"]
-                text = "".join(part.get("text", "") for part in parts)
+                # includeThoughts=True returns a separate thought text part.
+                # The structured verdict is the non-thought part only.
+                text = "".join(part.get("text", "") for part in parts
+                               if not part.get("thought"))
                 parsed = json.loads(text)
                 problems.extend(validate_output(parsed))
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -140,7 +143,8 @@ def collect(output: Path, credentials: Path) -> dict[str, Any]:
     if not api_key:
         raise ValueError("missing Gemini credential")
     os.umask(0o077)
-    summary: dict[str, Any] = {"transport": "generateContent Batch", "model": MODEL,
+    summary: dict[str, Any] = {"collector_revision": 2,
+                               "transport": "generateContent Batch", "model": MODEL,
                                "output": str(output), "shards": [], "counts": {}}
     all_records: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
@@ -173,7 +177,8 @@ def collect(output: Path, credentials: Path) -> dict[str, Any]:
             if not raw_path.exists():
                 save(raw_path, payload)
             records = validate_response(payload, expected, job_name)
-            result_path = shard / "records.json"
+            # v1 receipts remain as evidence of its thought-part parser bug.
+            result_path = shard / "records-v2.json"
             if result_path.exists() and json.loads(result_path.read_text(encoding="utf-8")) != records:
                 raise ValueError("previously collected Batch records changed")
             if not result_path.exists():
@@ -187,10 +192,10 @@ def collect(output: Path, credentials: Path) -> dict[str, Any]:
             counts["pending_or_failed"] += len(expected)
         summary["shards"].append(info)
     summary["counts"] = dict(counts)
-    save(output / "collection-status.json", summary)
+    save(output / "collection-status-v2.json", summary)
     # This file contains only current, fully validated Batch records.  It is a
     # convenience index, not a replacement for immutable per-shard receipts.
-    save(output / "collected-records.json", all_records)
+    save(output / "collected-records-v2.json", all_records)
     return {"counts": summary["counts"], "shard_states": Counter(
         row["state"] for row in summary["shards"])}
 
