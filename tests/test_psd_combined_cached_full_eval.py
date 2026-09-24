@@ -154,6 +154,24 @@ def test_case_isolated_runtime_opt_in_overrides_default_and_private_env(monkeypa
         )
 
 
+def test_smoke_rejects_successful_trace_with_visual_gateway_400(tmp_path):
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    (traces / "case.json").write_text(json.dumps({"state": {"all_steps": [{
+        "action_type": "tool_call", "tool_name": "perceive_scene",
+        "tool_args": {}, "tool_result": "400 Bad Request",
+        "metadata": {"tool_execution_status": "failed"},
+    }]}}))
+    selected = {"case": ({
+        "fact_check_report": "A valid structured report.",
+        "total_tool_calls": 1,
+        "trace_path": "traces/case.json",
+    }, tmp_path)}
+    report = flow.agent.anomaly_report(selected, ["case"])
+    assert report["passed"] is False
+    assert "visual_tool_gateway_rejected" in report["records"][0]["issues"]
+
+
 def test_existing_merged_model_requires_source_receipt_before_reuse(monkeypatch, tmp_path):
     sft = tmp_path / "sft"
     adapter = tmp_path / "adapter"

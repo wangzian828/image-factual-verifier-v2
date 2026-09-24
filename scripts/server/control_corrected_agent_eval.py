@@ -603,11 +603,22 @@ def anomaly_report(
         trace = load(directory / str(row["trace_path"]))
         finishes: Counter[str] = Counter()
         signatures: Counter[tuple[str, str]] = Counter()
+        rejected_visual_tools: list[str] = []
         for step in ((trace.get("state") or {}).get("all_steps") or []):
             metadata = step.get("metadata") or {}
             if metadata.get("finish_reason"):
                 finishes[str(metadata["finish_reason"])] += 1
             if step.get("action_type") == "tool_call":
+                if (
+                    step.get("tool_name") in {
+                        "perceive_scene", "focused_visual_inspection",
+                        "crop_and_inspect", "count_objects",
+                        "analyze_visual_anomalies", "check_consistency",
+                        "compare_with_reference",
+                    }
+                    and "400 Bad Request" in str(step.get("tool_result") or "")
+                ):
+                    rejected_visual_tools.append(str(step.get("tool_name")))
                 signatures[
                     (
                         str(step.get("tool_name") or ""),
@@ -622,6 +633,8 @@ def anomaly_report(
             issues.append("length_or_abort_finish")
         if signatures and max(signatures.values()) >= 8:
             issues.append("repeated_identical_tool_loop")
+        if rejected_visual_tools:
+            issues.append("visual_tool_gateway_rejected")
         records.append({"case_id": case_id, "issues": issues})
     return {
         "schema_version": "ifv-engineering-smoke-audit-v1",

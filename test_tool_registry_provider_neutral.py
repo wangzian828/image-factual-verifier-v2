@@ -58,3 +58,24 @@ def test_qwen_teacher_visual_tools_share_provider_neutral_client(
     assert comparison.client is client
     assert anomaly.model_name == "served-teacher-model"
     assert comparison.model_name == "served-teacher-model"
+
+
+def test_visual_tool_registry_passes_separate_private_scope(monkeypatch) -> None:
+    client = FakeVisionClient()
+    captured = {}
+
+    def fake_build_vlm_client(**kwargs):
+        captured.update(kwargs)
+        return client
+
+    monkeypatch.setattr(
+        "src.orchestrator.tool_registry.build_vlm_client", fake_build_vlm_client
+    )
+    vision_salt = "ifv-case-v1-" + "V" * 43
+    browse_salt = "ifv-case-v1-" + "B" * 43
+    build_all_tools_with_health(
+        vlm_provider="qwen_local", vlm_model="served-teacher-model",
+        prefix_cache_salt=browse_salt, vision_prefix_cache_salt=vision_salt,
+    )
+    assert captured["cache_salt"] == vision_salt
+    assert vision_salt != browse_salt

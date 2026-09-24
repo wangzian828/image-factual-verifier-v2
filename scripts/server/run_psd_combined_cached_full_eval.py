@@ -36,9 +36,9 @@ TRAIN_OWNER = (
 )
 SFT_ROOT = ROOT / "exports/h20-sft-merged4872-3epoch-step3084-20260915/model"
 MERGED_ROOT = ROOT / "exports/qwen35-psd-combined-merged-20260924-v1/model"
-DEPLOY = ROOT / "training-artifacts/psd-combined-cached-full-eval-20260924-v2"
-LAUNCH = ROOT / "training-artifacts/psd-combined-cached-full-eval-launch-20260924-v2"
-EVAL_OUTPUT = ROOT / "evaluation/qwen35-psd-combined-agent-full1526-selfextract-20260924-v2"
+DEPLOY = ROOT / "training-artifacts/psd-combined-cached-full-eval-20260924-v3"
+LAUNCH = ROOT / "training-artifacts/psd-combined-cached-full-eval-launch-20260924-v3"
+EVAL_OUTPUT = ROOT / "evaluation/qwen35-psd-combined-agent-full1526-selfextract-20260924-v3"
 GATEWAY_CODE = ROOT / "training-artifacts/corrected-threeway-cache-guarded-20260921-v137/code"
 PROFILE_MODEL = "ifv-qwen3.5-9b-sft3084-psd-combined-selfextract"
 ABLATIONS = (
@@ -465,18 +465,28 @@ def execute() -> None:
         agent.atomic_json(DEPLOY / "state.json", state)
         raise
     finally:
-        if new_gateway is not None:
+        completed = agent.load(DEPLOY / "state.json").get("phase") == "inference_complete_restoring_sft3"
+        retain_new = False
+        if completed and new_gateway is not None and len(candidates) == 4:
+            try:
+                attest_new_gateway_health(cache_gate.wait_canary_gateway())
+                for candidate in candidates:
+                    owner.checked(candidate)
+                retain_new = True
+            except BaseException as error:
+                restore_errors.append({"stage": "verify_new_model_handoff", "error": type(error).__name__})
+        if new_gateway is not None and not retain_new:
             try:
                 cache_gate.stop_gateway(int(new_gateway["pid"]))
             except BaseException as error:
                 restore_errors.append({"stage": "stop_new_gateway", "error": type(error).__name__})
-        if candidates:
+        if candidates and not retain_new:
             try:
                 with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
                     list(pool.map(owner.stop, candidates))
             except BaseException as error:
                 restore_errors.append({"stage": "stop_new_replicas", "error": type(error).__name__})
-        if originals_stop_attempted:
+        if originals_stop_attempted and not retain_new:
             for index, (original, environment) in enumerate(zip(originals, environments)):
                 try:
                     try:
@@ -488,7 +498,7 @@ def execute() -> None:
                     owner.save(agent.SERVICE / f"replica-{index}.json", restored)
                 except BaseException as error:
                     restore_errors.append({"stage": f"restore_sft_{index}", "error": type(error).__name__})
-        if original_gateway_stop_attempted:
+        if original_gateway_stop_attempted and not retain_new:
             try:
                 if live_process(gateway_pid, "scripts.server.psd_qwen_gateway:app"):
                     owner.save(agent.SERVICE / "gateway.json", original_gateway_receipt)
@@ -500,25 +510,29 @@ def execute() -> None:
                     owner.save(agent.SERVICE / "gateway.json", restarted)
             except BaseException as error:
                 restore_errors.append({"stage": "restore_gateway", "error": type(error).__name__})
-        if originals_stop_attempted and not restore_errors:
+        if originals_stop_attempted and not retain_new and not restore_errors:
             try:
                 agent.wait_for_services(SFT_ROOT)
             except BaseException as error:
                 restore_errors.append({"stage": "verify_sft_service", "error": type(error).__name__})
-        if guard_paused:
+        if guard_paused and not retain_new:
             try:
                 os.kill(int(guard["pid"]), signal.SIGCONT)
             except BaseException as error:
                 restore_errors.append({"stage": "resume_guard", "error": type(error).__name__})
         state_path = DEPLOY / "state.json"
         state = agent.load(state_path) if state_path.is_file() else {}
-        state["sft_service_restored"] = originals_stop_attempted and not restore_errors
-        state["guard_resumed"] = guard_paused and not any(
+        state["sft_service_restored"] = originals_stop_attempted and not retain_new and not restore_errors
+        state["new_service_retained"] = retain_new
+        state["guard_paused_for_new_model"] = retain_new and guard_paused
+        state["guard_resumed"] = guard_paused and not retain_new and not any(
             row["stage"] == "resume_guard" for row in restore_errors
         )
         state["restore_errors"] = restore_errors
         if restore_errors:
             state["phase"] = "failed_requires_service_repair"
+        elif retain_new:
+            state["phase"] = "inference_complete_new_model_retained"
         elif state.get("phase") == "inference_complete_restoring_sft3":
             state["phase"] = "inference_complete_sft3_restored"
         agent.atomic_json(state_path, state)

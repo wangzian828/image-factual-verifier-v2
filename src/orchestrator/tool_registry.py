@@ -26,6 +26,7 @@ def build_all_tools_with_health(
     vlm_wire_api: Optional[str] = None,
     vlm_base_url: Optional[str] = None,
     prefix_cache_salt: Optional[str] = None,
+    vision_prefix_cache_salt: Optional[str] = None,
 ) -> Tuple[Dict[str, BaseTool], Dict[str, ToolHealth]]:
     tools: Dict[str, BaseTool] = {}
     health: Dict[str, ToolHealth] = {}
@@ -51,6 +52,7 @@ def build_all_tools_with_health(
             base_url=vlm_base_url,
             timeout=request_timeout,
             max_retries=request_max_retries,
+            cache_salt=vision_prefix_cache_salt,
         )
         _validate_structured_vision_client(
             client,

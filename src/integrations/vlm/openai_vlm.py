@@ -21,6 +21,7 @@ from src.integrations.llm.openai_compatible import (
     resolve_model_base_url,
     resolve_model_wire_api,
 )
+from src.integrations.llm.prefix_cache import validate_case_cache_salt
 from src.integrations.vlm.qwen_vl import parse_json_object
 from src.tools.vision_utils import vision_tool_image_to_data_url
 
@@ -40,9 +41,14 @@ class OpenAIVisionClient:
     model_name: str = "gpt-4o-mini"
     timeout: float = 60.0
     max_retries: int = 2
+    cache_salt: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.provider = self.provider.lower().strip()
+        if self.cache_salt is not None:
+            if self.provider not in {"qwen_local", "lmdeploy"}:
+                raise ValueError("vision cache_salt is only supported for local serving")
+            self.cache_salt = validate_case_cache_salt(self.cache_salt)
         if self.provider == "gemini" and self.api_key is not None:
             raise ValueError(
                 "Gemini credentials must come from GEMINI_API_KEY or GOOGLE_API_KEY."
@@ -169,6 +175,7 @@ class OpenAIVisionClient:
             wire_api=self.wire_api or "chat_completions",
             timeout=self.timeout,
             max_retries=self.max_retries,
+            cache_salt=self.cache_salt,
         )
         try:
             messages = [

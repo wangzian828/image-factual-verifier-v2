@@ -27,7 +27,7 @@ from src.orchestrator.investigation_models import (
     RawHistoryJudgmentOutput,
 )
 from src.orchestrator.llm_backend import APIBackend
-from src.integrations.llm.prefix_cache import new_rollout_cache_salts
+from src.integrations.llm.prefix_cache import new_case_cache_salt, new_rollout_cache_salts
 from src.orchestrator.stage_runner import (
     InteractionSession,
     StageRunner,
@@ -198,6 +198,11 @@ class Orchestrator:
         # crossing a case boundary. Agent and page-extractor prompt families
         # deliberately use different private domains.
         rollout_cache_salt, browse_cache_salt = new_rollout_cache_salts()
+        vision_cache_salt = new_case_cache_salt()
+        while vision_cache_salt is not None and vision_cache_salt in {
+            rollout_cache_salt, browse_cache_salt
+        }:
+            vision_cache_salt = new_case_cache_salt()
         self.prefix_cache_salt = (
             rollout_cache_salt
             if self.provider in {"qwen_local", "lmdeploy"}
@@ -245,6 +250,11 @@ class Orchestrator:
             vlm_wire_api=self.vlm_wire_api,
             vlm_base_url=self.vlm_base_url,
             prefix_cache_salt=self.browse_extract_prefix_cache_salt,
+            vision_prefix_cache_salt=(
+                vision_cache_salt
+                if self.vlm_provider in {"qwen_local", "lmdeploy"}
+                else None
+            ),
         )
         self.all_tools = {
             name: tool

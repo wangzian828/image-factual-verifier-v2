@@ -16,8 +16,11 @@ def build_vlm_client(
     base_url: Optional[str] = None,
     timeout: float = 60.0,
     max_retries: int = 2,
+    cache_salt: Optional[str] = None,
 ) -> Any:
     provider = provider.lower().strip()
+    if cache_salt is not None and provider not in {"qwen_local", "lmdeploy"}:
+        raise ValueError("vision cache_salt is only supported for local serving")
     if provider == "gemini":
         if api_key is not None:
             raise ValueError(
@@ -62,6 +65,7 @@ def build_vlm_client(
             model_name=resolved_model_name,
             timeout=timeout,
             max_retries=max_retries,
+            cache_salt=cache_salt,
         )
     if provider == "qwen_local":
         return OpenAIVisionClient(
@@ -74,6 +78,7 @@ def build_vlm_client(
             or os.getenv("QWEN_LOCAL_MODEL", "ifv-qwen3-vl-8b-thinking"),
             timeout=timeout,
             max_retries=max_retries,
+            cache_salt=cache_salt,
         )
     if provider in {"openai", "necodex"}:
         return OpenAIVisionClient(
