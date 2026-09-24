@@ -146,6 +146,19 @@ def attest_new_cache(verdict: dict[str, Any]) -> None:
         raise RuntimeError("new model stress gate detected corruption or missing traffic")
 
 
+def attest_new_gateway_health(health: dict[str, Any]) -> None:
+    if (
+        health.get("prefix_cache_policy") != "case_isolated"
+        or health.get("public_model_alias") != PROFILE_MODEL
+        or health.get("reject_corrupted_responses") is not True
+        or health.get("prefix_cache_block_size") != 528
+        or health.get("prefix_cache_unsafe_window") != 16
+        or health.get("cache_corruption_quarantines") != 0
+        or health.get("cache_corruption_metric_failures") != 0
+    ):
+        raise RuntimeError("new model gateway cache safety or identity is not healthy")
+
+
 def merge_model(adapter: Path, deploy: Path) -> None:
     script = CODE / "training/scripts/h20/merge_lora_for_serving.py"
     command = [
@@ -267,9 +280,10 @@ def execute() -> None:
             log_path=DEPLOY / "new-gateway.log",
         )
         owner.save(DEPLOY / "new-gateway.json", new_gateway)
-        cache_gate.wait_canary_gateway()
+        attest_new_gateway_health(cache_gate.wait_canary_gateway())
         agent.wait_for_services(MERGED_ROOT)
         verdict = probe_new_service(DEPLOY, gw_env)
+        attest_new_gateway_health(cache_gate.wait_canary_gateway())
         for index, started in enumerate(candidates):
             owner.checked(started)
             owner.save(agent.SERVICE / f"replica-{index}.json", started)

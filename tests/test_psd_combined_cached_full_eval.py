@@ -76,3 +76,25 @@ def test_new_weight_cannot_borrow_an_old_cache_verdict():
         flow.attest_new_cache({**valid, "stress": {"corrupted_delta": 1}})
     with pytest.raises(RuntimeError, match="geometry"):
         flow.attest_new_cache({**valid, "block_size": 512})
+
+
+def test_new_gateway_requires_corruption_rejection_and_new_identity():
+    valid = {
+        "prefix_cache_policy": "case_isolated",
+        "public_model_alias": flow.PROFILE_MODEL,
+        "reject_corrupted_responses": True,
+        "prefix_cache_block_size": 528,
+        "prefix_cache_unsafe_window": 16,
+        "cache_corruption_quarantines": 0,
+        "cache_corruption_metric_failures": 0,
+    }
+    flow.attest_new_gateway_health(valid)
+    for key, value in (
+        ("public_model_alias", "old"),
+        ("reject_corrupted_responses", False),
+        ("cache_corruption_metric_failures", 1),
+        ("cache_corruption_metric_failures", None),
+        ("cache_corruption_quarantines", 1),
+    ):
+        with pytest.raises(RuntimeError, match="gateway cache safety"):
+            flow.attest_new_gateway_health({**valid, key: value})
