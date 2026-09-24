@@ -146,6 +146,11 @@ def pause_new_ablation_judges(owner_pid: int, full_output: Path, gate_dir: Path)
         marker = "stream_agent_judges.py\x00--rollout-root\x00" + str(output)
         if parent != owner_pid or marker not in command or receipt.get("output") != str(output / "judge-gemini37-stream-v1"):
             raise RuntimeError("new ablation judge identity mismatch")
+        # A newly spawned judge can briefly be in uninterruptible kernel I/O.
+        # Keep the Agent parent gated and retry this exact PID on the next poll;
+        # D-state cannot issue new provider requests while it is blocked.
+        if state == "D":
+            continue
         if state not in {"S", "R", "T", "t"}:
             raise RuntimeError("new ablation judge is in an unexpected state")
         checked_path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,7 +190,6 @@ def coordinate(owner_pid: int, startticks: int, full_output: Path, state_path: P
         if owner_state in {"exited", "Z"}:
             atomic_json(state_path, {"phase": "owner_exited", "owner_pid": owner_pid})
             return
-        pause_new_ablation_judges(owner_pid, full_output, state_path.parent)
         child = direct_agent_child(owner_pid)
         if child is not None and (child[0], child[1]) not in seen:
             if owner_state not in {"T", "t"}:
@@ -199,6 +203,7 @@ def coordinate(owner_pid: int, startticks: int, full_output: Path, state_path: P
                 "child_pid": child[0], "child_startticks": child[1],
                 "output": str(child[2]),
             })
+        pause_new_ablation_judges(owner_pid, full_output, state_path.parent)
         if pending is not None:
             child_state = process(pending[0])
             if child_state is None or child_state[0] == "Z":

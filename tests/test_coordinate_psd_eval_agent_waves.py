@@ -104,3 +104,30 @@ def test_new_ablation_judge_wrong_parent_fails_closed(tmp_path: Path, monkeypatc
     monkeypatch.setattr(gate, "process", lambda pid: ("S", 999, 777, marker))
     with pytest.raises(RuntimeError, match="identity mismatch"):
         gate.pause_new_ablation_judges(100, full, tmp_path / "gate")
+
+
+def test_new_ablation_judge_transient_d_state_is_rechecked(tmp_path: Path, monkeypatch) -> None:
+    full = tmp_path / "full"
+    output = tmp_path / "full-no-web-search"
+    deploy = tmp_path / "deploy"
+    receipt = deploy / "no-web-search" / f"judge-{gate.PROFILE_MODEL}.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(json.dumps({"pid": 123, "output": str(output / "judge-gemini37-stream-v1")}))
+    monkeypatch.setattr(gate, "DEPLOY_ROOT", deploy)
+    marker = "stream_agent_judges.py\x00--rollout-root\x00" + str(output)
+    current = ["D"]
+    monkeypatch.setattr(gate, "process", lambda pid: (current[0], 100, 999, marker))
+    signals = []
+
+    def kill(pid, sig):
+        signals.append((pid, sig))
+        current[0] = "T"
+
+    monkeypatch.setattr(gate.os, "kill", kill)
+    gate.pause_new_ablation_judges(100, full, tmp_path / "gate")
+    assert not signals
+    assert not (tmp_path / "gate/judge-pauses/no-web-search.json").exists()
+    current[0] = "S"
+    gate.pause_new_ablation_judges(100, full, tmp_path / "gate")
+    assert signals == [(123, gate.STOP_SIGNAL)]
+    assert json.loads((tmp_path / "gate/judge-pauses/no-web-search.json").read_text())["phase"] == "judge_paused"
