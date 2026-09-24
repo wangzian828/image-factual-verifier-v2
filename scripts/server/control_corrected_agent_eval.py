@@ -465,6 +465,7 @@ def runtime_environment(
         AGENT_LLM_REQUEST_MAX_RETRIES="0",
         BROWSE_EXTRACT_MAX_RETRIES="0",
         TOOL_CACHE_ENABLED="0",
+        PERCEPTION_CACHE_ENABLED="0",
         IFV_STREAM_RUN_RESULTS="1",
         OMP_NUM_THREADS="1",
         PYTHONPATH=str(source_code) + ":" + str(source_code / "training"),
@@ -604,11 +605,17 @@ def anomaly_report(
         finishes: Counter[str] = Counter()
         signatures: Counter[tuple[str, str]] = Counter()
         rejected_visual_tools: list[str] = []
+        cached_perception_tools: list[str] = []
         for step in ((trace.get("state") or {}).get("all_steps") or []):
             metadata = step.get("metadata") or {}
             if metadata.get("finish_reason"):
                 finishes[str(metadata["finish_reason"])] += 1
             if step.get("action_type") == "tool_call":
+                if (
+                    step.get("tool_name") in {"perceive_scene", "ocr_with_position"}
+                    and metadata.get("cache_hit") is True
+                ):
+                    cached_perception_tools.append(str(step.get("tool_name")))
                 if (
                     step.get("tool_name") in {
                         "perceive_scene", "focused_visual_inspection",
@@ -635,6 +642,8 @@ def anomaly_report(
             issues.append("repeated_identical_tool_loop")
         if rejected_visual_tools:
             issues.append("visual_tool_gateway_rejected")
+        if cached_perception_tools:
+            issues.append("cached_perception_in_fresh_smoke")
         records.append({"case_id": case_id, "issues": issues})
     return {
         "schema_version": "ifv-engineering-smoke-audit-v1",

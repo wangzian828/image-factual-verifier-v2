@@ -143,11 +143,15 @@ def test_case_isolated_runtime_opt_in_overrides_default_and_private_env(monkeypa
     ):
         monkeypatch.setenv(key, "test-key")
     monkeypatch.setenv("IFV_PREFIX_CACHE_MODE", "request_isolated")
+    monkeypatch.setenv("PERCEPTION_CACHE_ENABLED", "1")
+    monkeypatch.setenv("TOOL_CACHE_ENABLED", "1")
     environment = flow.agent.runtime_environment(
         tmp_path, flow.PROFILE_MODEL, prefix_cache_mode="case_isolated",
     )
     assert environment["IFV_PREFIX_CACHE_MODE"] == "case_isolated"
     assert environment["QWEN35_LOCAL_MODEL"] == flow.PROFILE_MODEL
+    assert environment["PERCEPTION_CACHE_ENABLED"] == "0"
+    assert environment["TOOL_CACHE_ENABLED"] == "0"
     with pytest.raises(ValueError, match="only opts into case-isolated"):
         flow.agent.runtime_environment(
             tmp_path, flow.PROFILE_MODEL, prefix_cache_mode="request_isolated",
@@ -170,6 +174,24 @@ def test_smoke_rejects_successful_trace_with_visual_gateway_400(tmp_path):
     report = flow.agent.anomaly_report(selected, ["case"])
     assert report["passed"] is False
     assert "visual_tool_gateway_rejected" in report["records"][0]["issues"]
+
+
+def test_smoke_rejects_cached_perception_even_when_tool_succeeded(tmp_path):
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    (traces / "case.json").write_text(json.dumps({"state": {"all_steps": [{
+        "action_type": "tool_call", "tool_name": "perceive_scene",
+        "tool_args": {}, "tool_result": '{"status":"success"}',
+        "metadata": {"cache_hit": True, "tool_success": True},
+    }]}}))
+    selected = {"case": ({
+        "fact_check_report": "A valid structured report.",
+        "total_tool_calls": 1,
+        "trace_path": "traces/case.json",
+    }, tmp_path)}
+    report = flow.agent.anomaly_report(selected, ["case"])
+    assert report["passed"] is False
+    assert "cached_perception_in_fresh_smoke" in report["records"][0]["issues"]
 
 
 def test_existing_merged_model_requires_source_receipt_before_reuse(monkeypatch, tmp_path):

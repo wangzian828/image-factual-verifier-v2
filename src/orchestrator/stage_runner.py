@@ -3656,7 +3656,15 @@ class StageRunner:
 
     def _build_cache_args(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
         args = dict(tool_args)
-        if tool_name in {"compare_with_reference", "analyze_visual_anomalies"} and self.image_path:
+        # RuntimeToolAdapter hides image_input from its public parameters and
+        # injects it only when the delegate runs.  The cache key must still
+        # include that private image identity before a lookup or singleflight.
+        if tool_name in {
+            "perceive_scene", "ocr_with_position", "reverse_image_search",
+            "focused_visual_inspection", "crop_and_inspect", "count_objects",
+            "check_consistency", "compare_with_reference",
+            "analyze_visual_anomalies",
+        } and self.image_path:
             args["__image_input__"] = self.image_path
         if tool_name in {"visit", "crop_and_search"}:
             args["__web_evidence_contract__"] = WEB_EVIDENCE_CONTRACT_VERSION
