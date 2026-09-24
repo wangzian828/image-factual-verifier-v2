@@ -1,9 +1,11 @@
 import json
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
 from scripts.server.retry_stream_agent_judge_failures import (
+    TailRepair,
     retryable_failure,
     retryable_rejection_directories,
     unresolved_failed_directories,
@@ -74,3 +76,27 @@ def test_retryable_subset_excludes_ambiguous_timeout(tmp_path: Path) -> None:
     assert retryable_rejection_directories([rejected, rate_limited, timeout]) == [
         rejected, rate_limited
     ]
+
+
+def test_tail_repair_does_not_mark_ambiguous_cases_complete(tmp_path: Path) -> None:
+    class Judge:
+        output = tmp_path
+        expected = ["case-1", "case-2"]
+        success_rows = {case: ({}, tmp_path) for case in ("case-1", "case-2")}
+
+        @staticmethod
+        def case_dir(case_id: str) -> Path:
+            return tmp_path / "cases" / case_id
+
+    write(tmp_path / "cases/case-1/result.json", {"case_id": "case-1", "status": "completed"})
+    write(tmp_path / "cases/case-2/ambiguous.json", {"case_id": "case-2"})
+    repair = TailRepair.__new__(TailRepair)
+    repair.judge = Judge()
+    repair.args = Namespace(formal_denominator=3)
+    repair.failures = []
+    repair.all_failures = []
+    repair.finalize({})
+    state = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert state["phase"] == "judge_tail_retry_incomplete"
+    assert state["judge_completed"] == 1
+    assert state["judge_ambiguous"] == 1

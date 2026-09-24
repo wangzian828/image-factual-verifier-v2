@@ -226,13 +226,23 @@ class TailRepair:
             for record in records:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         unresolved = unresolved_failed_directories(self.judge)
+        ambiguous = [
+            path
+            for path in (self.judge.output / "cases").glob("*/ambiguous.json")
+            if not (path.parent / "result.json").exists()
+        ]
+        complete = (
+            not unresolved
+            and not ambiguous
+            and len(records) == len(self.judge.expected) == len(self.judge.success_rows)
+        )
         state = {
             "schema_version": "ifv-streaming-agent-judge-state-v1",
-            "phase": "judge_complete" if not unresolved else "judge_tail_retry_incomplete",
+            "phase": "judge_complete" if complete else "judge_tail_retry_incomplete",
             "agent_successes_seen": len(self.judge.success_rows),
             "judge_completed": len(records),
             "judge_failed": len(unresolved),
-            "judge_ambiguous": sum(value == "ambiguous" for value in outcomes.values()),
+            "judge_ambiguous": len(ambiguous),
             "active": 0,
             "expected_runnable": len(self.judge.expected),
             "formal_denominator": self.args.formal_denominator,
