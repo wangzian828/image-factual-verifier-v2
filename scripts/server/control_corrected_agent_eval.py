@@ -780,6 +780,7 @@ def evaluate_model(
     model_root: Path,
     output: Path,
     prefix_cache_mode: str | None = None,
+    launch_stream_judge: bool = True,
 ) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=False)
     benchmark_rows = rows(BENCHMARK)
@@ -804,7 +805,10 @@ def evaluate_model(
         "page_extract_thinking_enabled": True,
         "page_extract_thinking_token_budget": 2048,
         "judge_model": "gemini-3.7-flash",
-        "judge_submission": "per_case_immediately_after_durable_agent_result",
+        "judge_submission": (
+            "per_case_immediately_after_durable_agent_result"
+            if launch_stream_judge else "deferred_for_provider_recovery"
+        ),
         "output_tokens": 32768,
         "thinking_budget": 8192,
         "large_payload_hashing": False,
@@ -817,13 +821,14 @@ def evaluate_model(
     environment = runtime_environment(
         source_code, profile_model, prefix_cache_mode=prefix_cache_mode,
     )
-    launch_judge(
-        deploy=deploy,
-        source_code=source_code,
-        output=output,
-        source_model=profile_model,
-        environment=environment,
-    )
+    if launch_stream_judge:
+        launch_judge(
+            deploy=deploy,
+            source_code=source_code,
+            output=output,
+            source_model=profile_model,
+            environment=environment,
+        )
 
     for attempt in range(2):
         selected = successful(output)
@@ -891,7 +896,7 @@ def evaluate_model(
         "formal_denominator": FORMAL_DENOMINATOR,
         "failures_retained_in_denominator": True,
         "remaining": missing,
-        "judge_streaming_concurrently": True,
+        "judge_streaming_concurrently": launch_stream_judge,
         "large_payload_hashing": False,
     }
     atomic_json(output / "inference-summary.json", result)

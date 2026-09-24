@@ -206,7 +206,7 @@ def attest_ablation_smoke(
 
 def evaluate_ablation(
     *, deploy: Path, output: Path, name: str, flag: str,
-    config: ReactToolFamilyConfig,
+    config: ReactToolFamilyConfig, launch_stream_judge: bool = True,
 ) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=False)
     deploy.mkdir(parents=True, exist_ok=False)
@@ -226,7 +226,10 @@ def evaluate_ablation(
         "runnable_cases": agent.EXPECTED_RUNNABLE,
         "formal_denominator": agent.FORMAL_DENOMINATOR,
         "judge_model": "gemini-3.7-flash",
-        "judge_submission": "per_case_immediately_after_durable_agent_result",
+        "judge_submission": (
+            "per_case_immediately_after_durable_agent_result"
+            if launch_stream_judge else "deferred_for_provider_recovery"
+        ),
         "large_payload_hashing": False,
     })
     (output / "protocol-smoke-cases.txt").write_text(
@@ -235,10 +238,11 @@ def evaluate_ablation(
     environment = agent.runtime_environment(
         CODE, PROFILE_MODEL, prefix_cache_mode="case_isolated",
     )
-    agent.launch_judge(
-        deploy=deploy, source_code=CODE, output=output,
-        source_model=PROFILE_MODEL, environment=environment,
-    )
+    if launch_stream_judge:
+        agent.launch_judge(
+            deploy=deploy, source_code=CODE, output=output,
+            source_model=PROFILE_MODEL, environment=environment,
+        )
     for attempt in range(2):
         selected = agent.successful(output)
         pending = [case for case in agent.SMOKE_CASES if case not in selected]
@@ -283,7 +287,7 @@ def evaluate_ablation(
         "expected_runnable": agent.EXPECTED_RUNNABLE,
         "formal_denominator": agent.FORMAL_DENOMINATOR,
         "failures_retained_in_denominator": True,
-        "remaining": missing, "judge_streaming_concurrently": True,
+        "remaining": missing, "judge_streaming_concurrently": launch_stream_judge,
         "large_payload_hashing": False,
     }
     agent.atomic_json(output / "inference-summary.json", summary)
