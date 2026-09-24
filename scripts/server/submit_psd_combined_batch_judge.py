@@ -70,7 +70,8 @@ def selected_successes(rollout: Path, frozen_ids: list[str]) -> list[tuple[str, 
 
 
 def prepare_one(case_id: str, trace_path: Path, source: dict[str, Any],
-                gold: dict[str, Any], manifest_root: Path) -> dict[str, Any]:
+                gold: dict[str, Any], manifest_root: Path,
+                allowed_image_root: Path) -> dict[str, Any]:
     trace, report_status = _overlay_report_sidecar(_read_json(trace_path), None)
     private_gold = _private_gold(gold)
     if not private_gold["auditable"]:
@@ -80,7 +81,9 @@ def prepare_one(case_id: str, trace_path: Path, source: dict[str, Any],
     if answer.get("verdict") != source.get("verdict"):
         raise ValueError(f"Agent verdict changed in candidate projection: {case_id}")
     image = _resolve_image_path({"image_path": trace.get("image_path")}, manifest_root).resolve()
-    image.relative_to(manifest_root.resolve())
+    if not any(image == root.resolve() or root.resolve() in image.parents
+               for root in (manifest_root, allowed_image_root)):
+        raise ValueError(f"judge image is outside frozen roots: {case_id}")
     mime = mimetypes.guess_type(image.name)[0] or "image/jpeg"
     if mime not in {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"}:
         raise ValueError(f"unsupported judge image MIME type: {mime}")
@@ -142,7 +145,8 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("no successful Agent traces ready for Batch")
     os.umask(0o077)
     output.mkdir(parents=True)
-    prepared = [prepare_one(case_id, trace, row, gold[case_id], manifest.parent)
+    prepared = [prepare_one(case_id, trace, row, gold[case_id], manifest.parent,
+                            benchmark.parent)
                 for case_id, trace, row in selected]
     # Each inline Batch creation has a 20 MB limit.  Leave generous overhead.
     shards: list[list[int]] = []

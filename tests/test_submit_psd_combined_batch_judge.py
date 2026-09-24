@@ -39,7 +39,8 @@ def test_prepare_one_preserves_judge_prompt_and_verdict(tmp_path: Path, monkeypa
     monkeypatch.setattr(batch, "build_agent_private_gold_candidate", lambda raw: {"frozen": raw["image_path"]})
     monkeypatch.setattr(batch, "agent_candidate_answer", lambda _: {"verdict": "real"})
     monkeypatch.setattr(batch, "_private_gold", lambda _: {"auditable": True, "expected_verdict": "real"})
-    row = batch.prepare_one("case-1", trace, {"verdict": "real"}, {}, manifest.parent)
+    row = batch.prepare_one("case-1", trace, {"verdict": "real"}, {}, manifest.parent,
+                            manifest.parent)
     expected = batch.PRIVATE_GOLD_JUDGE_PROMPT + "\n\nAUDIT INPUT:\n" + json.dumps({
         "private_gold": {"auditable": True, "expected_verdict": "real"},
         "candidate_material": {"mode": "agent_trace", "candidate_answer": {"verdict": "real"},
@@ -49,4 +50,5 @@ def test_prepare_one_preserves_judge_prompt_and_verdict(tmp_path: Path, monkeypa
     assert row["trace"] == batch.stat_identity(trace)
     assert row["image"] == batch.stat_identity(image)
     with pytest.raises(ValueError, match="verdict changed"):
-        batch.prepare_one("case-1", trace, {"verdict": "fake"}, {}, manifest.parent)
+        batch.prepare_one("case-1", trace, {"verdict": "fake"}, {}, manifest.parent,
+                          manifest.parent)
