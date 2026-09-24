@@ -52,3 +52,16 @@ def test_prepare_one_preserves_judge_prompt_and_verdict(tmp_path: Path, monkeypa
     with pytest.raises(ValueError, match="verdict changed"):
         batch.prepare_one("case-1", trace, {"verdict": "fake"}, {}, manifest.parent,
                           manifest.parent)
+
+
+def test_uncommon_image_extension_matches_live_judge_mime(tmp_path: Path, monkeypatch) -> None:
+    image = tmp_path / "original.bin"
+    image.write_bytes(b"image")
+    trace = tmp_path / "trace.json"
+    trace.write_text(json.dumps({"image_path": image.name}), encoding="utf-8")
+    monkeypatch.setattr(batch, "build_agent_private_gold_candidate", lambda _: {})
+    monkeypatch.setattr(batch, "agent_candidate_answer", lambda _: {"verdict": "fake"})
+    monkeypatch.setattr(batch, "_private_gold", lambda _: {"auditable": True, "expected_verdict": "fake"})
+    row = batch.prepare_one("case-bin", trace, {"verdict": "fake"}, {}, tmp_path,
+                            tmp_path)
+    assert row["image_mime"] == "application/octet-stream"

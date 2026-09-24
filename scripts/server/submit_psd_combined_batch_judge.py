@@ -85,8 +85,9 @@ def prepare_one(case_id: str, trace_path: Path, source: dict[str, Any],
                for root in (manifest_root, allowed_image_root)):
         raise ValueError(f"judge image is outside frozen roots: {case_id}")
     mime = mimetypes.guess_type(image.name)[0] or "image/jpeg"
-    if mime not in {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"}:
-        raise ValueError(f"unsupported judge image MIME type: {mime}")
+    # Match the live Interactions judge exactly, including uncommon extensions.
+    # Any provider rejection is a per-case receipt, not a reason to relabel
+    # source media while claiming the two judge transports used the same input.
     prompt = PRIVATE_GOLD_JUDGE_PROMPT + "\n\nAUDIT INPUT:\n" + json.dumps({
         "private_gold": private_gold,
         "candidate_material": {
@@ -144,7 +145,6 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
     if not selected:
         raise ValueError("no successful Agent traces ready for Batch")
     os.umask(0o077)
-    output.mkdir(parents=True)
     prepared = [prepare_one(case_id, trace, row, gold[case_id], manifest.parent,
                             benchmark.parent)
                 for case_id, trace, row in selected]
@@ -170,6 +170,7 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
                "response_schema_sha256": hashlib.sha256(json.dumps(PRIVATE_GOLD_JUDGE_RESPONSE_SCHEMA, sort_keys=True).encode()).hexdigest(),
                "binding": binding, "case_count": len(prepared), "shards": shards,
                "prepared": prepared}
+    output.mkdir(parents=True)
     save(output / "plan.json", payload)
     return {"case_count": len(prepared), "shard_count": len(shards), "output": str(output)}
 
