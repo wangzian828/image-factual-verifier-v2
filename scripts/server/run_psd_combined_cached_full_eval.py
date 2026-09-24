@@ -17,13 +17,17 @@ import sys
 import time
 from typing import Any
 
+# The trusted process owner starts children from its own deployment directory.
+# Keep this entry point importable even when the caller did not set PYTHONPATH.
+CODE = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(CODE))
+
 from scripts.server import control_corrected_agent_eval as agent
 from scripts.server import run_prefix_cache_hybrid_gate as cache_gate
 from scripts.server.run_prefix_cache_canary import cache_on_command, probe_image
 
 
 ROOT = Path("/volume/ybo/wza")
-CODE = Path(__file__).resolve().parents[2]
 TRAIN = ROOT / "training-artifacts/psd-combined-formal-training-20260923-v1"
 TRAIN_OWNER = (
     ROOT / "runs/psd-combined-smallbank-old1000-sft3-20260923-v1"
