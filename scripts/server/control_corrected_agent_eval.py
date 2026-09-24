@@ -685,6 +685,7 @@ def run_attempt(
     concurrency: int,
     base_seed: int,
     environment: dict[str, str],
+    tool_ablation_flags: tuple[str, ...] = (),
 ) -> None:
     directory = output / name
     if directory.exists():
@@ -710,6 +711,7 @@ def run_attempt(
         "--timeout",
         "3000",
         "--skip-preflight-image-hash-verification",
+        *tool_ablation_flags,
     ]
     atomic_json(
         deploy / "state.json",

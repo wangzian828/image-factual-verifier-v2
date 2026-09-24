@@ -1,4 +1,6 @@
 from pathlib import Path
+import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,3 +100,37 @@ def test_new_gateway_requires_corruption_rejection_and_new_identity():
     ):
         with pytest.raises(RuntimeError, match="gateway cache safety"):
             flow.attest_new_gateway_health({**valid, key: value})
+
+
+def test_all_three_ablation_variants_are_distinct_and_manifest_bound(tmp_path):
+    names = [name for name, _, _ in flow.ABLATIONS]
+    assert names == ["no-web-search", "no-image-retrieval", "no-evidence-inspection"]
+    assert len({flow.ablation_output(name) for name in names}) == 3
+    for name, flag, config in flow.ABLATIONS:
+        assert flag == "--disable-" + name.removeprefix("no-")
+        manifest = tmp_path / (name + ".json")
+        manifest.write_text(json.dumps({"agent": {"tool_families": config.to_manifest()}}))
+        flow.attest_ablation_run_manifest(manifest, config)
+        wrong = tmp_path / (name + "-wrong.json")
+        wrong.write_text(json.dumps({"agent": {"tool_families": {}}}))
+        with pytest.raises(RuntimeError, match="manifest mismatch"):
+            flow.attest_ablation_run_manifest(wrong, config)
+
+
+def test_ablation_flags_reach_frozen_case_runner(monkeypatch, tmp_path):
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(flow.agent.subprocess, "run", fake_run)
+    monkeypatch.setattr(flow.agent, "BENCHMARK", tmp_path / "frozen.jsonl")
+    flow.agent.run_attempt(
+        deploy=tmp_path / "deploy", source_code=tmp_path / "code",
+        output=tmp_path, name="smoke-0", cases=["case-1"], concurrency=1,
+        base_seed=3903, environment={"QWEN35_LOCAL_MODEL": flow.PROFILE_MODEL},
+        tool_ablation_flags=("--disable-web-search",),
+    )
+    assert "--disable-web-search" in commands[0]
+    assert commands[0][commands[0].index("--case-list") + 1].endswith("smoke-0-cases.txt")

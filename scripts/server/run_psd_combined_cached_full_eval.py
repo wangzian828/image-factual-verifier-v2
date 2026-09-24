@@ -25,6 +25,7 @@ sys.path.insert(0, str(CODE))
 from scripts.server import control_corrected_agent_eval as agent
 from scripts.server import run_prefix_cache_hybrid_gate as cache_gate
 from scripts.server.run_prefix_cache_canary import cache_on_command, probe_image
+from src.orchestrator.tool_ablation import ReactToolFamilyConfig
 
 
 ROOT = Path("/volume/ybo/wza")
@@ -40,6 +41,15 @@ LAUNCH = ROOT / "training-artifacts/psd-combined-cached-full-eval-launch-2026092
 EVAL_OUTPUT = ROOT / "evaluation/qwen35-psd-combined-agent-full1526-selfextract-20260924-v1"
 GATEWAY_CODE = ROOT / "training-artifacts/corrected-threeway-cache-guarded-20260921-v137/code"
 PROFILE_MODEL = "ifv-qwen3.5-9b-sft3084-psd-combined-selfextract"
+ABLATIONS = (
+    ("no-web-search", "--disable-web-search", ReactToolFamilyConfig(enable_web_search=False)),
+    ("no-image-retrieval", "--disable-image-retrieval", ReactToolFamilyConfig(enable_image_retrieval=False)),
+    ("no-evidence-inspection", "--disable-evidence-inspection", ReactToolFamilyConfig(enable_evidence_inspection=False)),
+)
+
+
+def ablation_output(name: str) -> Path:
+    return EVAL_OUTPUT.with_name(EVAL_OUTPUT.name + "-" + name)
 
 
 def live_process(pid: int, marker: str) -> bool:
@@ -159,6 +169,124 @@ def attest_new_gateway_health(health: dict[str, Any]) -> None:
         raise RuntimeError("new model gateway cache safety or identity is not healthy")
 
 
+def attest_ablation_run_manifest(path: Path, config: ReactToolFamilyConfig) -> None:
+    actual = (agent.load(path).get("agent") or {}).get("tool_families")
+    if actual != config.to_manifest():
+        raise RuntimeError(f"tool-family ablation manifest mismatch: {path}")
+
+
+def attest_ablation_smoke(
+    selected: dict[str, tuple[dict[str, Any], Path]],
+    config: ReactToolFamilyConfig,
+) -> dict[str, Any]:
+    engineering = agent.anomaly_report(selected, agent.SMOKE_CASES)
+    extraction = agent.extraction_protocol_report(selected, agent.SMOKE_CASES, PROFILE_MODEL)
+    disabled = config.disabled_tool_names
+    violations: list[dict[str, str]] = []
+    for case_id in agent.SMOKE_CASES:
+        item = selected.get(case_id)
+        if item is None:
+            continue
+        row, directory = item
+        trace = agent.load(directory / str(row["trace_path"]))
+        for step in ((trace.get("state") or {}).get("all_steps") or []):
+            if step.get("action_type") == "tool_call" and step.get("tool_name") in disabled:
+                violations.append({"case_id": case_id, "tool_name": step["tool_name"]})
+    # Ablating visit can correctly yield zero page extracts.  Any extract that
+    # did run must still have the original local-Qwen identity and protocol.
+    return {
+        "passed": engineering["passed"] and not extraction["missing"]
+        and not extraction["mismatches"] and not violations,
+        "engineering": engineering,
+        "extraction": extraction,
+        "disabled_tool_violations": violations,
+        "tool_families": config.to_manifest(),
+    }
+
+
+def evaluate_ablation(
+    *, deploy: Path, output: Path, name: str, flag: str,
+    config: ReactToolFamilyConfig,
+) -> dict[str, Any]:
+    output.mkdir(parents=True, exist_ok=False)
+    deploy.mkdir(parents=True, exist_ok=False)
+    benchmark = agent.rows(agent.BENCHMARK)
+    expected = [str(row["case_id"]) for row in benchmark]
+    if len(expected) != agent.EXPECTED_RUNNABLE or len(set(expected)) != len(expected):
+        raise ValueError("tool ablation requires the frozen 1526-case cohort")
+    agent.atomic_json(output / "binding.json", {
+        "schema_version": "ifv-corrected-self-extract-tool-ablation-v1",
+        "variant": name, "tool_families": config.to_manifest(),
+        "profile_model": PROFILE_MODEL,
+        "served_model_root": agent.stat_identity(MERGED_ROOT / "config.json"),
+        "benchmark": agent.stat_identity(agent.BENCHMARK),
+        "manifest": agent.stat_identity(agent.MANIFEST),
+        "private_gold": agent.stat_identity(agent.PRIVATE_GOLD),
+        "runnable_cases": agent.EXPECTED_RUNNABLE,
+        "formal_denominator": agent.FORMAL_DENOMINATOR,
+        "judge_model": "gemini-3.7-flash",
+        "judge_submission": "per_case_immediately_after_durable_agent_result",
+        "large_payload_hashing": False,
+    })
+    (output / "protocol-smoke-cases.txt").write_text(
+        "".join(case + "\n" for case in agent.SMOKE_CASES), encoding="utf-8"
+    )
+    environment = agent.runtime_environment(CODE, PROFILE_MODEL)
+    agent.launch_judge(
+        deploy=deploy, source_code=CODE, output=output,
+        source_model=PROFILE_MODEL, environment=environment,
+    )
+    for attempt in range(2):
+        selected = agent.successful(output)
+        pending = [case for case in agent.SMOKE_CASES if case not in selected]
+        if not pending:
+            break
+        label = f"smoke-{attempt}"
+        agent.run_attempt(
+            deploy=deploy, source_code=CODE, output=output, name=label,
+            cases=pending, concurrency=4, base_seed=3903 + attempt * 1000,
+            environment=environment, tool_ablation_flags=(flag,),
+        )
+        attest_ablation_run_manifest(output / label / "run_manifest.json", config)
+    selected = agent.successful(output)
+    smoke = attest_ablation_smoke(selected, config)
+    agent.atomic_json(output / "smoke-tool-ablation-audit.json", smoke)
+    if not smoke["passed"]:
+        agent.atomic_json(output / "inference-summary.json", {
+            "phase": "smoke_failed_requires_fix", "variant": name,
+            "success": len(selected), "expected_runnable": agent.EXPECTED_RUNNABLE,
+            "formal_denominator": agent.FORMAL_DENOMINATOR,
+        })
+        raise RuntimeError(f"{name} tool-family smoke failed")
+    for attempt, concurrency in enumerate((28, 20, 12, 8)):
+        selected = agent.successful(output)
+        pending = [case for case in expected if case not in selected]
+        if not pending:
+            break
+        label = f"attempt-{attempt}"
+        agent.run_attempt(
+            deploy=deploy, source_code=CODE, output=output, name=label,
+            cases=pending, concurrency=concurrency, base_seed=2903 + attempt * 1000,
+            environment=environment, tool_ablation_flags=(flag,),
+        )
+        attest_ablation_run_manifest(output / label / "run_manifest.json", config)
+    selected = agent.successful(output)
+    missing = [case for case in expected if case not in selected]
+    summary = {
+        "schema_version": "ifv-corrected-self-extract-tool-ablation-summary-v1",
+        "phase": "inference_complete" if not missing else "engineering_retry_budget_exhausted",
+        "variant": name, "tool_families": config.to_manifest(),
+        "profile_model": PROFILE_MODEL, "success": len(selected),
+        "expected_runnable": agent.EXPECTED_RUNNABLE,
+        "formal_denominator": agent.FORMAL_DENOMINATOR,
+        "failures_retained_in_denominator": True,
+        "remaining": missing, "judge_streaming_concurrently": True,
+        "large_payload_hashing": False,
+    }
+    agent.atomic_json(output / "inference-summary.json", summary)
+    return summary
+
+
 def merge_model(adapter: Path, deploy: Path) -> None:
     script = CODE / "training/scripts/h20/merge_lora_for_serving.py"
     command = [
@@ -224,7 +352,9 @@ def preflight() -> tuple[dict[str, Any], Any, list[dict[str, Any]], list[dict[st
 
 def execute() -> None:
     result, owner, originals, environments = preflight()
-    if DEPLOY.exists() or EVAL_OUTPUT.exists():
+    if DEPLOY.exists() or EVAL_OUTPUT.exists() or any(
+        ablation_output(name).exists() for name, _, _ in ABLATIONS
+    ):
         raise FileExistsError("eval owner or output already exists; inspect before resuming")
     DEPLOY.mkdir(parents=True, exist_ok=False)
     agent.atomic_json(DEPLOY / "process.json", {
@@ -297,8 +427,19 @@ def execute() -> None:
             deploy=DEPLOY, source_code=CODE, key="sft3-psd-combined",
             profile_model=PROFILE_MODEL, model_root=MERGED_ROOT, output=EVAL_OUTPUT,
         )
+        ablations: dict[str, dict[str, Any]] = {}
+        for name, flag, config in ABLATIONS:
+            agent.atomic_json(DEPLOY / "state.json", {
+                "phase": "tool_ablation", "variant": name,
+                "full_inference": inference,
+            })
+            ablations[name] = evaluate_ablation(
+                deploy=DEPLOY / name, output=ablation_output(name),
+                name=name, flag=flag, config=config,
+            )
         agent.atomic_json(DEPLOY / "state.json", {
             "phase": "inference_complete_restoring_sft3", "inference": inference,
+            "tool_ablations": ablations,
             "cache_verdict": str(DEPLOY / "probe/verdict.json"),
         })
     except BaseException as error:
@@ -373,7 +514,9 @@ def execute() -> None:
 
 def launch() -> None:
     preflight()
-    if LAUNCH.exists() or DEPLOY.exists() or EVAL_OUTPUT.exists():
+    if LAUNCH.exists() or DEPLOY.exists() or EVAL_OUTPUT.exists() or any(
+        ablation_output(name).exists() for name, _, _ in ABLATIONS
+    ):
         raise FileExistsError("combined full-eval owner already exists; inspect before relaunch")
     LAUNCH.mkdir(parents=True, exist_ok=False)
     owner = agent.owner_module()
@@ -399,6 +542,7 @@ def main() -> None:
             "phase": "waiting_for_formal_training", "runnable": frozen_cases(),
             "formal_denominator": agent.FORMAL_DENOMINATOR,
             "candidate": str(MERGED_ROOT), "prefix_cache": "new_model_gate_required",
+            "tool_ablations": [name for name, _, _ in ABLATIONS],
         }))
     elif args.mode == "preflight":
         result, _, _, _ = preflight()
